@@ -1,0 +1,1 @@
+-- Initial migration. Tables are added in the next step.
