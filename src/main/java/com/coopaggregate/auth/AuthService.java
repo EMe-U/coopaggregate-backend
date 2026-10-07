@@ -22,17 +22,29 @@ public class AuthService {
     private final ManagerRepository managerRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtEncoder jwtEncoder;
+    private final LoginAttemptService loginAttemptService;
 
-    public AuthService(ManagerRepository managerRepository, PasswordEncoder passwordEncoder, JwtEncoder jwtEncoder) {
+    public AuthService(ManagerRepository managerRepository, PasswordEncoder passwordEncoder,
+                       JwtEncoder jwtEncoder, LoginAttemptService loginAttemptService) {
         this.managerRepository = managerRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtEncoder = jwtEncoder;
+        this.loginAttemptService = loginAttemptService;
     }
 
     public LoginResponse login(LoginRequest request) {
+        if (loginAttemptService.isLocked(request.email())) {
+            throw new TooManyLoginAttemptsException();
+        }
+
         Manager manager = managerRepository.findByEmailIgnoreCase(request.email())
                 .filter(m -> passwordEncoder.matches(request.password(), m.getPasswordHash()))
-                .orElseThrow(InvalidLoginException::new);
+                .orElse(null);
+        if (manager == null) {
+            loginAttemptService.recordFailure(request.email());
+            throw new InvalidLoginException();
+        }
+        loginAttemptService.recordSuccess(request.email());
 
         Instant expiresAt = Instant.now().plus(TOKEN_VALIDITY);
         return new LoginResponse(createToken(manager, expiresAt), expiresAt, manager.getName());

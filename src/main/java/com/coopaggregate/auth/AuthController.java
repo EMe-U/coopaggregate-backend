@@ -36,4 +36,10 @@ public class AuthController {
     public ApiError handleInvalidLogin(InvalidLoginException e) {
         return new ApiError(e.getMessage());
     }
+
+    @ExceptionHandler(TooManyLoginAttemptsException.class)
+    @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
+    public ApiError handleTooManyAttempts(TooManyLoginAttemptsException e) {
+        return new ApiError(e.getMessage());
+    }
 }
