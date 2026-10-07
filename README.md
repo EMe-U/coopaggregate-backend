@@ -154,6 +154,11 @@ ERD: see `docs/erd.png`.
 
 More endpoints coming soon.
 
+Interactive docs: `/swagger-ui.html`
+
+- Local: http://localhost:8080/swagger-ui.html
+- Live: https://coopaggregate-backend.onrender.com/swagger-ui.html
+
 ## Deployment
 
 The API is deployed on Render as a Web Service built from the `Dockerfile`.
