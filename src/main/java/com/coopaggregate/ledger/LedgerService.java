@@ -36,6 +36,30 @@ public class LedgerService {
         return append(entry);
     }
 
+    @Transactional
+    public LedgerEntry reverse(Long entryId, String reason, Manager manager) {
+        LedgerEntry original = ledgerEntryRepository.findById(entryId)
+                .orElseThrow(() -> new IllegalArgumentException("Ledger entry " + entryId + " does not exist."));
+
+        if (original.getEntryType() == LedgerEntryType.REVERSAL) {
+            throw new IllegalStateException("Ledger entry " + entryId + " is a reversal and cannot be reversed.");
+        }
+        if (ledgerEntryRepository.existsByReversesId(entryId)) {
+            throw new IllegalStateException("Ledger entry " + entryId + " has already been reversed.");
+        }
+
+        LedgerEntry reversal = new LedgerEntry();
+        reversal.setEntryType(LedgerEntryType.REVERSAL);
+        reversal.setReverses(original);
+        reversal.setRelatedEntityType(original.getRelatedEntityType());
+        reversal.setRelatedEntityId(original.getRelatedEntityId());
+        reversal.setQuantityKg(original.getQuantityKg() == null ? null : original.getQuantityKg().negate());
+        reversal.setAmount(original.getAmount() == null ? null : -original.getAmount());
+        reversal.setReason(reason);
+        reversal.setManager(manager);
+        return append(reversal);
+    }
+
     private LedgerEntry append(LedgerEntry entry) {
         // Without the lock, two transactions could read the same latest entry and both
         // use its hash as previous_hash, which would fork the chain.
