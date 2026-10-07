@@ -71,7 +71,16 @@ cd coopaggregate-backend
 | `DB_PASSWORD` | Yes | Database password |
 | `JWT_SECRET` | Yes | Secret for signing tokens, at least 32 characters |
 | `FRONTEND_URL` | No | Allowed CORS origin. Default: `http://localhost:5173` |
+| `MANAGER_NAME` | First start | Name of the manager account |
+| `MANAGER_EMAIL` | First start | Login email of the manager account |
+| `MANAGER_PASSWORD` | First start | Login password of the manager account |
 | `PORT` | No | HTTP port. Default: `8080` |
+
+The manager is the only user who logs in. On startup, if the `manager` table is empty,
+the app creates the manager account from `MANAGER_NAME`, `MANAGER_EMAIL` and
+`MANAGER_PASSWORD` (the password is stored as a BCrypt hash). If they are not set, the
+app logs a warning and starts without a manager. Once the account exists, these
+variables are no longer read, so changing them does not change the password.
 
 Neon shows a connection string like `postgresql://user:password@host/db?sslmode=require`.
 Turn it into a JDBC URL by adding `jdbc:` at the start and removing `user:password@`,
@@ -177,6 +186,9 @@ Environment variables to set in Render:
 | `DB_PASSWORD` | Database password |
 | `JWT_SECRET` | At least 32 characters |
 | `FRONTEND_URL` | `https://coopaggregate-frontend.onrender.com` |
+| `MANAGER_NAME` | Name of the manager account |
+| `MANAGER_EMAIL` | Login email of the manager account |
+| `MANAGER_PASSWORD` | Login password of the manager account |
 | `JAVA_TOOL_OPTIONS` | `-XX:MaxRAMPercentage=75 -XX:+UseSerialGC` |
 
 Do not set `PORT`; Render sets it. `JAVA_TOOL_OPTIONS` keeps the JVM within the
