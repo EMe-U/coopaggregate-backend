@@ -60,6 +60,23 @@ public class LedgerService {
         return append(reversal);
     }
 
+    @Transactional(readOnly = true)
+    public VerifyResult verify() {
+        String expectedPreviousHash = LedgerHasher.GENESIS_HASH;
+        long checkedEntries = 0;
+
+        for (LedgerEntry entry : ledgerEntryRepository.findAllByOrderByIdAsc()) {
+            checkedEntries++;
+            boolean linked = expectedPreviousHash.equals(entry.getPreviousHash());
+            boolean unchanged = LedgerHasher.hash(entry).equals(entry.getCurrentHash());
+            if (!linked || !unchanged) {
+                return new VerifyResult(false, checkedEntries, entry.getId());
+            }
+            expectedPreviousHash = entry.getCurrentHash();
+        }
+        return new VerifyResult(true, checkedEntries, null);
+    }
+
     private LedgerEntry append(LedgerEntry entry) {
         // Without the lock, two transactions could read the same latest entry and both
         // use its hash as previous_hash, which would fork the chain.
