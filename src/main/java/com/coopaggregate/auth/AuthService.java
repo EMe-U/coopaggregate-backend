@@ -50,6 +50,11 @@ public class AuthService {
         return new LoginResponse(createToken(manager, expiresAt), expiresAt, manager.getName());
     }
 
+    public Manager currentManager(String email) {
+        return managerRepository.findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new IllegalArgumentException("Manager account not found."));
+    }
+
     private String createToken(Manager manager, Instant expiresAt) {
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .subject(manager.getEmail())
