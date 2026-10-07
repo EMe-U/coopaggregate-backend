@@ -3,17 +3,25 @@ package com.coopaggregate.ledger;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.manager.Manager;
 
 @Service
 public class LedgerService {
 
     private static final long LEDGER_LOCK_KEY = 20261007L;
+    private static final int MAX_PAGE_SIZE = 100;
 
     private final LedgerEntryRepository ledgerEntryRepository;
 
@@ -58,6 +66,20 @@ public class LedgerService {
         reversal.setReason(reason);
         reversal.setManager(manager);
         return append(reversal);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<LedgerEntryResponse> listEntries(int page, int size) {
+        PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
+                Sort.by(Sort.Direction.DESC, "id"));
+        Page<LedgerEntry> entries = ledgerEntryRepository.findAll(pageRequest);
+
+        List<Long> entryIds = entries.map(LedgerEntry::getId).toList();
+        Map<Long, Long> reversalIdByEntryId = ledgerEntryRepository.findByReversesIdIn(entryIds).stream()
+                .collect(Collectors.toMap(reversal -> reversal.getReverses().getId(), LedgerEntry::getId));
+
+        return PageResponse.from(entries.map(
+                entry -> LedgerEntryResponse.from(entry, reversalIdByEntryId.get(entry.getId()))));
     }
 
     @Transactional(readOnly = true)
