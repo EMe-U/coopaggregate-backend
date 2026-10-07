@@ -21,22 +21,31 @@ contains the API only; the React frontend is in a separate repository.
 - Spring Data JPA
 - Flyway
 - PostgreSQL (Neon)
-- Spring Security (JWT login: coming soon)
-- JUnit 5
+- Spring Security with JWT (OAuth2 Resource Server, HS256)
+- springdoc-openapi (Swagger UI)
+- JUnit 5, Mockito
 - Docker
 - Render
 
 ## Project structure
 
 The code is organised by feature. Each feature package holds its own controller,
-service, repository, entity and dto classes. Shared configuration lives in `config`.
+service, repository, entity and DTO classes. Shared code lives in `config`, `error`
+and `common`.
 
 ```
 coopaggregate-backend/
 ├── src/main/java/com/coopaggregate/
 │   ├── CoopAggregateApplication.java
-│   ├── config/            Security and CORS configuration
-│   └── health/            Health check endpoint
+│   ├── config/            Security, JWT, CORS and Swagger configuration
+│   ├── error/             Error responses for the whole API
+│   ├── common/            Shared DTOs (paging)
+│   ├── auth/              Manager login and current manager
+│   ├── manager/           Manager account
+│   ├── ledger/            Append-only, hash-chained ledger
+│   ├── health/            Health check endpoint
+│   └── member/, grade/, lot/, delivery/, loss/, buyer/, sale/,
+│       share/, payment/, dispute/, setting/, sms/   Entities and repositories
 ├── src/main/resources/
 │   ├── application.properties
 │   └── db/migration/      Flyway migrations
@@ -94,7 +103,7 @@ Open Run > Edit Configurations, select the `CoopAggregateApplication` configurat
 and add the variables to the Environment variables field, separated by semicolons:
 
 ```
-DATABASE_URL=jdbc:postgresql://host/db?sslmode=require;DB_USERNAME=...;DB_PASSWORD=...;JWT_SECRET=...
+DATABASE_URL=jdbc:postgresql://host/db?sslmode=require;DB_USERNAME=...;DB_PASSWORD=...;JWT_SECRET=...;MANAGER_NAME=...;MANAGER_EMAIL=...;MANAGER_PASSWORD=...
 ```
 
 **A .env file**
@@ -160,13 +169,60 @@ ERD: see `docs/erd.png`.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/health` | None | Returns `{"status":"OK"}` |
+| POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
+| GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
+| GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
+| GET | `/api/ledger/verify` | JWT | Recomputes every hash. Returns `{valid, checkedEntries, firstBrokenEntryId}` |
+| POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Adds a REVERSAL entry and returns it |
 
 More endpoints coming soon.
 
-Interactive docs: `/swagger-ui.html`
+### Authentication
+
+The manager logs in with `POST /api/auth/login` and receives a JWT that is valid for
+12 hours. Protected endpoints need the header `Authorization: Bearer <token>`.
+
+- A wrong email or a wrong password both return `401` with
+  `{"message": "Invalid email or password"}`.
+- After 5 failed attempts for the same email, logins for that email are refused with
+  `429` for 5 minutes. The counter is kept in memory and resets when the app restarts.
+
+### Errors
+
+Every error response has the form `{"message": "..."}`.
+
+| Status | When |
+|--------|------|
+| 400 | Invalid input. The message lists each field error |
+| 401 | Missing or expired token, or wrong login |
+| 404 | The requested record does not exist |
+| 409 | A business rule was broken, for example reversing an entry twice |
+| 429 | Too many failed logins |
+| 500 | Unexpected error. The details are only written to the server log |
+
+### Ledger
+
+Every delivery, loss, sale, share and payment adds a ledger entry. Entries can never
+be changed or deleted (a database trigger blocks it). Each entry stores a SHA-256 hash
+of its own data plus the previous entry's hash, so changing any past entry breaks the
+chain and `GET /api/ledger/verify` reports the first broken entry. Mistakes are fixed
+with a REVERSAL entry that cancels the original. A reversal cannot be reversed, and an
+entry can only be reversed once.
+
+### Interactive docs (Swagger)
 
 - Local: http://localhost:8080/swagger-ui.html
 - Live: https://coopaggregate-backend.onrender.com/swagger-ui.html
+
+To call protected endpoints from Swagger:
+
+1. Open **Auth** > `POST /api/auth/login`, click **Try it out**, enter the manager
+   email and password, and click **Execute**.
+2. Copy the `token` value from the response (without the quotes).
+3. Click **Authorize** at the top of the page, paste the token into the
+   `bearerAuth` field, and click **Authorize**, then **Close**.
+4. Protected endpoints such as `GET /api/auth/me` and the **Ledger** endpoints now
+   send the token. The token is valid for 12 hours; after that, log in again.
 
 ## Deployment
 
@@ -208,7 +264,9 @@ macOS / Linux:
 ./mvnw test
 ```
 
-Tests coming soon, together with the features.
+The tests do not need a database. They cover the ledger hash chain, the ledger service
+(recording, reversal and verification, with a mocked repository), the login service
+(including the lockout after 5 failures) and the login endpoint.
 
 ## Author
 
