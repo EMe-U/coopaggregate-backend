@@ -2,6 +2,7 @@ package com.coopaggregate.member;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -60,5 +61,17 @@ public class MemberController {
     @Operation(summary = "Update a member's details. The member code and status do not change")
     public MemberResponse update(@PathVariable Long id, @Valid @RequestBody MemberRequest request) {
         return memberService.update(id, request);
+    }
+
+    @PatchMapping("/{id}/deactivate")
+    @Operation(summary = "Deactivate a member. Their deliveries, payments and ledger history are kept")
+    public MemberResponse deactivate(@PathVariable Long id) {
+        return memberService.setActive(id, false);
+    }
+
+    @PatchMapping("/{id}/activate")
+    @Operation(summary = "Activate a member again")
+    public MemberResponse activate(@PathVariable Long id) {
+        return memberService.setActive(id, true);
     }
 }

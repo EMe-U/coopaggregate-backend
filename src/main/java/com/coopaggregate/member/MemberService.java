@@ -62,6 +62,13 @@ public class MemberService {
         return MemberResponse.from(member);
     }
 
+    @Transactional
+    public MemberResponse setActive(Long id, boolean active) {
+        Member member = findMember(id);
+        member.setStatus(active ? MemberStatus.ACTIVE : MemberStatus.INACTIVE);
+        return MemberResponse.from(member);
+    }
+
     private void applyDetails(Member member, MemberRequest request) {
         String phone = RwandanPhoneNumber.normalize(request.phone());
         String nationalId = trimToNull(request.nationalId());
