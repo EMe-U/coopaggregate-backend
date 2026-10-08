@@ -1,9 +1,14 @@
 package com.coopaggregate.member;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.coopaggregate.common.PageResponse;
@@ -12,6 +17,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/api/members")
@@ -41,5 +47,18 @@ public class MemberController {
     @Operation(summary = "Get one member")
     public MemberResponse get(@PathVariable Long id) {
         return memberService.get(id);
+    }
+
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Register a member. The member code (M-0001, ...) is generated")
+    public MemberResponse create(@Valid @RequestBody MemberRequest request) {
+        return memberService.create(request);
+    }
+
+    @PutMapping("/{id}")
+    @Operation(summary = "Update a member's details. The member code and status do not change")
+    public MemberResponse update(@PathVariable Long id, @Valid @RequestBody MemberRequest request) {
+        return memberService.update(id, request);
     }
 }

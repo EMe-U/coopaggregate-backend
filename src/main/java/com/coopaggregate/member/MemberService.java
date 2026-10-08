@@ -1,5 +1,6 @@
 package com.coopaggregate.member;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -41,9 +42,61 @@ public class MemberService {
         return MemberResponse.from(findMember(id));
     }
 
+    @Transactional
+    public MemberResponse create(MemberRequest request) {
+        Member member = new Member();
+        applyDetails(member, request);
+        member.setJoinDate(request.joinDate() != null ? request.joinDate() : LocalDate.now());
+        // Taken after the duplicate checks so a rejected request does not use up a code.
+        member.setMemberCode(String.format("M-%04d", memberRepository.nextMemberCodeNumber()));
+        return MemberResponse.from(memberRepository.save(member));
+    }
+
+    @Transactional
+    public MemberResponse update(Long id, MemberRequest request) {
+        Member member = findMember(id);
+        applyDetails(member, request);
+        if (request.joinDate() != null) {
+            member.setJoinDate(request.joinDate());
+        }
+        return MemberResponse.from(member);
+    }
+
+    private void applyDetails(Member member, MemberRequest request) {
+        String phone = RwandanPhoneNumber.normalize(request.phone());
+        String nationalId = trimToNull(request.nationalId());
+
+        memberRepository.findByPhone(phone)
+                .filter(other -> !other.getId().equals(member.getId()))
+                .ifPresent(other -> {
+                    throw new IllegalStateException(
+                            "Phone number " + phone + " is already used by member " + other.getMemberCode() + ".");
+                });
+        if (nationalId != null) {
+            memberRepository.findByNationalId(nationalId)
+                    .filter(other -> !other.getId().equals(member.getId()))
+                    .ifPresent(other -> {
+                        throw new IllegalStateException(
+                                "National ID " + nationalId + " is already used by member " + other.getMemberCode() + ".");
+                    });
+        }
+
+        member.setFullName(request.fullName().trim());
+        member.setPhone(phone);
+        member.setNationalId(nationalId);
+        member.setAddress(trimToNull(request.address()));
+        if (request.preferredLanguage() != null) {
+            member.setPreferredLanguage(request.preferredLanguage());
+        }
+    }
+
     private Member findMember(Long id) {
         return memberRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Member " + id + " does not exist."));
+    }
+
+    private static String trimToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private static Specification<Member> matching(String search, Boolean active) {
