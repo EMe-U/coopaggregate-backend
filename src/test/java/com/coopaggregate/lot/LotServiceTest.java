@@ -3,12 +3,14 @@ package com.coopaggregate.lot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -136,9 +138,20 @@ class LotServiceTest {
                         null, null),
                 new LotQuantities(5L, new BigDecimal("300.00"), null, null, null, null)));
 
+        when(lotRepository.totalDeliveredKg()).thenReturn(new BigDecimal("4000.00"));
+        when(lotRepository.totalSoldKg()).thenReturn(new BigDecimal("3300.00"));
+        when(lotRepository.totalLostKg()).thenReturn(new BigDecimal("150.00"));
+        when(lotRepository.deliveredKgBetween(any(), any())).thenReturn(new BigDecimal("200.00"));
+        when(lotRepository.deliveryCountBetween(any(), any())).thenReturn(3L);
+
         StockResponse stock = service.stock();
 
         assertEquals(new BigDecimal("550.00"), stock.totalRemainingKg());
+        assertEquals(new BigDecimal("4000.00"), stock.totalDeliveredKg());
+        assertEquals(new BigDecimal("3300.00"), stock.totalSoldKg());
+        assertEquals(new BigDecimal("150.00"), stock.totalLostKg());
+        assertEquals(new BigDecimal("200.00"), stock.addedTodayKg());
+        assertEquals(3L, stock.deliveriesToday());
         assertEquals(1, stock.openLots());
         assertEquals(2, stock.closedLots());
         assertEquals(List.of(
@@ -162,5 +175,16 @@ class LotServiceTest {
         lot.setGrade(grade);
         lot.setStatus(status);
         return lot;
+    }
+
+    @Test
+    void todayMeansTheKigaliCalendarDay() {
+        when(lotRepository.findByStatusIn(any())).thenReturn(List.of());
+
+        service.stock();
+
+        LocalDate today = KigaliTime.today();
+        verify(lotRepository).deliveredKgBetween(today.atStartOfDay(KigaliTime.ZONE).toInstant(),
+                today.plusDays(1).atStartOfDay(KigaliTime.ZONE).toInstant());
     }
 }

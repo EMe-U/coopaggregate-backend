@@ -1,6 +1,7 @@
 package com.coopaggregate.lot;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -64,4 +65,20 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
             ORDER BY SUM(d.quantityKg) DESC, m.fullName
             """)
     List<LotMemberResponse> findMembers(Long lotId);
+
+    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d")
+    BigDecimal totalDeliveredKg();
+
+    @Query("SELECT COALESCE(SUM(x.quantityKg), 0) FROM Loss x")
+    BigDecimal totalLostKg();
+
+    @Query("SELECT COALESCE(SUM(s.quantityKg), 0) FROM Sale s")
+    BigDecimal totalSoldKg();
+
+    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d "
+            + "WHERE d.deliveredAt >= :from AND d.deliveredAt < :to")
+    BigDecimal deliveredKgBetween(Instant from, Instant to);
+
+    @Query("SELECT COUNT(d) FROM Delivery d WHERE d.deliveredAt >= :from AND d.deliveredAt < :to")
+    long deliveryCountBetween(Instant from, Instant to);
 }

@@ -1,6 +1,7 @@
 package com.coopaggregate.lot;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -71,7 +72,8 @@ public class LotService {
         return toResponse(lot);
     }
 
-    // Only open and closed lots still hold potatoes; sold and shared lots have nothing left.
+    // Only open and closed lots still hold potatoes; sold and shared lots have nothing left. The delivered,
+    // sold and lost totals cover all lots, so delivered - lost - sold still equals the remaining kg.
     @Transactional(readOnly = true)
     public StockResponse stock() {
         List<Lot> lots = lotRepository.findByStatusIn(List.of(LotStatus.OPEN, LotStatus.CLOSED));
@@ -91,7 +93,19 @@ public class LotService {
                 .map(entry -> new StockResponse.GradeStock(gradeNameByCode.get(entry.getKey()), entry.getValue()))
                 .toList();
         long openLots = lots.stream().filter(lot -> lot.getStatus() == LotStatus.OPEN).count();
-        return new StockResponse(totalRemainingKg, openLots, lots.size() - openLots, byGrade);
+
+        Instant startOfToday = KigaliTime.today().atStartOfDay(KigaliTime.ZONE).toInstant();
+        Instant startOfTomorrow = KigaliTime.today().plusDays(1).atStartOfDay(KigaliTime.ZONE).toInstant();
+        return new StockResponse(
+                totalRemainingKg,
+                lotRepository.totalDeliveredKg(),
+                lotRepository.totalSoldKg(),
+                lotRepository.totalLostKg(),
+                lotRepository.deliveredKgBetween(startOfToday, startOfTomorrow),
+                lotRepository.deliveryCountBetween(startOfToday, startOfTomorrow),
+                openLots,
+                lots.size() - openLots,
+                byGrade);
     }
 
     @Transactional(readOnly = true)

@@ -37,7 +37,8 @@ public class LotController {
     }
 
     @GetMapping("/stock")
-    @Operation(summary = "Potatoes still in stock: remaining kg in open and closed lots, in total and per grade")
+    @Operation(summary = "Stock balance: remaining kg (total and per grade), all-time delivered, sold and lost kg, "
+            + "and today's deliveries (Kigali time)")
     public StockResponse stock() {
         return lotService.stock();
     }
