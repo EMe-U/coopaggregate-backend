@@ -2,6 +2,7 @@ package com.coopaggregate.lot;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -45,6 +46,12 @@ public class LotController {
     @Operation(summary = "Get one lot with the kilograms each member delivered to it")
     public LotDetailResponse get(@PathVariable Long id) {
         return lotService.get(id);
+    }
+
+    @PatchMapping("/{id}/close")
+    @Operation(summary = "Close an open lot. The next delivery of its grade starts a new lot")
+    public LotResponse close(@PathVariable Long id) {
+        return lotService.close(id);
     }
 
     @GetMapping("/open")

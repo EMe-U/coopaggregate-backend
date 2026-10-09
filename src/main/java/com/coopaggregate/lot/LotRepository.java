@@ -23,6 +23,9 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
 
     long countByLotCodeStartingWith(String prefix);
 
+    @Query("SELECT l.grade.id FROM Lot l WHERE l.id = :id")
+    Optional<Long> findGradeIdById(Long id);
+
     @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d WHERE d.lot.id = :lotId")
     BigDecimal totalDeliveredKg(Long lotId);
 

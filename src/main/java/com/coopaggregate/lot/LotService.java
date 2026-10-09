@@ -53,6 +53,24 @@ public class LotService {
         return LotDetailResponse.from(lot, lotRepository.findMembers(id));
     }
 
+    @Transactional
+    public LotResponse close(Long id) {
+        Long gradeId = lotRepository.findGradeIdById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Lot " + id + " does not exist."));
+        // Deliveries lock the grade too. Taking that lock before reading the lot means a delivery in progress
+        // finishes in this lot first, and a later delivery finds no open lot and starts a new one.
+        gradeRepository.findForUpdateById(gradeId);
+
+        Lot lot = findLot(id);
+        if (lot.getStatus() != LotStatus.OPEN) {
+            throw new IllegalStateException("Lot " + lot.getLotCode() + " is " + lot.getStatus()
+                    + ". Only an open lot can be closed.");
+        }
+        lot.setStatus(LotStatus.CLOSED);
+        lot.setCloseDate(KigaliTime.today());
+        return toResponse(lot);
+    }
+
     // Only open and closed lots still hold potatoes; sold and shared lots have nothing left.
     @Transactional(readOnly = true)
     public StockResponse stock() {
