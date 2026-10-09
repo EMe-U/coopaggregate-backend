@@ -38,6 +38,12 @@ public class GlobalExceptionHandler {
         return new ApiError("The request is missing data or has a value in the wrong format.");
     }
 
+    @ExceptionHandler(BadRequestException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiError handleBadRequest(BadRequestException e) {
+        return new ApiError(e.getMessage());
+    }
+
     @ExceptionHandler({IllegalArgumentException.class, EntityNotFoundException.class})
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public ApiError handleNotFound(RuntimeException e) {
