@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,9 +48,18 @@ public class DeliveryService {
     }
 
     @Transactional
-    public DeliveryResponse record(DeliveryRequest request, Manager manager) {
+    public RecordedDelivery record(DeliveryRequest request, Manager manager) {
+        // Lock the grade before looking for the client UUID: if the same offline delivery is sent twice at
+        // once, the second request waits here and then finds the first one instead of hitting the unique key.
         Grade grade = gradeRepository.findForUpdateById(request.gradeId())
                 .orElseThrow(() -> new BadRequestException("Grade " + request.gradeId() + " does not exist."));
+
+        // Checked before the member, so a re-sent delivery is still accepted after the member is deactivated.
+        Optional<Delivery> existing = deliveryRepository.findByClientUuid(request.clientUuid());
+        if (existing.isPresent()) {
+            return new RecordedDelivery(DeliveryResponse.from(existing.get()), false);
+        }
+
         Member member = activeMember(request.memberId());
 
         Delivery delivery = new Delivery();
@@ -65,7 +75,7 @@ public class DeliveryService {
         ledgerService.record(LedgerEntryType.DELIVERY, "DELIVERY", saved.getId(),
                 saved.getQuantityKg(), saved.getDeductionAmount(),
                 "Delivery " + saved.getReceiptCode() + " from " + member.getMemberCode(), manager);
-        return DeliveryResponse.from(saved);
+        return new RecordedDelivery(DeliveryResponse.from(saved), true);
     }
 
     private Member activeMember(Long memberId) {
