@@ -39,12 +39,13 @@ coopaggregate-backend/
 │   ├── CoopAggregateApplication.java
 │   ├── config/            Security, JWT, CORS and Swagger configuration
 │   ├── error/             Error responses for the whole API
-│   ├── common/            Shared DTOs (paging)
+│   ├── common/            Shared code (paging, Rwandan phone numbers)
 │   ├── auth/              Manager login and current manager
 │   ├── manager/           Manager account
 │   ├── ledger/            Append-only, hash-chained ledger
+│   ├── member/            Cooperative members
 │   ├── health/            Health check endpoint
-│   └── member/, grade/, lot/, delivery/, loss/, buyer/, sale/,
+│   └── grade/, lot/, delivery/, loss/, buyer/, sale/,
 │       share/, payment/, dispute/, setting/, sms/   Entities and repositories
 ├── src/main/resources/
 │   ├── application.properties
@@ -174,6 +175,13 @@ ERD: see `docs/erd.png`.
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
 | GET | `/api/ledger/verify` | JWT | Recomputes every hash. Returns `{valid, checkedEntries, firstBrokenEntryId}` |
 | POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Adds a REVERSAL entry and returns it |
+| GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional |
+| GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
+| GET | `/api/members/{id}` | JWT | One member |
+| POST | `/api/members` | JWT | Registers a member and returns it with `201` |
+| PUT | `/api/members/{id}` | JWT | Updates a member's details |
+| PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
+| PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
 
 More endpoints coming soon.
 
@@ -196,7 +204,7 @@ Every error response has the form `{"message": "..."}`.
 | 400 | Invalid input. The message lists each field error |
 | 401 | Missing or expired token, or wrong login |
 | 404 | The requested record does not exist |
-| 409 | A business rule was broken, for example reversing an entry twice |
+| 409 | A business rule was broken, for example reversing an entry twice or registering a phone number that is already used |
 | 429 | Too many failed logins |
 | 500 | Unexpected error. The details are only written to the server log |
 
@@ -208,6 +216,44 @@ of its own data plus the previous entry's hash, so changing any past entry break
 chain and `GET /api/ledger/verify` reports the first broken entry. Mistakes are fixed
 with a REVERSAL entry that cancels the original. A reversal cannot be reversed, and an
 entry can only be reversed once.
+
+### Members
+
+Request body for `POST` and `PUT`:
+
+```json
+{
+  "fullName": "Uwimana Claudine",
+  "phone": "0788123456",
+  "nationalId": "1199880012345678",
+  "address": "Busogo",
+  "joinDate": "2026-10-08",
+  "preferredLanguage": "rw"
+}
+```
+
+| Field | Rules |
+|-------|-------|
+| `fullName` | Required, at most 150 characters |
+| `phone` | Required. A Rwandan mobile number (072, 073, 078 or 079) written as `07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`. Always stored and returned as `+2507XXXXXXXX` |
+| `nationalId` | Optional, 16 digits |
+| `address` | Optional, at most 255 characters |
+| `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
+| `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
+
+- The member code is generated on create as `MEM-0001`, `MEM-0002`, and so on, and never
+  changes.
+- Phone numbers and national IDs must be unique. A duplicate returns `409`, for example
+  `{"message": "Phone number +250788123456 is already used by member MEM-0003."}`.
+- `search` matches part of the name, member code, phone number or national ID, ignoring
+  case. A full number such as `0788123456` also finds `+250788123456`.
+- `GET /api/members/summary` returns `{total, active, inactive, joinedThisMonth}`.
+  `joinedThisMonth` counts members whose join date is in the current month in
+  Africa/Kigali time.
+- `active=true` returns only active members, `active=false` only inactive ones.
+- Members are never deleted, because deliveries, payments and the ledger refer to them.
+  Use deactivate instead. Activate and deactivate can be called again on a member that
+  already has that status.
 
 ### Interactive docs (Swagger)
 
@@ -221,7 +267,7 @@ To call protected endpoints from Swagger:
 2. Copy the `token` value from the response (without the quotes).
 3. Click **Authorize** at the top of the page, paste the token into the
    `bearerAuth` field, and click **Authorize**, then **Close**.
-4. Protected endpoints such as `GET /api/auth/me` and the **Ledger** endpoints now
+4. Protected endpoints such as `GET /api/auth/me` and the **Ledger** and **Members** endpoints now
    send the token. The token is valid for 12 hours; after that, log in again.
 
 ## Deployment
@@ -266,7 +312,9 @@ macOS / Linux:
 
 The tests do not need a database. They cover the ledger hash chain, the ledger service
 (recording, reversal and verification, with a mocked repository), the login service
-(including the lockout after 5 failures) and the login endpoint.
+(including the lockout after 5 failures), the login endpoint, Rwandan phone number
+validation, the member service (create, update, duplicates, not found, activate and
+deactivate) and the member endpoints (validation errors, `401` without a token).
 
 ## Author
 
