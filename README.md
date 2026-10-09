@@ -176,6 +176,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/ledger/verify` | JWT | Recomputes every hash. Returns `{valid, checkedEntries, firstBrokenEntryId}` |
 | POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Adds a REVERSAL entry and returns it |
 | GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional |
+| GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member |
 | POST | `/api/members` | JWT | Registers a member and returns it with `201` |
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
@@ -244,8 +245,11 @@ Request body for `POST` and `PUT`:
   changes.
 - Phone numbers and national IDs must be unique. A duplicate returns `409`, for example
   `{"message": "Phone number +250788123456 is already used by member MEM-0003."}`.
-- `search` matches part of the name, member code or phone number, ignoring case. A full
-  number such as `0788123456` also finds `+250788123456`.
+- `search` matches part of the name, member code, phone number or national ID, ignoring
+  case. A full number such as `0788123456` also finds `+250788123456`.
+- `GET /api/members/summary` returns `{total, active, inactive, joinedThisMonth}`.
+  `joinedThisMonth` counts members whose join date is in the current month in
+  Africa/Kigali time.
 - `active=true` returns only active members, `active=false` only inactive ones.
 - Members are never deleted, because deliveries, payments and the ledger refer to them.
   Use deactivate instead. Activate and deactivate can be called again on a member that
