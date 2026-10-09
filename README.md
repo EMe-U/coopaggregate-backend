@@ -182,6 +182,10 @@ ERD: see `docs/erd.png`.
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
+| GET | `/api/grades` | JWT | Active grades `{id, code, name}`, sorted by code |
+| POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
+| GET | `/api/deliveries?memberId=&lotId=&from=&to=&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional |
+| GET | `/api/deliveries/{id}` | JWT | One delivery |
 
 More endpoints coming soon.
 
@@ -201,7 +205,7 @@ Every error response has the form `{"message": "..."}`.
 
 | Status | When |
 |--------|------|
-| 400 | Invalid input. The message lists each field error |
+| 400 | Invalid input. The message lists each field error. Also used when the body refers to something that cannot be used, such as an inactive member |
 | 401 | Missing or expired token, or wrong login |
 | 404 | The requested record does not exist |
 | 409 | A business rule was broken, for example reversing an entry twice or registering a phone number that is already used |
@@ -254,6 +258,46 @@ Request body for `POST` and `PUT`:
 - Members are never deleted, because deliveries, payments and the ledger refer to them.
   Use deactivate instead. Activate and deactivate can be called again on a member that
   already has that status.
+
+### Deliveries
+
+Request body for `POST /api/deliveries`:
+
+```json
+{
+  "clientUuid": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "memberId": 1,
+  "gradeId": 1,
+  "quantityKg": 120.5,
+  "deliveredAt": "2026-10-09T07:00:00Z"
+}
+```
+
+| Field | Rules |
+|-------|-------|
+| `clientUuid` | Required. Created on the device, so a delivery sent twice (for example by offline sync) is saved only once |
+| `memberId` | Required. The member must exist and be active, otherwise `400` |
+| `gradeId` | Required. The grade must exist, otherwise `400` |
+| `quantityKg` | Required. More than 0, at most 5000, at most 2 decimals |
+| `deliveredAt` | Optional. Defaults to the time the server receives the delivery |
+
+- The response contains the receipt code, member, grade, lot, quantity, deduction and
+  delivery time.
+- **Deduction:** `quantityKg` x `deduction_per_kg` from the `setting` table (5 RWF),
+  rounded half up to whole RWF. For example 12.25 kg gives 61 RWF.
+- **Lot:** the delivery goes to the open lot of its grade. If the grade has no open lot, a
+  new one is opened. Lot codes are the grade code, the year the lot was opened (Kigali
+  time) and the grade's lot number in that year: `A-2026-01`, `A-2026-02`, `B-2026-01`.
+  A grade can only have one open lot at a time (enforced by the database).
+- **Receipt code:** `RCT-` and 4 characters without look-alikes (no 0, O, 1, I or L), for
+  example `RCT-7K2Q`.
+- **Same `clientUuid` again:** the existing delivery is returned with `200` and nothing new
+  is saved, even if the member has been deactivated since.
+- **Ledger:** each new delivery adds a `DELIVERY` ledger entry in the same transaction,
+  with the kilograms, the deduction as the amount, and the receipt code and member code
+  in the reason.
+- `from` and `to` filter by delivery day in Kigali time (`yyyy-MM-dd`, both inclusive).
+- Deliveries cannot be edited or deleted. A mistake is corrected with a ledger reversal.
 
 ### Interactive docs (Swagger)
 
