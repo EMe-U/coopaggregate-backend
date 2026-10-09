@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -24,6 +25,10 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import jakarta.persistence.EntityNotFoundException;
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Path;
+import jakarta.persistence.criteria.Root;
 
 class MemberServiceTest {
 
@@ -171,6 +176,45 @@ class MemberServiceTest {
         assertEquals(0, pageable.getValue().getPageNumber());
         assertEquals(100, pageable.getValue().getPageSize());
         assertEquals("fullName: ASC,id: ASC", pageable.getValue().getSort().toString());
+    }
+
+    @Test
+    void summaryReturnsCounts() {
+        when(repository.count()).thenReturn(12L);
+        when(repository.countByStatus(MemberStatus.ACTIVE)).thenReturn(10L);
+        when(repository.countByStatus(MemberStatus.INACTIVE)).thenReturn(2L);
+        when(repository.countByJoinDateBetween(any(), any())).thenReturn(3L);
+
+        MemberSummaryResponse summary = service.summary(LocalDate.of(2026, 10, 9));
+
+        assertEquals(new MemberSummaryResponse(12, 10, 2, 3), summary);
+    }
+
+    @Test
+    void joinedThisMonthCountsFromFirstToLastDayOfMonth() {
+        service.summary(LocalDate.of(2026, 10, 9));
+        verify(repository).countByJoinDateBetween(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
+
+        service.summary(LocalDate.of(2028, 2, 29));
+        verify(repository).countByJoinDateBetween(LocalDate.of(2028, 2, 1), LocalDate.of(2028, 2, 29));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void searchIncludesNationalId() {
+        ArgumentCaptor<Specification<Member>> spec = ArgumentCaptor.forClass(Specification.class);
+        when(repository.findAll(spec.capture(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
+
+        service.list("1199880012345678", null, 0, 20);
+
+        Root<Member> root = mock(Root.class);
+        Path<String> nationalId = mock(Path.class);
+        doReturn(nationalId).when(root).get("nationalId");
+        CriteriaBuilder cb = mock(CriteriaBuilder.class);
+
+        spec.getValue().toPredicate(root, mock(CriteriaQuery.class), cb);
+
+        verify(cb).like(nationalId, "%1199880012345678%");
     }
 
     private static MemberRequest request(String phone, String nationalId) {

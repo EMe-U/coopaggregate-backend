@@ -72,6 +72,24 @@ class MemberControllerTest {
     }
 
     @Test
+    void summaryReturnsCounts() throws Exception {
+        when(memberService.summary()).thenReturn(new MemberSummaryResponse(12, 10, 2, 3));
+
+        mockMvc.perform(get("/api/members/summary").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(12))
+                .andExpect(jsonPath("$.active").value(10))
+                .andExpect(jsonPath("$.inactive").value(2))
+                .andExpect(jsonPath("$.joinedThisMonth").value(3));
+    }
+
+    @Test
+    void summaryWithoutTokenReturns401() throws Exception {
+        mockMvc.perform(get("/api/members/summary"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void requestWithInvalidTokenReturns401() throws Exception {
         mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, "Bearer not-a-real-token"))
                 .andExpect(status().isUnauthorized());
