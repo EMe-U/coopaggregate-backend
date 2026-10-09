@@ -2,14 +2,20 @@ package com.coopaggregate.sale;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.buyer.BuyerRepository;
 import com.coopaggregate.common.KigaliTime;
+import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.ShortCodes;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.lot.Lot;
@@ -17,8 +23,12 @@ import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
 
+import jakarta.persistence.criteria.Predicate;
+
 @Service
 public class SaleService {
+
+    private static final int MAX_PAGE_SIZE = 100;
 
     private final SaleRepository saleRepository;
     private final LotRepository lotRepository;
@@ -72,6 +82,14 @@ public class SaleService {
         return new RecordedSale(SaleResponse.from(saleRepository.save(sale)), true);
     }
 
+    @Transactional(readOnly = true)
+    public PageResponse<SaleResponse> list(Long lotId, Long buyerId, int page, int size) {
+        PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
+                Sort.by(Sort.Direction.DESC, "saleDate", "id"));
+        return PageResponse.from(saleRepository.findAll(matching(lotId, buyerId), pageRequest)
+                .map(SaleResponse::from));
+    }
+
     // Amounts are stored in whole RWF, so fractions are rounded (half up).
     private static long totalAmount(BigDecimal quantityKg, long pricePerKg) {
         return quantityKg.multiply(BigDecimal.valueOf(pricePerKg))
@@ -83,5 +101,18 @@ public class SaleService {
     private static boolean isBelowFloor(Lot lot, long pricePerKg) {
         Long floorPricePerKg = lot.getGrade().getFloorPricePerKg();
         return floorPricePerKg != null && pricePerKg < floorPricePerKg;
+    }
+
+    private static Specification<Sale> matching(Long lotId, Long buyerId) {
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            if (lotId != null) {
+                predicates.add(cb.equal(root.get("lot").get("id"), lotId));
+            }
+            if (buyerId != null) {
+                predicates.add(cb.equal(root.get("buyer").get("id"), buyerId));
+            }
+            return cb.and(predicates.toArray(Predicate[]::new));
+        };
     }
 }
