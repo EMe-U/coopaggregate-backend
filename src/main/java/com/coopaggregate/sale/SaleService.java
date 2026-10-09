@@ -18,10 +18,13 @@ import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.ShortCodes;
 import com.coopaggregate.error.BadRequestException;
+import com.coopaggregate.ledger.LedgerEntryType;
+import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
+import com.coopaggregate.manager.Manager;
 
 import jakarta.persistence.criteria.Predicate;
 
@@ -34,17 +37,19 @@ public class SaleService {
     private final LotRepository lotRepository;
     private final BuyerRepository buyerRepository;
     private final LotService lotService;
+    private final LedgerService ledgerService;
 
     public SaleService(SaleRepository saleRepository, LotRepository lotRepository,
-                       BuyerRepository buyerRepository, LotService lotService) {
+                       BuyerRepository buyerRepository, LotService lotService, LedgerService ledgerService) {
         this.saleRepository = saleRepository;
         this.lotRepository = lotRepository;
         this.buyerRepository = buyerRepository;
         this.lotService = lotService;
+        this.ledgerService = ledgerService;
     }
 
     @Transactional
-    public RecordedSale record(SaleRequest request) {
+    public RecordedSale record(SaleRequest request, Manager manager) {
         // The row lock makes sales and losses of the same lot wait for each other, so two sales cannot
         // both pass the remaining kg check. It also makes a repeated client UUID wait for the first request.
         Lot lot = lotRepository.findForUpdateById(request.lotId())
@@ -80,6 +85,9 @@ public class SaleService {
         sale.setTotalAmount(totalAmount(request.quantityKg(), request.pricePerKg()));
         sale.setBelowFloorPrice(isBelowFloor(lot, request.pricePerKg()));
         Sale saved = saleRepository.save(sale);
+        ledgerService.record(LedgerEntryType.SALE, "SALE", saved.getId(), saved.getQuantityKg(),
+                saved.getTotalAmount(),
+                "Sale " + saved.getSaleCode() + " from " + lot.getLotCode() + " to " + buyer.getName(), manager);
 
         if (request.quantityKg().compareTo(remainingKg) == 0) {
             lot.setStatus(LotStatus.SOLD);

@@ -8,10 +8,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
+import com.coopaggregate.ledger.LedgerEntryType;
+import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
+import com.coopaggregate.manager.Manager;
 
 import jakarta.persistence.EntityNotFoundException;
 
@@ -21,15 +24,18 @@ public class LossService {
     private final LossRepository lossRepository;
     private final LotRepository lotRepository;
     private final LotService lotService;
+    private final LedgerService ledgerService;
 
-    public LossService(LossRepository lossRepository, LotRepository lotRepository, LotService lotService) {
+    public LossService(LossRepository lossRepository, LotRepository lotRepository, LotService lotService,
+                       LedgerService ledgerService) {
         this.lossRepository = lossRepository;
         this.lotRepository = lotRepository;
         this.lotService = lotService;
+        this.ledgerService = ledgerService;
     }
 
     @Transactional
-    public LossResponse record(Long lotId, LossRequest request) {
+    public LossResponse record(Long lotId, LossRequest request, Manager manager) {
         // The row lock makes losses and sales of the same lot wait for each other, so the remaining kg
         // checked below cannot be used up by another request at the same time.
         Lot lot = lotRepository.findForUpdateById(lotId)
@@ -51,7 +57,11 @@ public class LossService {
         loss.setReason(request.reason());
         loss.setNotes(request.notes() == null || request.notes().isBlank() ? null : request.notes().trim());
         loss.setLossDate(request.recordedAt() != null ? request.recordedAt() : KigaliTime.today());
-        return LossResponse.from(lossRepository.save(loss));
+        Loss saved = lossRepository.save(loss);
+
+        ledgerService.record(LedgerEntryType.LOSS, "LOSS", saved.getId(), saved.getQuantityKg(), null,
+                "Loss from " + lot.getLotCode() + ": " + saved.getReason(), manager);
+        return LossResponse.from(saved);
     }
 
     @Transactional(readOnly = true)

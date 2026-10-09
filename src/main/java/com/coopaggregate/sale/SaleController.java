@@ -2,6 +2,8 @@ package com.coopaggregate.sale;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -9,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.common.PageResponse;
 
 import io.swagger.v3.oas.annotations.Operation;
@@ -24,9 +27,11 @@ import jakarta.validation.Valid;
 public class SaleController {
 
     private final SaleService saleService;
+    private final AuthService authService;
 
-    public SaleController(SaleService saleService) {
+    public SaleController(SaleService saleService, AuthService authService) {
         this.saleService = saleService;
+        this.authService = authService;
     }
 
     @GetMapping
@@ -43,8 +48,9 @@ public class SaleController {
             + "floor price, but the sale is still saved")
     @ApiResponse(responseCode = "201", description = "Sale recorded")
     @ApiResponse(responseCode = "200", description = "A sale with this clientUuid already exists; it is returned unchanged")
-    public ResponseEntity<SaleResponse> record(@Valid @RequestBody SaleRequest request) {
-        RecordedSale result = saleService.record(request);
+    public ResponseEntity<SaleResponse> record(@Valid @RequestBody SaleRequest request,
+                                               @AuthenticationPrincipal Jwt jwt) {
+        RecordedSale result = saleService.record(request, authService.currentManager(jwt.getSubject()));
         return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK).body(result.sale());
     }
 }
