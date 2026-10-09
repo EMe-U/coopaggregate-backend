@@ -240,10 +240,10 @@ Request body for `POST` and `PUT`:
 | `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
 
-- The member code is generated on create as `M-0001`, `M-0002`, and so on, and never
+- The member code is generated on create as `MEM-0001`, `MEM-0002`, and so on, and never
   changes.
 - Phone numbers and national IDs must be unique. A duplicate returns `409`, for example
-  `{"message": "Phone number +250788123456 is already used by member M-0003."}`.
+  `{"message": "Phone number +250788123456 is already used by member MEM-0003."}`.
 - `search` matches part of the name, member code or phone number, ignoring case. A full
   number such as `0788123456` also finds `+250788123456`.
 - `active=true` returns only active members, `active=false` only inactive ones.

@@ -82,7 +82,7 @@ class MemberControllerTest {
     @Test
     void createReturns201WithMember() throws Exception {
         when(memberService.create(any(MemberRequest.class))).thenReturn(new MemberResponse(
-                1L, "M-0001", "Uwimana Claudine", "+250788123456", null, null,
+                1L, "MEM-0001", "Uwimana Claudine", "+250788123456", null, null,
                 LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z")));
 
         mockMvc.perform(post("/api/members")
@@ -92,7 +92,7 @@ class MemberControllerTest {
                                 {"fullName": "Uwimana Claudine", "phone": "0788123456"}
                                 """))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.memberCode").value("M-0001"))
+                .andExpect(jsonPath("$.memberCode").value("MEM-0001"))
                 .andExpect(jsonPath("$.phone").value("+250788123456"))
                 .andExpect(jsonPath("$.status").value("ACTIVE"));
     }
@@ -127,7 +127,7 @@ class MemberControllerTest {
     @Test
     void createWithDuplicatePhoneReturns409() throws Exception {
         when(memberService.create(any(MemberRequest.class))).thenThrow(
-                new IllegalStateException("Phone number +250788123456 is already used by member M-0003."));
+                new IllegalStateException("Phone number +250788123456 is already used by member MEM-0003."));
 
         mockMvc.perform(post("/api/members")
                         .header(HttpHeaders.AUTHORIZATION, bearerToken)
@@ -136,7 +136,7 @@ class MemberControllerTest {
                                 {"fullName": "Uwimana Claudine", "phone": "0788123456"}
                                 """))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value("Phone number +250788123456 is already used by member M-0003."));
+                .andExpect(jsonPath("$.message").value("Phone number +250788123456 is already used by member MEM-0003."));
     }
 
     @Test

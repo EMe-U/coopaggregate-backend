@@ -48,7 +48,7 @@ public class MemberService {
         applyDetails(member, request);
         member.setJoinDate(request.joinDate() != null ? request.joinDate() : LocalDate.now());
         // Taken after the duplicate checks so a rejected request does not use up a code.
-        member.setMemberCode(String.format("M-%04d", memberRepository.nextMemberCodeNumber()));
+        member.setMemberCode(String.format("MEM-%04d", memberRepository.nextMemberCodeNumber()));
         return MemberResponse.from(memberRepository.save(member));
     }
 
