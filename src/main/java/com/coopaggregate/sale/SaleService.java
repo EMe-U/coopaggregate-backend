@@ -79,7 +79,12 @@ public class SaleService {
         sale.setPricePerKg(request.pricePerKg());
         sale.setTotalAmount(totalAmount(request.quantityKg(), request.pricePerKg()));
         sale.setBelowFloorPrice(isBelowFloor(lot, request.pricePerKg()));
-        return new RecordedSale(SaleResponse.from(saleRepository.save(sale)), true);
+        Sale saved = saleRepository.save(sale);
+
+        if (request.quantityKg().compareTo(remainingKg) == 0) {
+            lot.setStatus(LotStatus.SOLD);
+        }
+        return new RecordedSale(SaleResponse.from(saved), true);
     }
 
     @Transactional(readOnly = true)
