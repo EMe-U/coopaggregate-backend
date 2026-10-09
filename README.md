@@ -183,7 +183,17 @@ ERD: see `docs/erd.png`.
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
 | GET | `/api/grades` | JWT | Active grades `{id, code, name}`, sorted by code |
+| GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold and remaining kg |
+| GET | `/api/lots/{id}` | JWT | One lot, with the kilograms each member delivered |
+| GET | `/api/lots/stock` | JWT | `{totalRemainingKg, openLots, closedLots, byGrade}` for open and closed lots |
 | GET | `/api/lots/open?gradeId=` | JWT | Open lot of the grade `{id, code, gradeName, totalKg}`. `204` if none is open yet, `404` if the grade does not exist |
+| PATCH | `/api/lots/{id}/close` | JWT | Closes an open lot. The next delivery of that grade starts a new lot |
+| POST | `/api/lots/{id}/losses` | JWT | Records a loss on an open or closed lot, returns `201` |
+| GET | `/api/lots/{id}/losses` | JWT | Losses of a lot, newest first |
+| GET | `/api/buyers?search=` | JWT | Buyers sorted by name. `search` matches name or phone |
+| POST | `/api/buyers` | JWT | Adds a buyer, returns `201` |
+| POST | `/api/sales` | JWT | Records a sale from a closed lot. `201` when new, `200` when the same `clientUuid` was already recorded |
+| GET | `/api/sales?lotId=&buyerId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page) |
 | POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/deliveries?memberId=&lotId=&from=&to=&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional |
 | GET | `/api/deliveries/{id}` | JWT | One delivery |
@@ -302,6 +312,59 @@ Request body for `POST /api/deliveries`:
 - `from` and `to` filter by delivery day in Kigali time (`yyyy-MM-dd`, both inclusive).
 - Deliveries cannot be edited or deleted. A mistake is corrected with a ledger reversal.
 
+### Lots and losses
+
+A lot moves through `OPEN` -> `CLOSED` -> `SOLD` (`SHARED` comes with payment sharing).
+
+- **Quantities** are always computed from the database, never stored:
+  `remainingKg = deliveredKg - lostKg - soldKg`. `saleAmountRwf` is the sum of the lot's
+  sales and `memberCount` the number of members who delivered to it. `createdAt` and
+  `closedAt` are the dates the lot was opened and closed.
+- **Close:** only an `OPEN` lot can be closed (otherwise `409`). Closing waits for any
+  delivery of the same grade that is being recorded, so no delivery ends up in a lot
+  after it closed.
+- **Stock:** the remaining kg of all open and closed lots, in total and per grade.
+- **Losses:** body `{"quantityKg", "reason", "recordedAt", "notes"}`. `reason` is `ROT`,
+  `DAMAGE`, `THEFT` or `OTHER`; `recordedAt` (a date) and `notes` are optional. Allowed on
+  open and closed lots (otherwise `409`). `quantityKg` must be more than 0 and at most the
+  lot's remaining kg (otherwise `400`). Each loss adds a `LOSS` ledger entry.
+
+### Buyers
+
+Body for `POST /api/buyers`: `{"name", "phone", "type"}`. `name` and `phone` are required;
+`type` is optional free text (at most 30 characters), for example `Trader`. The phone
+number follows the same rules as for members and is stored as `+2507XXXXXXXX`. A phone
+number that already belongs to a buyer returns `409`.
+
+### Sales
+
+Request body for `POST /api/sales`:
+
+```json
+{
+  "clientUuid": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "lotId": 3,
+  "buyerId": 2,
+  "quantityKg": 500,
+  "pricePerKg": 320,
+  "soldAt": "2026-10-09"
+}
+```
+
+- The lot must be `CLOSED` and the buyer must exist (otherwise `400`).
+- `quantityKg` must be more than 0 and at most the lot's remaining kg (otherwise `400`).
+- `pricePerKg` is in whole RWF and must be more than 0. `soldAt` is an optional date and
+  defaults to today (Kigali time).
+- `totalAmountRwf = quantityKg x pricePerKg`, rounded half up to whole RWF.
+- `belowFloor` is `true` when the grade has a floor price and `pricePerKg` is lower. It is
+  only a warning: the sale is saved either way. A grade without a floor price is never
+  below it.
+- When a sale uses up the remaining kg, the lot becomes `SOLD` (`lotStatus` in the
+  response).
+- Sending the same `clientUuid` again returns the existing sale with `200`.
+- Sale codes look like `SAL-7K2Q`. Each sale adds a `SALE` ledger entry with the kilograms
+  and the total amount.
+
 ### Interactive docs (Swagger)
 
 - Local: http://localhost:8080/swagger-ui.html
@@ -361,7 +424,10 @@ The tests do not need a database. They cover the ledger hash chain, the ledger s
 (recording, reversal and verification, with a mocked repository), the login service
 (including the lockout after 5 failures), the login endpoint, Rwandan phone number
 validation, the member service (create, update, duplicates, not found, activate and
-deactivate) and the member endpoints (validation errors, `401` without a token).
+deactivate), the member endpoints (validation errors, `401` without a token), recording
+deliveries (deduction, lot assignment, idempotency, ledger entry), lots (remaining kg,
+closing, stock), losses, buyers and sales (closed lot only, remaining kg, `SOLD` at 0,
+floor price warning, idempotency, ledger entries).
 
 ## Author
 
