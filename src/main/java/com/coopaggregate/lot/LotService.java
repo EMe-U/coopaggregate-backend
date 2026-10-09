@@ -134,9 +134,13 @@ public class LotService {
                 .orElseThrow(() -> new EntityNotFoundException("Lot " + id + " does not exist."));
     }
 
-    LotResponse toResponse(Lot lot) {
+    public LotQuantities quantitiesOf(Lot lot) {
         LotQuantities quantities = quantitiesOf(List.of(lot)).get(lot.getId());
-        return LotResponse.from(lot, quantities != null ? quantities : LotQuantities.empty(lot.getId()));
+        return quantities != null ? quantities : LotQuantities.empty(lot.getId());
+    }
+
+    LotResponse toResponse(Lot lot) {
+        return LotResponse.from(lot, quantitiesOf(lot));
     }
 
     Map<Long, LotQuantities> quantitiesOf(List<Lot> lots) {

@@ -11,9 +11,12 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
 import com.coopaggregate.grade.Grade;
+
+import jakarta.persistence.LockModeType;
 
 public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificationExecutor<Lot> {
 
@@ -22,6 +25,9 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
     Optional<Lot> findFirstByGradeIdAndStatus(Long gradeId, LotStatus status);
 
     long countByLotCodeStartingWith(String prefix);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<Lot> findForUpdateById(Long id);
 
     @Query("SELECT l.grade.id FROM Lot l WHERE l.id = :id")
     Optional<Long> findGradeIdById(Long id);
