@@ -89,7 +89,7 @@ class DeliveryServiceTest {
 
         manager = new Manager();
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
-                new LotService(lotRepository), ledgerService);
+                new LotService(lotRepository, gradeRepository), ledgerService);
     }
 
     @ParameterizedTest
