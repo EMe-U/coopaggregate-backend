@@ -3,6 +3,7 @@ package com.coopaggregate.sale;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 import org.hibernate.annotations.CreationTimestamp;
 
@@ -24,6 +25,8 @@ public class Sale {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    private UUID clientUuid;
 
     private String saleCode;
 
@@ -54,6 +57,14 @@ public class Sale {
 
     public Long getId() {
         return id;
+    }
+
+    public UUID getClientUuid() {
+        return clientUuid;
+    }
+
+    public void setClientUuid(UUID clientUuid) {
+        this.clientUuid = clientUuid;
     }
 
     public String getSaleCode() {
