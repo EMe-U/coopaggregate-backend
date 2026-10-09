@@ -6,6 +6,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.coopaggregate.common.PageResponse;
+
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -21,6 +23,15 @@ public class LotController {
 
     public LotController(LotService lotService) {
         this.lotService = lotService;
+    }
+
+    @GetMapping
+    @Operation(summary = "List lots, newest first (max 100 per page), with delivered, lost, sold and remaining kg")
+    public PageResponse<LotResponse> list(@RequestParam(required = false) LotStatus status,
+                                          @RequestParam(required = false) Long gradeId,
+                                          @RequestParam(defaultValue = "0") int page,
+                                          @RequestParam(defaultValue = "20") int size) {
+        return lotService.list(status, gradeId, page, size);
     }
 
     @GetMapping("/open")
