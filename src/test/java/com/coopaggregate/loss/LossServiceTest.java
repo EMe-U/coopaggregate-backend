@@ -1,6 +1,7 @@
 package com.coopaggregate.loss;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -128,6 +129,25 @@ class LossServiceTest {
 
         verify(ledgerService).record(LedgerEntryType.LOSS, "LOSS", 8L, new BigDecimal("30.00"), null,
                 "Loss from A-2026-01: ROT", manager);
+    }
+
+    @Test
+    void dryingLossKeepsReasonAndNotes() {
+        LossResponse response = service.record(3L,
+                new LossRequest(new BigDecimal("12.00"), LossReason.DRYING, null, "  Weight lost in store  "), manager);
+
+        assertEquals(LossReason.DRYING, response.reason());
+        assertEquals("Weight lost in store", response.notes());
+        verify(ledgerService).record(LedgerEntryType.LOSS, "LOSS", 8L, new BigDecimal("12.00"), null,
+                "Loss from A-2026-01: DRYING", manager);
+    }
+
+    @Test
+    void blankNotesAreStoredAsNull() {
+        LossResponse response = service.record(3L,
+                new LossRequest(new BigDecimal("12.00"), LossReason.OTHER, null, " "), manager);
+
+        assertNull(response.notes());
     }
 
     private static LossRequest request(String quantityKg, LocalDate recordedAt) {

@@ -22,7 +22,7 @@ import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/api/lots/{lotId}/losses")
-@Tag(name = "Losses", description = "Potatoes lost from a lot (rot, damage, theft)")
+@Tag(name = "Losses", description = "Potatoes lost from a lot (rot, drying, damage, theft, other)")
 @SecurityRequirement(name = "bearerAuth")
 public class LossController {
 

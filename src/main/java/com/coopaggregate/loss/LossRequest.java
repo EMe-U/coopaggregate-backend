@@ -15,7 +15,7 @@ public record LossRequest(
         @Digits(integer = 10, fraction = 2, message = "must have at most 2 decimals")
         BigDecimal quantityKg,
 
-        @NotNull(message = "is required (ROT, DAMAGE, THEFT or OTHER)")
+        @NotNull(message = "is required (ROT, DRYING, DAMAGE, THEFT or OTHER)")
         LossReason reason,
 
         @PastOrPresent(message = "cannot be in the future")
