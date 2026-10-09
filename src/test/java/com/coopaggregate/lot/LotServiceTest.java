@@ -3,16 +3,20 @@ package com.coopaggregate.lot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
 
@@ -60,5 +64,103 @@ class LotServiceTest {
         EntityNotFoundException e = assertThrows(EntityNotFoundException.class, () -> service.findOpenLot(9L));
 
         assertEquals("Grade 9 does not exist.", e.getMessage());
+    }
+
+    @Test
+    void openLotCanBeClosed() {
+        Lot lot = lot(3L, "A-2026-01", "A", "Big", LotStatus.OPEN);
+        givenLot(lot);
+
+        LotResponse response = service.close(3L);
+
+        assertEquals(LotStatus.CLOSED, lot.getStatus());
+        assertEquals(KigaliTime.today(), lot.getCloseDate());
+        assertEquals(LotStatus.CLOSED, response.status());
+        assertEquals(KigaliTime.today(), response.closedAt());
+        verify(gradeRepository).findForUpdateById(1L);
+    }
+
+    @Test
+    void closedLotCannotBeClosedAgain() {
+        givenLot(lot(3L, "A-2026-01", "A", "Big", LotStatus.CLOSED));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.close(3L));
+
+        assertEquals("Lot A-2026-01 is CLOSED. Only an open lot can be closed.", e.getMessage());
+    }
+
+    @Test
+    void soldLotCannotBeClosed() {
+        givenLot(lot(3L, "A-2026-01", "A", "Big", LotStatus.SOLD));
+
+        assertThrows(IllegalStateException.class, () -> service.close(3L));
+    }
+
+    @Test
+    void closingUnknownLotIsNotFound() {
+        when(lotRepository.findGradeIdById(99L)).thenReturn(Optional.empty());
+
+        EntityNotFoundException e = assertThrows(EntityNotFoundException.class, () -> service.close(99L));
+
+        assertEquals("Lot 99 does not exist.", e.getMessage());
+    }
+
+    @Test
+    void lotDetailHasComputedQuantitiesAndMembers() {
+        givenLot(lot(3L, "A-2026-01", "A", "Big", LotStatus.CLOSED));
+        when(lotRepository.findQuantities(anyCollection())).thenReturn(List.of(new LotQuantities(3L,
+                new BigDecimal("1000.00"), new BigDecimal("25.50"), new BigDecimal("400.00"), 120000L, 2L)));
+        List<LotMemberResponse> members = List.of(
+                new LotMemberResponse(5L, "Uwimana Claudine", "MEM-0005", new BigDecimal("600.00")),
+                new LotMemberResponse(6L, "Habimana Eric", "MEM-0006", new BigDecimal("400.00")));
+        when(lotRepository.findMembers(3L)).thenReturn(members);
+
+        LotDetailResponse detail = service.get(3L);
+
+        assertEquals(new BigDecimal("574.50"), detail.remainingKg());
+        assertEquals(120000L, detail.saleAmountRwf());
+        assertEquals(2L, detail.memberCount());
+        assertEquals(members, detail.members());
+    }
+
+    @Test
+    void stockAddsRemainingKgOfOpenAndClosedLotsPerGrade() {
+        Lot openA = lot(3L, "A-2026-02", "A", "Big", LotStatus.OPEN);
+        Lot closedA = lot(4L, "A-2026-01", "A", "Big", LotStatus.CLOSED);
+        Lot closedB = lot(5L, "B-2026-01", "B", "Normal", LotStatus.CLOSED);
+        when(lotRepository.findByStatusIn(List.of(LotStatus.OPEN, LotStatus.CLOSED)))
+                .thenReturn(List.of(openA, closedB, closedA));
+        when(lotRepository.findQuantities(anyCollection())).thenReturn(List.of(
+                new LotQuantities(3L, new BigDecimal("200.00"), null, null, null, null),
+                new LotQuantities(4L, new BigDecimal("1000.00"), new BigDecimal("50.00"), new BigDecimal("900.00"),
+                        null, null),
+                new LotQuantities(5L, new BigDecimal("300.00"), null, null, null, null)));
+
+        StockResponse stock = service.stock();
+
+        assertEquals(new BigDecimal("550.00"), stock.totalRemainingKg());
+        assertEquals(1, stock.openLots());
+        assertEquals(2, stock.closedLots());
+        assertEquals(List.of(
+                new StockResponse.GradeStock("Big", new BigDecimal("250.00")),
+                new StockResponse.GradeStock("Normal", new BigDecimal("300.00"))), stock.byGrade());
+    }
+
+    private void givenLot(Lot lot) {
+        when(lotRepository.findGradeIdById(lot.getId())).thenReturn(Optional.of(lot.getGrade().getId()));
+        when(lotRepository.findById(lot.getId())).thenReturn(Optional.of(lot));
+    }
+
+    private static Lot lot(Long id, String code, String gradeCode, String gradeName, LotStatus status) {
+        Grade grade = new Grade();
+        ReflectionTestUtils.setField(grade, "id", gradeCode.equals("A") ? 1L : 2L);
+        grade.setCode(gradeCode);
+        grade.setName(gradeName);
+        Lot lot = new Lot();
+        ReflectionTestUtils.setField(lot, "id", id);
+        lot.setLotCode(code);
+        lot.setGrade(grade);
+        lot.setStatus(status);
+        return lot;
     }
 }
