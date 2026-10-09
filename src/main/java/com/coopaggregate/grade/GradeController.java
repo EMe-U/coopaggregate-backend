@@ -23,7 +23,7 @@ public class GradeController {
     }
 
     @GetMapping
-    @Operation(summary = "List active grades, sorted by code")
+    @Operation(summary = "List active grades, sorted by code. floorPricePerKg is null when not set")
     public List<GradeResponse> list() {
         return gradeService.listActive();
     }
