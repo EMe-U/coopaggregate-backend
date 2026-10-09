@@ -141,7 +141,8 @@ public class MemberService {
                 predicates.add(cb.or(
                         cb.like(cb.lower(root.get("fullName")), textPattern),
                         cb.like(cb.lower(root.get("memberCode")), textPattern),
-                        cb.like(root.get("phone"), "%" + phoneTerm + "%")));
+                        cb.like(root.get("phone"), "%" + phoneTerm + "%"),
+                        cb.like(root.get("nationalId"), "%" + term + "%")));
             }
 
             return cb.and(predicates.toArray(Predicate[]::new));
