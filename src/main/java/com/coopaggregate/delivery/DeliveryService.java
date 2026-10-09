@@ -11,7 +11,10 @@ import org.springframework.transaction.annotation.Transactional;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
+import com.coopaggregate.ledger.LedgerEntryType;
+import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.lot.LotService;
+import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 import com.coopaggregate.member.MemberStatus;
@@ -29,20 +32,22 @@ public class DeliveryService {
     private final GradeRepository gradeRepository;
     private final SettingRepository settingRepository;
     private final LotService lotService;
+    private final LedgerService ledgerService;
     private final SecureRandom random = new SecureRandom();
 
     public DeliveryService(DeliveryRepository deliveryRepository, MemberRepository memberRepository,
                            GradeRepository gradeRepository, SettingRepository settingRepository,
-                           LotService lotService) {
+                           LotService lotService, LedgerService ledgerService) {
         this.deliveryRepository = deliveryRepository;
         this.memberRepository = memberRepository;
         this.gradeRepository = gradeRepository;
         this.settingRepository = settingRepository;
         this.lotService = lotService;
+        this.ledgerService = ledgerService;
     }
 
     @Transactional
-    public DeliveryResponse record(DeliveryRequest request) {
+    public DeliveryResponse record(DeliveryRequest request, Manager manager) {
         Grade grade = gradeRepository.findForUpdateById(request.gradeId())
                 .orElseThrow(() -> new BadRequestException("Grade " + request.gradeId() + " does not exist."));
         Member member = activeMember(request.memberId());
@@ -55,7 +60,12 @@ public class DeliveryService {
         delivery.setQuantityKg(request.quantityKg());
         delivery.setDeductionAmount(deductionFor(request.quantityKg()));
         delivery.setReceiptCode(newReceiptCode());
-        return DeliveryResponse.from(deliveryRepository.save(delivery));
+        Delivery saved = deliveryRepository.save(delivery);
+
+        ledgerService.record(LedgerEntryType.DELIVERY, "DELIVERY", saved.getId(),
+                saved.getQuantityKg(), saved.getDeductionAmount(),
+                "Delivery " + saved.getReceiptCode() + " from " + member.getMemberCode(), manager);
+        return DeliveryResponse.from(saved);
     }
 
     private Member activeMember(Long memberId) {
@@ -69,7 +79,7 @@ public class DeliveryService {
     }
 
     // The deduction is stored in whole RWF, so fractions are rounded (half up).
-    long deductionFor(BigDecimal quantityKg) {
+    private long deductionFor(BigDecimal quantityKg) {
         long deductionPerKg = settingRepository.findById(1L)
                 .orElseThrow(() -> new IllegalStateException("The settings row is missing."))
                 .getDeductionPerKg();
