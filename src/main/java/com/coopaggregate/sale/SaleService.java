@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import org.springframework.data.domain.PageRequest;
@@ -98,10 +99,10 @@ public class SaleService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<SaleResponse> list(Long lotId, Long buyerId, int page, int size) {
+    public PageResponse<SaleResponse> list(String search, Long lotId, Long buyerId, Long gradeId, int page, int size) {
         PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
                 Sort.by(Sort.Direction.DESC, "saleDate", "id"));
-        return PageResponse.from(saleRepository.findAll(matching(lotId, buyerId), pageRequest)
+        return PageResponse.from(saleRepository.findAll(matching(search, lotId, buyerId, gradeId), pageRequest)
                 .map(SaleResponse::from));
     }
 
@@ -136,7 +137,7 @@ public class SaleService {
         return floorPricePerKg != null && pricePerKg < floorPricePerKg;
     }
 
-    private static Specification<Sale> matching(Long lotId, Long buyerId) {
+    private static Specification<Sale> matching(String search, Long lotId, Long buyerId, Long gradeId) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (lotId != null) {
@@ -144,6 +145,22 @@ public class SaleService {
             }
             if (buyerId != null) {
                 predicates.add(cb.equal(root.get("buyer").get("id"), buyerId));
+            }
+            if (gradeId != null) {
+                predicates.add(cb.equal(root.get("lot").get("grade").get("id"), gradeId));
+            }
+            if (search != null && !search.isBlank()) {
+                String term = search.trim();
+                String pattern = "%" + term.toLowerCase(Locale.ROOT) + "%";
+                List<Predicate> matches = new ArrayList<>();
+                matches.add(cb.like(cb.lower(root.get("buyer").get("name")), pattern));
+                matches.add(cb.like(cb.lower(root.get("lot").get("lotCode")), pattern));
+                matches.add(cb.like(cb.lower(root.get("saleCode")), pattern));
+                // A number on its own can also be the sale's id.
+                if (term.matches("\\d{1,18}")) {
+                    matches.add(cb.equal(root.get("id"), Long.valueOf(term)));
+                }
+                predicates.add(cb.or(matches.toArray(Predicate[]::new)));
             }
             return cb.and(predicates.toArray(Predicate[]::new));
         };

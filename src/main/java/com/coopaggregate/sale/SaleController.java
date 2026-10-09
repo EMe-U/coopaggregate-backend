@@ -15,6 +15,7 @@ import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.common.PageResponse;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -36,11 +37,15 @@ public class SaleController {
 
     @GetMapping
     @Operation(summary = "List sales, newest first (max 100 per page)")
-    public PageResponse<SaleResponse> list(@RequestParam(required = false) Long lotId,
-                                           @RequestParam(required = false) Long buyerId,
-                                           @RequestParam(defaultValue = "0") int page,
-                                           @RequestParam(defaultValue = "20") int size) {
-        return saleService.list(lotId, buyerId, page, size);
+    public PageResponse<SaleResponse> list(
+            @Parameter(description = "Part of the buyer name, lot code or sale code, or the sale id (case-insensitive)")
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) Long lotId,
+            @RequestParam(required = false) Long buyerId,
+            @RequestParam(required = false) Long gradeId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return saleService.list(search, lotId, buyerId, gradeId, page, size);
     }
 
     @GetMapping("/summary")

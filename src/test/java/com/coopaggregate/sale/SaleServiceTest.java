@@ -5,13 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -19,6 +23,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.buyer.Buyer;
@@ -34,6 +42,11 @@ import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
+
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Path;
+import jakarta.persistence.criteria.Root;
 
 class SaleServiceTest {
 
@@ -235,6 +248,56 @@ class SaleServiceTest {
 
         assertEquals(BigDecimal.ZERO, summary.averagePricePerKg());
         verify(saleRepository).totalKgBetween(LocalDate.of(2028, 2, 1), LocalDate.of(2028, 2, 29));
+    }
+
+    @Test
+    void searchMatchesBuyerNameLotCodeAndSaleCode() {
+        Root<Sale> root = deepRoot();
+        Path<Object> id = root.get("id");
+
+        CriteriaBuilder cb = applyListFilters("Kalisa", null, root);
+
+        verify(cb, times(3)).like(any(), eq("%kalisa%"));
+        verify(cb, never()).equal(eq(id), any(Object.class));
+    }
+
+    @Test
+    void numericSearchAlsoMatchesSaleId() {
+        Root<Sale> root = deepRoot();
+        Path<Object> id = root.get("id");
+
+        CriteriaBuilder cb = applyListFilters("42", null, root);
+
+        verify(cb).equal(id, 42L);
+        verify(cb, times(3)).like(any(), eq("%42%"));
+    }
+
+    @Test
+    void gradeFilterUsesTheLotsGrade() {
+        Root<Sale> root = deepRoot();
+        Path<Object> gradeId = root.get("lot").get("grade").get("id");
+
+        CriteriaBuilder cb = applyListFilters(null, 2L, root);
+
+        verify(cb).equal(gradeId, 2L);
+        verify(cb, never()).like(any(), any(String.class));
+    }
+
+    @SuppressWarnings("unchecked")
+    private CriteriaBuilder applyListFilters(String search, Long gradeId, Root<Sale> root) {
+        ArgumentCaptor<Specification<Sale>> spec = ArgumentCaptor.forClass(Specification.class);
+        when(saleRepository.findAll(spec.capture(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
+
+        service.list(search, null, null, gradeId, 0, 20);
+
+        CriteriaBuilder cb = mock(CriteriaBuilder.class);
+        spec.getValue().toPredicate(root, mock(CriteriaQuery.class), cb);
+        return cb;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Root<Sale> deepRoot() {
+        return mock(Root.class, RETURNS_DEEP_STUBS);
     }
 
     private RecordedSale sell(String quantityKg, long pricePerKg) {
