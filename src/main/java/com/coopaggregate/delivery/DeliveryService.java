@@ -2,7 +2,6 @@ package com.coopaggregate.delivery;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -17,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
+import com.coopaggregate.common.ShortCodes;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
@@ -35,9 +35,6 @@ import jakarta.persistence.criteria.Predicate;
 @Service
 public class DeliveryService {
 
-    // No 0/O or 1/I/L, so a receipt code read aloud or from a small screen is not misread.
-    private static final String RECEIPT_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
-    private static final int RECEIPT_CODE_ATTEMPTS = 10;
     private static final int MAX_PAGE_SIZE = 100;
 
     private final DeliveryRepository deliveryRepository;
@@ -46,7 +43,6 @@ public class DeliveryService {
     private final SettingRepository settingRepository;
     private final LotService lotService;
     private final LedgerService ledgerService;
-    private final SecureRandom random = new SecureRandom();
 
     public DeliveryService(DeliveryRepository deliveryRepository, MemberRepository memberRepository,
                            GradeRepository gradeRepository, SettingRepository settingRepository,
@@ -81,7 +77,7 @@ public class DeliveryService {
         delivery.setDeliveredAt(request.deliveredAt() != null ? request.deliveredAt() : Instant.now());
         delivery.setQuantityKg(request.quantityKg());
         delivery.setDeductionAmount(deductionFor(request.quantityKg()));
-        delivery.setReceiptCode(newReceiptCode());
+        delivery.setReceiptCode(ShortCodes.unique("RCT-", deliveryRepository::existsByReceiptCode));
         Delivery saved = deliveryRepository.save(delivery);
 
         ledgerService.record(LedgerEntryType.DELIVERY, "DELIVERY", saved.getId(),
@@ -126,18 +122,6 @@ public class DeliveryService {
                 .longValueExact();
     }
 
-    private String newReceiptCode() {
-        for (int attempt = 0; attempt < RECEIPT_CODE_ATTEMPTS; attempt++) {
-            StringBuilder code = new StringBuilder("RCT-");
-            for (int i = 0; i < 4; i++) {
-                code.append(RECEIPT_ALPHABET.charAt(random.nextInt(RECEIPT_ALPHABET.length())));
-            }
-            if (!deliveryRepository.existsByReceiptCode(code.toString())) {
-                return code.toString();
-            }
-        }
-        throw new IllegalStateException("Could not create a unique receipt code. Please try again.");
-    }
 
     // from and to are whole days in Kigali time; to is inclusive.
     private static Specification<Delivery> matching(Long memberId, Long lotId, LocalDate from, LocalDate to) {
