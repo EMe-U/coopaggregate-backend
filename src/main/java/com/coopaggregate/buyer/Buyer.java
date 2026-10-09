@@ -25,6 +25,8 @@ public class Buyer {
 
     private String email;
 
+    private String type;
+
     @CreationTimestamp
     @Column(updatable = false)
     private Instant createdAt;
@@ -63,6 +65,14 @@ public class Buyer {
 
     public void setEmail(String email) {
         this.email = email;
+    }
+
+    public String getType() {
+        return type;
+    }
+
+    public void setType(String type) {
+        this.type = type;
     }
 
     public Instant getCreatedAt() {
