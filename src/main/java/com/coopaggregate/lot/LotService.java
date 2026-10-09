@@ -1,10 +1,12 @@
 package com.coopaggregate.lot;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -51,6 +53,29 @@ public class LotService {
         return LotDetailResponse.from(lot, lotRepository.findMembers(id));
     }
 
+    // Only open and closed lots still hold potatoes; sold and shared lots have nothing left.
+    @Transactional(readOnly = true)
+    public StockResponse stock() {
+        List<Lot> lots = lotRepository.findByStatusIn(List.of(LotStatus.OPEN, LotStatus.CLOSED));
+        Map<Long, LotQuantities> quantities = quantitiesOf(lots);
+
+        BigDecimal totalRemainingKg = BigDecimal.ZERO;
+        Map<String, BigDecimal> remainingByGradeCode = new TreeMap<>();
+        Map<String, String> gradeNameByCode = new TreeMap<>();
+        for (Lot lot : lots) {
+            BigDecimal remainingKg = quantities.get(lot.getId()).remainingKg();
+            totalRemainingKg = totalRemainingKg.add(remainingKg);
+            remainingByGradeCode.merge(lot.getGrade().getCode(), remainingKg, BigDecimal::add);
+            gradeNameByCode.put(lot.getGrade().getCode(), lot.getGrade().getName());
+        }
+
+        List<StockResponse.GradeStock> byGrade = remainingByGradeCode.entrySet().stream()
+                .map(entry -> new StockResponse.GradeStock(gradeNameByCode.get(entry.getKey()), entry.getValue()))
+                .toList();
+        long openLots = lots.stream().filter(lot -> lot.getStatus() == LotStatus.OPEN).count();
+        return new StockResponse(totalRemainingKg, openLots, lots.size() - openLots, byGrade);
+    }
+
     @Transactional(readOnly = true)
     public Optional<OpenLotResponse> findOpenLot(Long gradeId) {
         if (!gradeRepository.existsById(gradeId)) {
@@ -92,7 +117,8 @@ public class LotService {
     }
 
     LotResponse toResponse(Lot lot) {
-        return LotResponse.from(lot, quantitiesOf(List.of(lot)).getOrDefault(lot.getId(), LotQuantities.empty(lot.getId())));
+        LotQuantities quantities = quantitiesOf(List.of(lot)).get(lot.getId());
+        return LotResponse.from(lot, quantities != null ? quantities : LotQuantities.empty(lot.getId()));
     }
 
     Map<Long, LotQuantities> quantitiesOf(List<Lot> lots) {

@@ -35,6 +35,12 @@ public class LotController {
         return lotService.list(status, gradeId, page, size);
     }
 
+    @GetMapping("/stock")
+    @Operation(summary = "Potatoes still in stock: remaining kg in open and closed lots, in total and per grade")
+    public StockResponse stock() {
+        return lotService.stock();
+    }
+
     @GetMapping("/{id}")
     @Operation(summary = "Get one lot with the kilograms each member delivered to it")
     public LotDetailResponse get(@PathVariable Long id) {

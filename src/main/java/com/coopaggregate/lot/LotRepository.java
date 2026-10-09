@@ -26,6 +26,9 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
     @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d WHERE d.lot.id = :lotId")
     BigDecimal totalDeliveredKg(Long lotId);
 
+    @EntityGraph(attributePaths = "grade")
+    List<Lot> findByStatusIn(Collection<LotStatus> statuses);
+
     @Override
     @EntityGraph(attributePaths = "grade")
     Page<Lot> findAll(Specification<Lot> spec, Pageable pageable);
