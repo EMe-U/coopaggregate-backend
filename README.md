@@ -182,10 +182,10 @@ ERD: see `docs/erd.png`.
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
-| GET | `/api/grades` | JWT | Active grades `{id, code, name}`, sorted by code |
+| GET | `/api/grades` | JWT | Active grades `{id, code, name, floorPricePerKg}`, sorted by code. `floorPricePerKg` is `null` when not set |
 | GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold and remaining kg |
 | GET | `/api/lots/{id}` | JWT | One lot, with the kilograms each member delivered |
-| GET | `/api/lots/stock` | JWT | `{totalRemainingKg, openLots, closedLots, byGrade}` for open and closed lots |
+| GET | `/api/lots/stock` | JWT | Stock balance: remaining, delivered, sold and lost kg, today's deliveries, lot counts and remaining kg per grade |
 | GET | `/api/lots/open?gradeId=` | JWT | Open lot of the grade `{id, code, gradeName, totalKg}`. `204` if none is open yet, `404` if the grade does not exist |
 | PATCH | `/api/lots/{id}/close` | JWT | Closes an open lot. The next delivery of that grade starts a new lot |
 | POST | `/api/lots/{id}/losses` | JWT | Records a loss on an open or closed lot, returns `201` |
@@ -193,7 +193,8 @@ ERD: see `docs/erd.png`.
 | GET | `/api/buyers?search=` | JWT | Buyers sorted by name. `search` matches name or phone |
 | POST | `/api/buyers` | JWT | Adds a buyer, returns `201` |
 | POST | `/api/sales` | JWT | Records a sale from a closed lot. `201` when new, `200` when the same `clientUuid` was already recorded |
-| GET | `/api/sales?lotId=&buyerId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page) |
+| GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
+| GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
 | POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/deliveries?memberId=&lotId=&from=&to=&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional |
 | GET | `/api/deliveries/{id}` | JWT | One delivery |
@@ -323,9 +324,12 @@ A lot moves through `OPEN` -> `CLOSED` -> `SOLD` (`SHARED` comes with payment sh
 - **Close:** only an `OPEN` lot can be closed (otherwise `409`). Closing waits for any
   delivery of the same grade that is being recorded, so no delivery ends up in a lot
   after it closed.
-- **Stock:** the remaining kg of all open and closed lots, in total and per grade.
+- **Stock:** `GET /api/lots/stock` returns `totalRemainingKg` (open and closed lots) and
+  `byGrade` (remaining kg per grade), `totalDeliveredKg`, `totalSoldKg` and `totalLostKg`
+  (all lots, so delivered - lost - sold = remaining), `addedTodayKg` and `deliveriesToday`
+  (deliveries whose time falls on today in Kigali), and `openLots` / `closedLots`.
 - **Losses:** body `{"quantityKg", "reason", "recordedAt", "notes"}`. `reason` is `ROT`,
-  `DAMAGE`, `THEFT` or `OTHER`; `recordedAt` (a date) and `notes` are optional. Allowed on
+  `DRYING`, `DAMAGE`, `THEFT` or `OTHER`; `recordedAt` (a date) and `notes` are optional. Allowed on
   open and closed lots (otherwise `409`). `quantityKg` must be more than 0 and at most the
   lot's remaining kg (otherwise `400`). Each loss adds a `LOSS` ledger entry.
 
@@ -364,6 +368,12 @@ Request body for `POST /api/sales`:
 - Sending the same `clientUuid` again returns the existing sale with `200`.
 - Sale codes look like `SAL-7K2Q`. Each sale adds a `SALE` ledger entry with the kilograms
   and the total amount.
+- `GET /api/sales` filters: `search` matches part of the buyer name, lot code or sale code
+  (ignoring case), and a number on its own also matches the sale id. `gradeId` keeps sales
+  from lots of that grade.
+- `GET /api/sales/summary` covers the current month in Kigali time:
+  `salesAmountThisMonth` (RWF), `soldKgThisMonth`, `buyersThisMonth` (different buyers) and
+  `averagePricePerKg` (amount / kg, 2 decimals, `0` when nothing was sold).
 
 ### Interactive docs (Swagger)
 
