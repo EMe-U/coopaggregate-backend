@@ -43,4 +43,13 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
             WHERE l.id IN :lotIds
             """)
     List<LotQuantities> findQuantities(Collection<Long> lotIds);
+
+    @Query("""
+            SELECT new com.coopaggregate.lot.LotMemberResponse(m.id, m.fullName, m.memberCode, SUM(d.quantityKg))
+            FROM Delivery d JOIN d.member m
+            WHERE d.lot.id = :lotId
+            GROUP BY m.id, m.fullName, m.memberCode
+            ORDER BY SUM(d.quantityKg) DESC, m.fullName
+            """)
+    List<LotMemberResponse> findMembers(Long lotId);
 }

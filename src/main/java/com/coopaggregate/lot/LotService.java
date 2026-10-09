@@ -46,6 +46,12 @@ public class LotService {
     }
 
     @Transactional(readOnly = true)
+    public LotDetailResponse get(Long id) {
+        LotResponse lot = toResponse(findLot(id));
+        return LotDetailResponse.from(lot, lotRepository.findMembers(id));
+    }
+
+    @Transactional(readOnly = true)
     public Optional<OpenLotResponse> findOpenLot(Long gradeId) {
         if (!gradeRepository.existsById(gradeId)) {
             throw new EntityNotFoundException("Grade " + gradeId + " does not exist.");
@@ -78,6 +84,15 @@ public class LotService {
         lot.setOpenDate(today);
         lot.setStatus(LotStatus.OPEN);
         return lotRepository.save(lot);
+    }
+
+    Lot findLot(Long id) {
+        return lotRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Lot " + id + " does not exist."));
+    }
+
+    LotResponse toResponse(Lot lot) {
+        return LotResponse.from(lot, quantitiesOf(List.of(lot)).getOrDefault(lot.getId(), LotQuantities.empty(lot.getId())));
     }
 
     Map<Long, LotQuantities> quantitiesOf(List<Lot> lots) {
