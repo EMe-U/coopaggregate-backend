@@ -2,6 +2,8 @@ package com.coopaggregate.sale;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -101,6 +103,24 @@ public class SaleService {
                 Sort.by(Sort.Direction.DESC, "saleDate", "id"));
         return PageResponse.from(saleRepository.findAll(matching(lotId, buyerId), pageRequest)
                 .map(SaleResponse::from));
+    }
+
+    @Transactional(readOnly = true)
+    public SaleSummaryResponse summary() {
+        return summary(KigaliTime.today());
+    }
+
+    // Takes today's date as a parameter so tests can use a fixed month.
+    SaleSummaryResponse summary(LocalDate today) {
+        LocalDate firstDayOfMonth = today.withDayOfMonth(1);
+        LocalDate lastDayOfMonth = today.with(TemporalAdjusters.lastDayOfMonth());
+        long amount = saleRepository.totalAmountBetween(firstDayOfMonth, lastDayOfMonth);
+        BigDecimal kg = saleRepository.totalKgBetween(firstDayOfMonth, lastDayOfMonth);
+        BigDecimal averagePricePerKg = kg.signum() == 0
+                ? BigDecimal.ZERO
+                : BigDecimal.valueOf(amount).divide(kg, 2, RoundingMode.HALF_UP);
+        return new SaleSummaryResponse(amount, kg,
+                saleRepository.buyerCountBetween(firstDayOfMonth, lastDayOfMonth), averagePricePerKg);
     }
 
     // Amounts are stored in whole RWF, so fractions are rounded (half up).

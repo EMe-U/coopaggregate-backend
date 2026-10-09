@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -209,6 +210,31 @@ class SaleServiceTest {
 
         verify(ledgerService).record(LedgerEntryType.SALE, "SALE", 11L, new BigDecimal("100.00"), 30000L,
                 "Sale " + sale.saleCode() + " from A-2026-01 to Kalisa Traders", manager);
+    }
+
+    @Test
+    void summaryAddsUpThisMonthsSales() {
+        LocalDate first = LocalDate.of(2026, 10, 1);
+        LocalDate last = LocalDate.of(2026, 10, 31);
+        when(saleRepository.totalAmountBetween(first, last)).thenReturn(160250L);
+        when(saleRepository.totalKgBetween(first, last)).thenReturn(new BigDecimal("500.75"));
+        when(saleRepository.buyerCountBetween(first, last)).thenReturn(3L);
+
+        SaleSummaryResponse summary = service.summary(LocalDate.of(2026, 10, 9));
+
+        assertEquals(new SaleSummaryResponse(160250L, new BigDecimal("500.75"), 3L, new BigDecimal("320.02")),
+                summary);
+    }
+
+    @Test
+    void averagePriceIsZeroWithoutSales() {
+        when(saleRepository.totalAmountBetween(any(), any())).thenReturn(0L);
+        when(saleRepository.totalKgBetween(any(), any())).thenReturn(BigDecimal.ZERO);
+
+        SaleSummaryResponse summary = service.summary(LocalDate.of(2028, 2, 29));
+
+        assertEquals(BigDecimal.ZERO, summary.averagePricePerKg());
+        verify(saleRepository).totalKgBetween(LocalDate.of(2028, 2, 1), LocalDate.of(2028, 2, 29));
     }
 
     private RecordedSale sell(String quantityKg, long pricePerKg) {

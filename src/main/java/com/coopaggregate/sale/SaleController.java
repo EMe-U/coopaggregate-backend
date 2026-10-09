@@ -43,6 +43,12 @@ public class SaleController {
         return saleService.list(lotId, buyerId, page, size);
     }
 
+    @GetMapping("/summary")
+    @Operation(summary = "This month's sales (Kigali time): amount, kg, number of buyers and average price per kg")
+    public SaleSummaryResponse summary() {
+        return saleService.summary();
+    }
+
     @PostMapping
     @Operation(summary = "Record a sale from a closed lot. belowFloor warns when the price is under the grade's "
             + "floor price, but the sale is still saved")
