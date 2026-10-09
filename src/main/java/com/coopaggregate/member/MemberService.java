@@ -1,7 +1,6 @@
 package com.coopaggregate.member;
 
 import java.time.LocalDate;
-import java.time.ZoneId;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,6 +12,7 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.RwandanPhoneNumber;
 
@@ -23,7 +23,6 @@ import jakarta.persistence.criteria.Predicate;
 public class MemberService {
 
     private static final int MAX_PAGE_SIZE = 100;
-    private static final ZoneId KIGALI = ZoneId.of("Africa/Kigali");
 
     private final MemberRepository memberRepository;
 
@@ -42,7 +41,7 @@ public class MemberService {
 
     @Transactional(readOnly = true)
     public MemberSummaryResponse summary() {
-        return summary(LocalDate.now(KIGALI));
+        return summary(KigaliTime.today());
     }
 
     // Takes today's date as a parameter so tests can use a fixed month.
