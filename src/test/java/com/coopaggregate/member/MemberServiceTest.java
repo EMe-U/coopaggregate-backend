@@ -24,6 +24,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.common.KigaliTime;
+
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
@@ -74,7 +76,7 @@ class MemberServiceTest {
 
         assertNull(response.nationalId());
         assertNull(response.address());
-        assertEquals(LocalDate.now(), response.joinDate());
+        assertEquals(KigaliTime.today(), response.joinDate());
         assertEquals("rw", response.preferredLanguage());
     }
 

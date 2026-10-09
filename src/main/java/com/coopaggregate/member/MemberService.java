@@ -64,7 +64,7 @@ public class MemberService {
     public MemberResponse create(MemberRequest request) {
         Member member = new Member();
         applyDetails(member, request);
-        member.setJoinDate(request.joinDate() != null ? request.joinDate() : LocalDate.now());
+        member.setJoinDate(request.joinDate() != null ? request.joinDate() : KigaliTime.today());
         // Taken after the duplicate checks so a rejected request does not use up a code.
         member.setMemberCode(String.format("MEM-%04d", memberRepository.nextMemberCodeNumber()));
         return MemberResponse.from(memberRepository.save(member));
