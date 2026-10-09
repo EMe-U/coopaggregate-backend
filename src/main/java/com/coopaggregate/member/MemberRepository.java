@@ -1,5 +1,6 @@
 package com.coopaggregate.member;
 
+import java.time.LocalDate;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -16,4 +17,8 @@ public interface MemberRepository extends JpaRepository<Member, Long>, JpaSpecif
 
     @Query(value = "SELECT nextval('member_code_seq')", nativeQuery = true)
     long nextMemberCodeNumber();
+
+    long countByStatus(MemberStatus status);
+
+    long countByJoinDateBetween(LocalDate from, LocalDate to);
 }

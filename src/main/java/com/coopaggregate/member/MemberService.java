@@ -1,6 +1,8 @@
 package com.coopaggregate.member;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -21,6 +23,7 @@ import jakarta.persistence.criteria.Predicate;
 public class MemberService {
 
     private static final int MAX_PAGE_SIZE = 100;
+    private static final ZoneId KIGALI = ZoneId.of("Africa/Kigali");
 
     private final MemberRepository memberRepository;
 
@@ -35,6 +38,22 @@ public class MemberService {
                 Sort.by("fullName").and(Sort.by("id")));
         return PageResponse.from(memberRepository.findAll(matching(search, active), pageRequest)
                 .map(MemberResponse::from));
+    }
+
+    @Transactional(readOnly = true)
+    public MemberSummaryResponse summary() {
+        return summary(LocalDate.now(KIGALI));
+    }
+
+    // Takes today's date as a parameter so tests can use a fixed month.
+    MemberSummaryResponse summary(LocalDate today) {
+        LocalDate firstDayOfMonth = today.withDayOfMonth(1);
+        LocalDate lastDayOfMonth = today.with(TemporalAdjusters.lastDayOfMonth());
+        return new MemberSummaryResponse(
+                memberRepository.count(),
+                memberRepository.countByStatus(MemberStatus.ACTIVE),
+                memberRepository.countByStatus(MemberStatus.INACTIVE),
+                memberRepository.countByJoinDateBetween(firstDayOfMonth, lastDayOfMonth));
     }
 
     @Transactional(readOnly = true)

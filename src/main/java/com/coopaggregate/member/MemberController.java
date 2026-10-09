@@ -44,6 +44,12 @@ public class MemberController {
         return memberService.list(search, active, page, size);
     }
 
+    @GetMapping("/summary")
+    @Operation(summary = "Count all, active and inactive members, and members who joined this month (Kigali time)")
+    public MemberSummaryResponse summary() {
+        return memberService.summary();
+    }
+
     @GetMapping("/{id}")
     @Operation(summary = "Get one member")
     public MemberResponse get(@PathVariable Long id) {
