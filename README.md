@@ -183,6 +183,7 @@ ERD: see `docs/erd.png`.
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
 | GET | `/api/grades` | JWT | Active grades `{id, code, name}`, sorted by code |
+| GET | `/api/lots/open?gradeId=` | JWT | Open lot of the grade `{id, code, gradeName, totalKg}`. `204` if none is open yet, `404` if the grade does not exist |
 | POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/deliveries?memberId=&lotId=&from=&to=&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional |
 | GET | `/api/deliveries/{id}` | JWT | One delivery |
@@ -289,6 +290,8 @@ Request body for `POST /api/deliveries`:
   new one is opened. Lot codes are the grade code, the year the lot was opened (Kigali
   time) and the grade's lot number in that year: `A-2026-01`, `A-2026-02`, `B-2026-01`.
   A grade can only have one open lot at a time (enforced by the database).
+  `GET /api/lots/open?gradeId=` shows it with the kilograms delivered so far, or returns
+  `204` when no lot is open yet (the next delivery of that grade opens one).
 - **Receipt code:** `RCT-` and 4 characters without look-alikes (no 0, O, 1, I or L), for
   example `RCT-7K2Q`.
 - **Same `clientUuid` again:** the existing delivery is returned with `200` and nothing new
