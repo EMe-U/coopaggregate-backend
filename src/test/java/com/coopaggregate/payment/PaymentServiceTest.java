@@ -17,6 +17,8 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.common.KigaliTime;
@@ -85,12 +87,26 @@ class PaymentServiceTest {
         verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
     }
 
-    @Test
-    void momoPaymentNeedsReference() {
-        BadRequestException e = assertThrows(BadRequestException.class,
-                () -> pay(100_000L, PaymentMethod.MOMO, " "));
+    @ParameterizedTest
+    @EnumSource(value = PaymentMethod.class, names = {"MOMO", "BANK"})
+    void momoAndBankPaymentsNeedReference(PaymentMethod method) {
+        BadRequestException e = assertThrows(BadRequestException.class, () -> pay(100_000L, method, " "));
 
-        assertEquals("A MoMo payment needs the transaction reference.", e.getMessage());
+        assertEquals("A " + method + " payment needs the transaction reference.", e.getMessage());
+        verify(paymentRepository, never()).save(any());
+    }
+
+    @Test
+    void cashPaymentNeedsNoReference() {
+        assertTrue(pay(100_000L, PaymentMethod.CASH, null).created());
+    }
+
+    @Test
+    void bankPaymentWithReferenceIsRecorded() {
+        RecordedPayment result = pay(100_000L, PaymentMethod.BANK, "BK-778812");
+
+        assertEquals(PaymentMethod.BANK, result.payment().method());
+        assertEquals("BK-778812", result.payment().reference());
     }
 
     @Test

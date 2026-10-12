@@ -2,5 +2,6 @@ package com.coopaggregate.payment;
 
 public enum PaymentMethod {
     CASH,
-    MOMO
+    MOMO,
+    BANK
 }

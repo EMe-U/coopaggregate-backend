@@ -56,8 +56,8 @@ public class PaymentService {
 
         String reference = request.reference() == null || request.reference().isBlank()
                 ? null : request.reference().trim();
-        if (request.method() == PaymentMethod.MOMO && reference == null) {
-            throw new BadRequestException("A MoMo payment needs the transaction reference.");
+        if (request.method() != PaymentMethod.CASH && reference == null) {
+            throw new BadRequestException("A " + request.method() + " payment needs the transaction reference.");
         }
         long owed = owedTo(member.getId());
         if (request.amountRwf() > owed) {

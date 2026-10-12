@@ -19,9 +19,10 @@ public record PaymentRequest(
         @Positive(message = "must be more than 0")
         Long amountRwf,
 
-        @NotNull(message = "is required (CASH or MOMO)")
+        @NotNull(message = "is required (CASH, MOMO or BANK)")
         PaymentMethod method,
 
+        // Required for MOMO and BANK; checked in the service because it depends on the method.
         @Size(max = 50, message = "must be at most 50 characters")
         String reference,
 
