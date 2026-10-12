@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.coopaggregate.auth.AuthService;
+import com.coopaggregate.common.PageResponse;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -32,6 +33,15 @@ public class PaymentController {
     public PaymentController(PaymentService paymentService, AuthService authService) {
         this.paymentService = paymentService;
         this.authService = authService;
+    }
+
+    @GetMapping
+    @Operation(summary = "List payments, newest first (max 100 per page)")
+    public PageResponse<PaymentResponse> list(@RequestParam(required = false) Long memberId,
+                                              @RequestParam(required = false) PaymentMethod method,
+                                              @RequestParam(defaultValue = "0") int page,
+                                              @RequestParam(defaultValue = "20") int size) {
+        return paymentService.list(memberId, method, page, size);
     }
 
     @GetMapping("/owed")

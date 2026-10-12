@@ -1,5 +1,6 @@
 package com.coopaggregate.payment;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -7,10 +8,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.common.KigaliTime;
+import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.RwandanPhoneNumber;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.ledger.LedgerEntryType;
@@ -19,8 +24,12 @@ import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 
+import jakarta.persistence.criteria.Predicate;
+
 @Service
 public class PaymentService {
+
+    private static final int MAX_PAGE_SIZE = 100;
 
     private final ProducePaymentRepository paymentRepository;
     private final MemberRepository memberRepository;
@@ -70,6 +79,14 @@ public class PaymentService {
         return new RecordedPayment(PaymentResponse.from(saved), true);
     }
 
+    @Transactional(readOnly = true)
+    public PageResponse<PaymentResponse> list(Long memberId, PaymentMethod method, int page, int size) {
+        PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
+                Sort.by(Sort.Direction.DESC, "paymentDate", "id"));
+        return PageResponse.from(paymentRepository.findAll(matching(memberId, method), pageRequest)
+                .map(PaymentResponse::from));
+    }
+
     public long owedTo(Long memberId) {
         return paymentRepository.netSharesOf(memberId) - paymentRepository.paidTo(memberId);
     }
@@ -108,5 +125,18 @@ public class PaymentService {
         return member.getFullName().toLowerCase(Locale.ROOT).contains(term)
                 || member.getMemberCode().toLowerCase(Locale.ROOT).contains(term)
                 || member.getPhone().contains(phoneTerm);
+    }
+
+    private static Specification<ProducePayment> matching(Long memberId, PaymentMethod method) {
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            if (memberId != null) {
+                predicates.add(cb.equal(root.get("member").get("id"), memberId));
+            }
+            if (method != null) {
+                predicates.add(cb.equal(root.get("method"), method));
+            }
+            return cb.and(predicates.toArray(Predicate[]::new));
+        };
     }
 }
