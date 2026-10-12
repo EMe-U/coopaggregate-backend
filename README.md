@@ -308,8 +308,9 @@ Request body for `POST /api/deliveries`:
 - **Same `clientUuid` again:** the existing delivery is returned with `200` and nothing new
   is saved, even if the member has been deactivated since.
 - **Ledger:** each new delivery adds a `DELIVERY` ledger entry in the same transaction,
-  with the kilograms, the deduction as the amount, and the receipt code and member code
-  in the reason.
+  with the kilograms, the deduction as the amount, and the receipt code in the reason.
+  The member is linked through the delivery, not written into the reason, because ledger
+  entries can never change.
 - `from` and `to` filter by delivery day in Kigali time (`yyyy-MM-dd`, both inclusive).
 - Deliveries cannot be edited or deleted. A mistake is corrected with a ledger reversal.
 

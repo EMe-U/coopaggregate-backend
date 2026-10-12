@@ -80,9 +80,10 @@ public class DeliveryService {
         delivery.setReceiptCode(ShortCodes.unique("RCT-", deliveryRepository::existsByReceiptCode));
         Delivery saved = deliveryRepository.save(delivery);
 
+        // The reason is hashed and can never change, so it holds only the receipt code. The member is found
+        // through the delivery; a member number in the text would go stale if numbers were ever renamed.
         ledgerService.record(LedgerEntryType.DELIVERY, "DELIVERY", saved.getId(),
-                saved.getQuantityKg(), saved.getDeductionAmount(),
-                "Delivery " + saved.getReceiptCode() + " from " + member.getMemberCode(), manager);
+                saved.getQuantityKg(), saved.getDeductionAmount(), "Delivery " + saved.getReceiptCode(), manager);
         return new RecordedDelivery(DeliveryResponse.from(saved), true);
     }
 

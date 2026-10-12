@@ -199,7 +199,7 @@ class DeliveryServiceTest {
 
         assertTrue(result.created());
         verify(ledgerService).record(LedgerEntryType.DELIVERY, "DELIVERY", 100L, new BigDecimal("120.50"), 603L,
-                "Delivery " + result.delivery().receiptCode() + " from MEM-0005", manager);
+                "Delivery " + result.delivery().receiptCode(), manager);
     }
 
     @Test
