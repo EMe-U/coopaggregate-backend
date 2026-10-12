@@ -15,8 +15,10 @@ public interface MemberRepository extends JpaRepository<Member, Long>, JpaSpecif
 
     Optional<Member> findByNationalId(String nationalId);
 
-    @Query(value = "SELECT nextval('member_code_seq')", nativeQuery = true)
-    long nextMemberCodeNumber();
+    // The number at the end of the code, whatever the prefix (M-0007 and MEM-0007 both give 7).
+    @Query(value = "SELECT COALESCE(MAX(CAST(SUBSTRING(member_code FROM '[0-9]+$') AS INTEGER)), 0) FROM member",
+            nativeQuery = true)
+    int highestMemberNumber();
 
     long countByStatus(MemberStatus status);
 

@@ -72,7 +72,7 @@ class DeliveryServiceTest {
 
         member = new Member();
         ReflectionTestUtils.setField(member, "id", 5L);
-        member.setMemberCode("MEM-0005");
+        member.setMemberCode("M-0005");
         member.setFullName("Uwimana Claudine");
         when(memberRepository.findById(5L)).thenReturn(Optional.of(member));
 
@@ -145,7 +145,7 @@ class DeliveryServiceTest {
 
         BadRequestException e = assertThrows(BadRequestException.class, () -> record("100"));
 
-        assertEquals("Member MEM-0005 is inactive. Activate the member before recording a delivery.", e.getMessage());
+        assertEquals("Member M-0005 is inactive. Activate the member before recording a delivery.", e.getMessage());
         verify(deliveryRepository, never()).save(any());
         verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
     }

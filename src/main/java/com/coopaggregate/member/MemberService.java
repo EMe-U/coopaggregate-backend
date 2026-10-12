@@ -65,8 +65,9 @@ public class MemberService {
         Member member = new Member();
         applyDetails(member, request);
         member.setJoinDate(request.joinDate() != null ? request.joinDate() : KigaliTime.today());
-        // Taken after the duplicate checks so a rejected request does not use up a code.
-        member.setMemberCode(String.format("MEM-%04d", memberRepository.nextMemberCodeNumber()));
+        // Continues from the highest existing number. If two members were created at the same moment and got
+        // the same code, the unique member_code would reject the second one with 409.
+        member.setMemberCode(String.format("M-%04d", memberRepository.highestMemberNumber() + 1));
         return MemberResponse.from(memberRepository.save(member));
     }
 

@@ -113,8 +113,8 @@ class LotServiceTest {
         when(lotRepository.findQuantities(anyCollection())).thenReturn(List.of(new LotQuantities(3L,
                 new BigDecimal("1000.00"), new BigDecimal("25.50"), new BigDecimal("400.00"), 120000L, 2L)));
         List<LotMemberResponse> members = List.of(
-                new LotMemberResponse(5L, "Uwimana Claudine", "MEM-0005", new BigDecimal("600.00")),
-                new LotMemberResponse(6L, "Habimana Eric", "MEM-0006", new BigDecimal("400.00")));
+                new LotMemberResponse(5L, "Uwimana Claudine", "M-0005", new BigDecimal("600.00")),
+                new LotMemberResponse(6L, "Habimana Eric", "M-0006", new BigDecimal("400.00")));
         when(lotRepository.findMembers(3L)).thenReturn(members);
 
         LotDetailResponse detail = service.get(3L);

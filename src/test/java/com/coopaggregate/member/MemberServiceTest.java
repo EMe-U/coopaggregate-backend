@@ -42,7 +42,7 @@ class MemberServiceTest {
         repository = mock(MemberRepository.class);
         service = new MemberService(repository);
         when(repository.save(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(repository.nextMemberCodeNumber()).thenReturn(7L);
+        when(repository.highestMemberNumber()).thenReturn(7);
         when(repository.findByPhone(any())).thenReturn(Optional.empty());
         when(repository.findByNationalId(any())).thenReturn(Optional.empty());
     }
@@ -52,7 +52,7 @@ class MemberServiceTest {
         MemberResponse response = service.create(new MemberRequest(
                 "  Uwimana Claudine ", "0788123456", "1199880012345678", "Busogo", LocalDate.of(2024, 3, 1), "en"));
 
-        assertEquals("MEM-0007", response.memberCode());
+        assertEquals("M-0008", response.memberCode());
         assertEquals("Uwimana Claudine", response.fullName());
         assertEquals("+250788123456", response.phone());
         assertEquals("1199880012345678", response.nationalId());
@@ -60,6 +60,13 @@ class MemberServiceTest {
         assertEquals(LocalDate.of(2024, 3, 1), response.joinDate());
         assertEquals(MemberStatus.ACTIVE, response.status());
         assertEquals("en", response.preferredLanguage());
+    }
+
+    @Test
+    void firstMemberGetsNumberOne() {
+        when(repository.highestMemberNumber()).thenReturn(0);
+
+        assertEquals("M-0001", service.create(request("0788123456", null)).memberCode());
     }
 
     @ParameterizedTest
@@ -82,43 +89,43 @@ class MemberServiceTest {
 
     @Test
     void createWithDuplicatePhoneIsRejected() {
-        when(repository.findByPhone("+250788123456")).thenReturn(Optional.of(existingMember(3L, "MEM-0003")));
+        when(repository.findByPhone("+250788123456")).thenReturn(Optional.of(existingMember(3L, "M-0003")));
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> service.create(request("0788123456", null)));
 
-        assertEquals("Phone number +250788123456 is already used by member MEM-0003.", e.getMessage());
-        verify(repository, never()).nextMemberCodeNumber();
+        assertEquals("Phone number +250788123456 is already used by member M-0003.", e.getMessage());
+        verify(repository, never()).highestMemberNumber();
         verify(repository, never()).save(any());
     }
 
     @Test
     void createWithDuplicateNationalIdIsRejected() {
-        when(repository.findByNationalId("1199880012345678")).thenReturn(Optional.of(existingMember(4L, "MEM-0004")));
+        when(repository.findByNationalId("1199880012345678")).thenReturn(Optional.of(existingMember(4L, "M-0004")));
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> service.create(request("0788123456", "1199880012345678")));
 
-        assertEquals("National ID 1199880012345678 is already used by member MEM-0004.", e.getMessage());
+        assertEquals("National ID 1199880012345678 is already used by member M-0004.", e.getMessage());
         verify(repository, never()).save(any());
     }
 
     @Test
     void updateChangesDetailsButKeepsCodeAndJoinDate() {
-        Member member = existingMember(5L, "MEM-0005");
+        Member member = existingMember(5L, "M-0005");
         member.setJoinDate(LocalDate.of(2023, 1, 10));
         when(repository.findById(5L)).thenReturn(Optional.of(member));
 
         MemberResponse response = service.update(5L, request("+250733000111", null));
 
-        assertEquals("MEM-0005", response.memberCode());
+        assertEquals("M-0005", response.memberCode());
         assertEquals("+250733000111", response.phone());
         assertEquals(LocalDate.of(2023, 1, 10), response.joinDate());
     }
 
     @Test
     void updateKeepingOwnPhoneIsAllowed() {
-        Member member = existingMember(5L, "MEM-0005");
+        Member member = existingMember(5L, "M-0005");
         when(repository.findById(5L)).thenReturn(Optional.of(member));
         when(repository.findByPhone("+250788123456")).thenReturn(Optional.of(member));
 
@@ -129,8 +136,8 @@ class MemberServiceTest {
 
     @Test
     void updateWithAnotherMembersPhoneIsRejected() {
-        when(repository.findById(5L)).thenReturn(Optional.of(existingMember(5L, "MEM-0005")));
-        when(repository.findByPhone("+250788123456")).thenReturn(Optional.of(existingMember(6L, "MEM-0006")));
+        when(repository.findById(5L)).thenReturn(Optional.of(existingMember(5L, "M-0005")));
+        when(repository.findByPhone("+250788123456")).thenReturn(Optional.of(existingMember(6L, "M-0006")));
 
         assertThrows(IllegalStateException.class, () -> service.update(5L, request("0788123456", null)));
     }
@@ -153,7 +160,7 @@ class MemberServiceTest {
 
     @Test
     void deactivateAndActivateChangeStatus() {
-        Member member = existingMember(5L, "MEM-0005");
+        Member member = existingMember(5L, "M-0005");
         when(repository.findById(5L)).thenReturn(Optional.of(member));
 
         assertEquals(MemberStatus.INACTIVE, service.setActive(5L, false).status());

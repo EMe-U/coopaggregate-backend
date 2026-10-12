@@ -58,7 +58,7 @@ public class MemberController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Register a member. The member code (MEM-0001, ...) is generated")
+    @Operation(summary = "Register a member. The member code (M-0001, ...) is generated")
     public MemberResponse create(@Valid @RequestBody MemberRequest request) {
         return memberService.create(request);
     }

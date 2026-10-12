@@ -122,7 +122,7 @@ class DeliveryControllerTest {
     }
 
     private static DeliveryResponse response() {
-        return new DeliveryResponse(100L, "RCT-7K2Q", 5L, "Uwimana Claudine", "MEM-0005", 1L, "Big",
+        return new DeliveryResponse(100L, "RCT-7K2Q", 5L, "Uwimana Claudine", "M-0005", 1L, "Big",
                 3L, "A-2026-01", new BigDecimal("120.50"), 603L, Instant.parse("2026-10-09T07:00:00Z"));
     }
 }
