@@ -1,5 +1,8 @@
 package com.coopaggregate.payment;
 
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -95,30 +98,51 @@ public class PaymentService {
         return paymentRepository.netSharesOf(memberId) - paymentRepository.paidTo(memberId);
     }
 
-    // Owed = shares minus deductions minus payments. Members with nothing owed are left out.
     @Transactional(readOnly = true)
-    public OwedMembersResponse owedMembers(String search) {
-        Map<Long, Long> owedByMember = new HashMap<>();
-        for (MemberAmount netShare : paymentRepository.findNetSharesByMember()) {
-            owedByMember.merge(netShare.memberId(), netShare.amountRwf(), Long::sum);
-        }
-        for (MemberAmount paid : paymentRepository.findPaymentsByMember()) {
-            owedByMember.merge(paid.memberId(), -paid.amountRwf(), Long::sum);
-        }
-        owedByMember.values().removeIf(owed -> owed <= 0);
-
-        List<OwedMembersResponse.OwedMember> members = memberRepository.findAllById(owedByMember.keySet()).stream()
-                .filter(member -> matches(member, search))
-                .map(member -> new OwedMembersResponse.OwedMember(member.getId(), member.getFullName(),
-                        member.getMemberCode(), member.getPhone(), owedByMember.get(member.getId())))
-                .sorted(Comparator.comparingLong(OwedMembersResponse.OwedMember::owedRwf).reversed()
-                        .thenComparing(OwedMembersResponse.OwedMember::memberName))
-                .toList();
-        long totalOwed = members.stream().mapToLong(OwedMembersResponse.OwedMember::owedRwf).sum();
-        return new OwedMembersResponse(members, totalOwed);
+    public BalancesResponse balances(String search, BalanceStatus status) {
+        return balances(search, status, KigaliTime.today());
     }
 
-    private static boolean matches(Member member, String search) {
+    // Takes today's date as a parameter so tests can use a fixed week. The two totals cover all members;
+    // search and status only filter the list.
+    BalancesResponse balances(String search, BalanceStatus status, LocalDate today) {
+        Map<Long, Long> paidByMember = new HashMap<>();
+        for (MemberAmount paid : paymentRepository.findPaymentsByMember()) {
+            paidByMember.put(paid.memberId(), paid.amountRwf());
+        }
+        Map<Long, MemberShareTotals> sharesByMember = new HashMap<>();
+        for (MemberShareTotals shares : paymentRepository.findShareTotalsByMember()) {
+            sharesByMember.put(shares.memberId(), shares);
+        }
+
+        List<BalancesResponse.MemberBalance> all = memberRepository.findAllById(sharesByMember.keySet()).stream()
+                .map(member -> balanceOf(member, sharesByMember.get(member.getId()),
+                        paidByMember.getOrDefault(member.getId(), 0L)))
+                .sorted(Comparator.comparingLong(BalancesResponse.MemberBalance::balanceRwf).reversed()
+                        .thenComparing(BalancesResponse.MemberBalance::memberName))
+                .toList();
+        long totalOwed = all.stream().mapToLong(BalancesResponse.MemberBalance::balanceRwf).sum();
+
+        LocalDate monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        long paidThisWeek = paymentRepository.paidBetween(monday, monday.plusDays(6));
+
+        List<BalancesResponse.MemberBalance> members = all.stream()
+                .filter(balance -> status == null || balance.status() == status)
+                .filter(balance -> matches(balance, search))
+                .toList();
+        return new BalancesResponse(totalOwed, paidThisWeek, members);
+    }
+
+    private static BalancesResponse.MemberBalance balanceOf(Member member, MemberShareTotals shares, long paid) {
+        long balance = shares.shareRwf() - shares.deductionRwf() - paid;
+        BalanceStatus status = balance == 0 ? BalanceStatus.PAID
+                : paid == 0 ? BalanceStatus.UNPAID
+                : BalanceStatus.PART_PAID;
+        return new BalancesResponse.MemberBalance(member.getId(), member.getFullName(), member.getMemberCode(),
+                member.getPhone(), shares.shareRwf(), shares.deductionRwf(), paid, balance, status);
+    }
+
+    private static boolean matches(BalancesResponse.MemberBalance member, String search) {
         if (search == null || search.isBlank()) {
             return true;
         }
@@ -126,9 +150,9 @@ public class PaymentService {
         String term = trimmed.toLowerCase(Locale.ROOT);
         // Phones are stored as +2507XXXXXXXX, so a search for 07XXXXXXXX must be converted first.
         String phoneTerm = RwandanPhoneNumber.isValid(trimmed) ? RwandanPhoneNumber.normalize(trimmed) : term;
-        return member.getFullName().toLowerCase(Locale.ROOT).contains(term)
-                || member.getMemberCode().toLowerCase(Locale.ROOT).contains(term)
-                || member.getPhone().contains(phoneTerm);
+        return member.memberName().toLowerCase(Locale.ROOT).contains(term)
+                || member.memberNumber().toLowerCase(Locale.ROOT).contains(term)
+                || member.phone().contains(phoneTerm);
     }
 
     private static Specification<ProducePayment> matching(Long memberId, PaymentMethod method) {

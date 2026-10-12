@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -157,38 +158,72 @@ class PaymentServiceTest {
     }
 
     @Test
-    void owedListKeepsOnlyMembersStillOwedLargestFirst() {
-        Member bosco = member(2L, "Bosco Habimana", "M-0002", "+250788000002");
-        Member carine = member(3L, "Carine Mukamana", "M-0003", "+250788000003");
-        when(paymentRepository.findNetSharesByMember()).thenReturn(List.of(
-                new MemberAmount(1L, 1_451_000L), new MemberAmount(2L, 870_600L), new MemberAmount(3L, 580_400L)));
-        when(paymentRepository.findPaymentsByMember()).thenReturn(List.of(
-                new MemberAmount(1L, 1_000_000L), new MemberAmount(3L, 580_400L)));
-        when(memberRepository.findAllById(any())).thenReturn(List.of(alice, bosco));
+    void balancesShowStatusPerMemberLargestBalanceFirst() {
+        givenAliceBoscoCarine();
 
-        OwedMembersResponse owed = service.owedMembers(null);
+        BalancesResponse balances = service.balances(null, null, LocalDate.of(2026, 10, 14));
 
         assertEquals(List.of(
-                new OwedMembersResponse.OwedMember(2L, "Bosco Habimana", "M-0002", "+250788000002", 870_600L),
-                new OwedMembersResponse.OwedMember(1L, "Alice Uwase", "M-0001", "+250788000001", 451_000L)),
-                owed.members());
-        assertEquals(1_321_600L, owed.totalOwedRwf());
-        verify(memberRepository).findAllById(Set.of(1L, 2L));
-        assertFalse(owed.members().stream().anyMatch(member -> member.memberId().equals(carine.getId())));
+                new BalancesResponse.MemberBalance(2L, "Bosco Habimana", "M-0002", "+250788000002",
+                        885_600L, 15_000L, 0L, 870_600L, BalanceStatus.UNPAID),
+                new BalancesResponse.MemberBalance(1L, "Alice Uwase", "M-0001", "+250788000001",
+                        1_476_000L, 25_000L, 1_000_000L, 451_000L, BalanceStatus.PART_PAID),
+                new BalancesResponse.MemberBalance(3L, "Carine Mukamana", "M-0003", "+250788000003",
+                        590_400L, 10_000L, 580_400L, 0L, BalanceStatus.PAID)), balances.members());
+        assertEquals(1_321_600L, balances.totalOwedRwf());
     }
 
     @Test
-    void owedListCanBeSearchedByPhone() {
+    void onlyMembersWithASharedLotAreListed() {
+        givenAliceBoscoCarine();
+
+        service.balances(null, null, LocalDate.of(2026, 10, 14));
+
+        verify(memberRepository).findAllById(Set.of(1L, 2L, 3L));
+    }
+
+    @Test
+    void paidThisWeekRunsFromMondayToSundayInKigali() {
+        givenAliceBoscoCarine();
+        when(paymentRepository.paidBetween(LocalDate.of(2026, 10, 12), LocalDate.of(2026, 10, 18)))
+                .thenReturn(200_000L);
+
+        assertEquals(200_000L, service.balances(null, null, LocalDate.of(2026, 10, 14)).paidThisWeekRwf());
+        assertEquals(200_000L, service.balances(null, null, LocalDate.of(2026, 10, 12)).paidThisWeekRwf());
+        assertEquals(200_000L, service.balances(null, null, LocalDate.of(2026, 10, 18)).paidThisWeekRwf());
+    }
+
+    @Test
+    void statusFilterKeepsTotalsForAllMembers() {
+        givenAliceBoscoCarine();
+
+        BalancesResponse paid = service.balances(null, BalanceStatus.PAID, LocalDate.of(2026, 10, 14));
+
+        assertEquals(1, paid.members().size());
+        assertEquals("M-0003", paid.members().get(0).memberNumber());
+        assertEquals(1_321_600L, paid.totalOwedRwf());
+    }
+
+    @Test
+    void balancesCanBeSearchedByPhone() {
+        givenAliceBoscoCarine();
+
+        BalancesResponse balances = service.balances("0788000002", null, LocalDate.of(2026, 10, 14));
+
+        assertEquals(1, balances.members().size());
+        assertEquals("Bosco Habimana", balances.members().get(0).memberName());
+    }
+
+    private void givenAliceBoscoCarine() {
         Member bosco = member(2L, "Bosco Habimana", "M-0002", "+250788000002");
-        when(paymentRepository.findNetSharesByMember()).thenReturn(List.of(
-                new MemberAmount(1L, 1_451_000L), new MemberAmount(2L, 870_600L)));
-        when(paymentRepository.findPaymentsByMember()).thenReturn(List.of());
-        when(memberRepository.findAllById(any())).thenReturn(List.of(alice, bosco));
-
-        OwedMembersResponse owed = service.owedMembers("0788000002");
-
-        assertEquals(1, owed.members().size());
-        assertEquals(870_600L, owed.totalOwedRwf());
+        Member carine = member(3L, "Carine Mukamana", "M-0003", "+250788000003");
+        when(paymentRepository.findShareTotalsByMember()).thenReturn(List.of(
+                new MemberShareTotals(1L, 1_476_000L, 25_000L),
+                new MemberShareTotals(2L, 885_600L, 15_000L),
+                new MemberShareTotals(3L, 590_400L, 10_000L)));
+        when(paymentRepository.findPaymentsByMember()).thenReturn(List.of(
+                new MemberAmount(1L, 1_000_000L), new MemberAmount(3L, 580_400L)));
+        when(memberRepository.findAllById(any())).thenReturn(List.of(alice, bosco, carine));
     }
 
     private RecordedPayment pay(long amount, PaymentMethod method, String reference) {

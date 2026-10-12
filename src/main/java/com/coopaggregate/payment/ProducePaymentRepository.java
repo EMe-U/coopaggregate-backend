@@ -1,5 +1,6 @@
 package com.coopaggregate.payment;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,13 +20,14 @@ public interface ProducePaymentRepository extends JpaRepository<ProducePayment, 
     @EntityGraph(attributePaths = "member")
     Page<ProducePayment> findAll(Specification<ProducePayment> spec, Pageable pageable);
 
-    // Share minus deduction per member. Only shared lots have lot_share rows.
+    // Only shared lots have lot_share rows, so these are the members with at least one shared lot.
     @Query("""
-            SELECT new com.coopaggregate.payment.MemberAmount(ls.member.id, SUM(ls.shareAmount - ls.deductionAmount))
+            SELECT new com.coopaggregate.payment.MemberShareTotals(
+                ls.member.id, SUM(ls.shareAmount), SUM(ls.deductionAmount))
             FROM LotShare ls
             GROUP BY ls.member.id
             """)
-    List<MemberAmount> findNetSharesByMember();
+    List<MemberShareTotals> findShareTotalsByMember();
 
     @Query("""
             SELECT new com.coopaggregate.payment.MemberAmount(p.member.id, SUM(p.amount))
@@ -48,4 +50,7 @@ public interface ProducePaymentRepository extends JpaRepository<ProducePayment, 
 
     @Query("SELECT COALESCE(SUM(p.amount), 0) FROM ProducePayment p WHERE p.member.id = :memberId")
     long paidTo(Long memberId);
+
+    @Query("SELECT COALESCE(SUM(p.amount), 0) FROM ProducePayment p WHERE p.paymentDate BETWEEN :from AND :to")
+    long paidBetween(LocalDate from, LocalDate to);
 }

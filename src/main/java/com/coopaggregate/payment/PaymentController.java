@@ -44,12 +44,14 @@ public class PaymentController {
         return paymentService.list(memberId, method, page, size);
     }
 
-    @GetMapping("/owed")
-    @Operation(summary = "Members who are still owed money from shared lots, largest amount first")
-    public OwedMembersResponse owed(
+    @GetMapping("/balances")
+    @Operation(summary = "Share, deductions, payments and balance of every member with a shared lot, largest "
+            + "balance first. totalOwedRwf and paidThisWeekRwf (Monday to Sunday, Kigali time) cover all members")
+    public BalancesResponse balances(
             @Parameter(description = "Part of the name, member number or phone number (case-insensitive)")
-            @RequestParam(required = false) String search) {
-        return paymentService.owedMembers(search);
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) BalanceStatus status) {
+        return paymentService.balances(search, status);
     }
 
     @PostMapping
