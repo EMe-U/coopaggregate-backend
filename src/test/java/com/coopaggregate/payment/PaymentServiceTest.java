@@ -52,6 +52,7 @@ class PaymentServiceTest {
         // Shares minus deductions 1,451,000; already paid 1,000,000; owed 451,000.
         when(paymentRepository.netSharesOf(1L)).thenReturn(1_451_000L);
         when(paymentRepository.paidTo(1L)).thenReturn(1_000_000L);
+        when(paymentRepository.highestPaymentNumber()).thenReturn(4);
         when(paymentRepository.save(any(ProducePayment.class))).thenAnswer(invocation -> {
             ProducePayment payment = invocation.getArgument(0);
             ReflectionTestUtils.setField(payment, "id", 9L);
@@ -84,6 +85,7 @@ class PaymentServiceTest {
 
         assertEquals("Member M-0001 is owed 451000 RWF. The payment cannot be more than that.", e.getMessage());
         verify(paymentRepository, never()).save(any());
+        verify(paymentRepository, never()).highestPaymentNumber();
         verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
     }
 
@@ -94,6 +96,18 @@ class PaymentServiceTest {
 
         assertEquals("A " + method + " payment needs the transaction reference.", e.getMessage());
         verify(paymentRepository, never()).save(any());
+    }
+
+    @Test
+    void paymentGetsNextPayCode() {
+        assertEquals("PAY-0005", pay(100_000L, PaymentMethod.CASH, null).payment().paymentCode());
+    }
+
+    @Test
+    void firstPaymentGetsPayCodeOne() {
+        when(paymentRepository.highestPaymentNumber()).thenReturn(0);
+
+        assertEquals("PAY-0001", pay(100_000L, PaymentMethod.CASH, null).payment().paymentCode());
     }
 
     @Test
@@ -139,7 +153,7 @@ class PaymentServiceTest {
         pay(100_000L, PaymentMethod.MOMO, " MP2610120001 ");
 
         verify(ledgerService).record(LedgerEntryType.PAYMENT, "PAYMENT", 9L, null, 100_000L,
-                "Payment by MOMO MP2610120001", manager);
+                "Payment PAY-0005 by MOMO MP2610120001", manager);
     }
 
     @Test

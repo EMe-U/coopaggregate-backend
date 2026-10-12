@@ -25,6 +25,7 @@ public record StatementResponse(
             Long shareRwf) {
     }
 
-    public record PaymentLine(LocalDate paidAt, long amountRwf, PaymentMethod method, String reference) {
+    public record PaymentLine(String paymentCode, LocalDate paidAt, long amountRwf, PaymentMethod method,
+                              String reference) {
     }
 }

@@ -36,6 +36,10 @@ public interface ProducePaymentRepository extends JpaRepository<ProducePayment, 
 
     Optional<ProducePayment> findByClientUuid(UUID clientUuid);
 
+    @Query(value = "SELECT COALESCE(MAX(CAST(SUBSTRING(payment_code FROM '[0-9]+$') AS INTEGER)), 0) "
+            + "FROM produce_payment", nativeQuery = true)
+    int highestPaymentNumber();
+
     List<ProducePayment> findByMemberIdOrderByPaymentDateDescIdDesc(Long memberId);
 
     @Query("SELECT COALESCE(SUM(ls.shareAmount - ls.deductionAmount), 0) FROM LotShare ls "

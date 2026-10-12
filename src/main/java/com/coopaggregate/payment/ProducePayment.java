@@ -28,6 +28,8 @@ public class ProducePayment {
 
     private UUID clientUuid;
 
+    private String paymentCode;
+
     @ManyToOne(fetch = FetchType.LAZY)
     private Member member;
 
@@ -57,6 +59,14 @@ public class ProducePayment {
 
     public void setClientUuid(UUID clientUuid) {
         this.clientUuid = clientUuid;
+    }
+
+    public String getPaymentCode() {
+        return paymentCode;
+    }
+
+    public void setPaymentCode(String paymentCode) {
+        this.paymentCode = paymentCode;
     }
 
     public Member getMember() {

@@ -53,8 +53,9 @@ public class StatementService {
                 .toList();
         List<StatementResponse.PaymentLine> payments =
                 paymentRepository.findByMemberIdOrderByPaymentDateDescIdDesc(memberId).stream()
-                        .map(payment -> new StatementResponse.PaymentLine(payment.getPaymentDate(),
-                                payment.getAmount(), payment.getMethod(), payment.getReferenceNo()))
+                        .map(payment -> new StatementResponse.PaymentLine(payment.getPaymentCode(),
+                                payment.getPaymentDate(), payment.getAmount(), payment.getMethod(),
+                                payment.getReferenceNo()))
                         .toList();
 
         long grossShare = sharesByLot.values().stream().mapToLong(LotShare::getShareAmount).sum();

@@ -62,8 +62,8 @@ class StatementServiceTest {
                 new LotQuantities(5L, new BigDecimal("1200.00"), null, null, null, null),
                 new LotQuantities(3L, new BigDecimal("10000.00"), null, new BigDecimal("10000.00"), 2_952_000L, 3L)));
         when(paymentRepository.findByMemberIdOrderByPaymentDateDescIdDesc(1L)).thenReturn(List.of(
-                payment(LocalDate.of(2026, 10, 12), 200_000L, PaymentMethod.MOMO, "MP2610120001"),
-                payment(LocalDate.of(2026, 10, 10), 1_000_000L, PaymentMethod.CASH, null)));
+                payment("PAY-0002", LocalDate.of(2026, 10, 12), 200_000L, PaymentMethod.MOMO, "MP2610120001"),
+                payment("PAY-0001", LocalDate.of(2026, 10, 10), 1_000_000L, PaymentMethod.CASH, null)));
 
         StatementResponse statement = service.statement(1L);
 
@@ -81,8 +81,8 @@ class StatementServiceTest {
 
         assertEquals(new StatementResponse.LotShareLine(3L, "A-2026-01", LotStatus.SHARED, new BigDecimal("5000.00"),
                 new BigDecimal("10000.00"), new BigDecimal("50.00"), 1_476_000L), statement.lotShares().get(1));
-        assertEquals(new StatementResponse.PaymentLine(LocalDate.of(2026, 10, 12), 200_000L, PaymentMethod.MOMO,
-                "MP2610120001"), statement.payments().get(0));
+        assertEquals(new StatementResponse.PaymentLine("PAY-0002", LocalDate.of(2026, 10, 12), 200_000L,
+                PaymentMethod.MOMO, "MP2610120001"), statement.payments().get(0));
     }
 
     @Test
@@ -104,8 +104,10 @@ class StatementServiceTest {
         assertEquals("Member 99 does not exist.", e.getMessage());
     }
 
-    private static ProducePayment payment(LocalDate date, long amount, PaymentMethod method, String reference) {
+    private static ProducePayment payment(String code, LocalDate date, long amount, PaymentMethod method,
+                                          String reference) {
         ProducePayment payment = new ProducePayment();
+        payment.setPaymentCode(code);
         payment.setPaymentDate(date);
         payment.setAmount(amount);
         payment.setMethod(method);

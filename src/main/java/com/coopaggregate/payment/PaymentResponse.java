@@ -7,6 +7,7 @@ import com.coopaggregate.member.Member;
 
 public record PaymentResponse(
         Long id,
+        String paymentCode,
         Long memberId,
         String memberName,
         String memberNumber,
@@ -20,6 +21,7 @@ public record PaymentResponse(
         Member member = payment.getMember();
         return new PaymentResponse(
                 payment.getId(),
+                payment.getPaymentCode(),
                 member.getId(),
                 member.getFullName(),
                 member.getMemberCode(),

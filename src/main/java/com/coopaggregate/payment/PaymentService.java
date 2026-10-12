@@ -67,6 +67,9 @@ public class PaymentService {
 
         ProducePayment payment = new ProducePayment();
         payment.setClientUuid(request.clientUuid());
+        // Continues from the highest existing number. Two payments saved at the same moment could get the
+        // same code; the unique payment_code would then reject the second one with 409.
+        payment.setPaymentCode(String.format("PAY-%04d", paymentRepository.highestPaymentNumber() + 1));
         payment.setMember(member);
         payment.setAmount(request.amountRwf());
         payment.setMethod(request.method());
@@ -75,7 +78,8 @@ public class PaymentService {
         ProducePayment saved = paymentRepository.save(payment);
 
         ledgerService.record(LedgerEntryType.PAYMENT, "PAYMENT", saved.getId(), null, saved.getAmount(),
-                "Payment by " + saved.getMethod() + (reference != null ? " " + reference : ""), manager);
+                "Payment " + saved.getPaymentCode() + " by " + saved.getMethod()
+                        + (reference != null ? " " + reference : ""), manager);
         return new RecordedPayment(PaymentResponse.from(saved), true);
     }
 
