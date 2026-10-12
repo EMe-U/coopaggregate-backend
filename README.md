@@ -195,6 +195,12 @@ ERD: see `docs/erd.png`.
 | POST | `/api/sales` | JWT | Records a sale from a closed lot. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
+| GET | `/api/lots/{id}/share-preview` | JWT | How a sold lot's money would be shared, per member. Saves nothing |
+| POST | `/api/lots/{id}/share` | JWT | Saves the shares and marks the lot `SHARED`. Only once per lot |
+| GET | `/api/payments/owed?search=` | JWT | Members still owed money, largest first, with `totalOwedRwf` |
+| POST | `/api/payments` | JWT | Pays a member. `201` when new, `200` when the same `clientUuid` was already recorded |
+| GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page) |
+| GET | `/api/members/{id}/statement` | JWT | A member's shares, deductions, payments, amount owed and lots waiting for sharing |
 | POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/deliveries?memberId=&lotId=&from=&to=&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional |
 | GET | `/api/deliveries/{id}` | JWT | One delivery |
@@ -376,6 +382,59 @@ Request body for `POST /api/sales`:
   `salesAmountThisMonth` (RWF), `soldKgThisMonth`, `buyersThisMonth` (different buyers) and
   `averagePricePerKg` (amount / kg, 2 decimals, `0` when nothing was sold).
 
+### Sharing
+
+When a lot is `SOLD`, its sale money is shared between the members who delivered to it.
+`GET /api/lots/{id}/share-preview` shows the result without saving; `POST /api/lots/{id}/share`
+saves it and sets the lot to `SHARED`.
+
+- Only a `SOLD` lot can be shared (otherwise `400`). A lot that is already `SHARED` returns
+  `409`.
+- `shareRwf = memberKg / deliveredKg x saleAmountRwf`, rounded to whole RWF. The rounding
+  remainder goes to the member with the most kg, so the shares add up to exactly the sale
+  amount. Shares use delivered kg, so lost kg are carried by everyone in proportion.
+- `deductionRwf` is the deduction already recorded on the member's deliveries to that lot
+  (kg x 5 RWF, the rate from Settings). `netRwf = shareRwf - deductionRwf`.
+- Example: a lot of 10,000 kg sold for 2,952,000 RWF. Members with 5,000 / 3,000 / 2,000 kg
+  get 1,476,000 / 885,600 / 590,400 RWF.
+- Each member's share adds a `SHARE` ledger entry with the kilograms and the gross share.
+
+### Payments
+
+What a member is owed = their shares - their deductions - what they were already paid,
+counting only shared lots.
+
+Request body for `POST /api/payments`:
+
+```json
+{
+  "clientUuid": "3f2b7c1e-9a4d-4e8b-b1c2-5d6e7f8a9b0c",
+  "memberId": 1,
+  "amountRwf": 451000,
+  "method": "MOMO",
+  "reference": "MP2610120001",
+  "paidAt": "2026-10-12"
+}
+```
+
+- `method` is `CASH` or `MOMO`. A `MOMO` payment needs `reference` (otherwise `400`).
+- `amountRwf` must be more than 0 and at most what the member is owed (otherwise `400`).
+- `paidAt` is an optional date and defaults to today (Kigali time).
+- Sending the same `clientUuid` again returns the existing payment with `200`.
+- Each payment adds a `PAYMENT` ledger entry with the amount.
+- `GET /api/payments/owed` lists members with something still owed, largest amount first.
+  `search` matches part of the name, member number or phone number; `totalOwedRwf` adds up
+  the members in the list.
+
+### Member statement
+
+`GET /api/members/{id}/statement` returns `grossShareRwf`, `deductionsRwf`, `paidRwf` and
+`owedRwf`, the member's `payments` (newest first) and `lotShares`: every lot the member
+delivered to, newest first. A shared lot shows the saved kg, percent and `shareRwf`. A lot
+that is not shared yet shows its status (`OPEN`, `CLOSED` or `SOLD`), the current kg and
+percent, and `shareRwf: null`, so the app can show "Waiting for sale" or "Waiting for
+sharing".
+
 ### Interactive docs (Swagger)
 
 - Local: http://localhost:8080/swagger-ui.html
@@ -438,7 +497,9 @@ validation, the member service (create, update, duplicates, not found, activate 
 deactivate), the member endpoints (validation errors, `401` without a token), recording
 deliveries (deduction, lot assignment, idempotency, ledger entry), lots (remaining kg,
 closing, stock), losses, buyers and sales (closed lot only, remaining kg, `SOLD` at 0,
-floor price warning, idempotency, ledger entries).
+floor price warning, idempotency, ledger entries), sharing (the 10,000 kg example, rounding
+remainder, sold lots only, no double sharing, ledger entries), payments (owed math,
+overpayment, MoMo reference, idempotency) and member statements.
 
 ## Author
 
