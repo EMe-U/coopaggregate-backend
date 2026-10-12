@@ -2,6 +2,7 @@ package com.coopaggregate.payment;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 import org.hibernate.annotations.CreationTimestamp;
 
@@ -25,6 +26,8 @@ public class ProducePayment {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    private UUID clientUuid;
+
     @ManyToOne(fetch = FetchType.LAZY)
     private Member member;
 
@@ -46,6 +49,14 @@ public class ProducePayment {
 
     public Long getId() {
         return id;
+    }
+
+    public UUID getClientUuid() {
+        return clientUuid;
+    }
+
+    public void setClientUuid(UUID clientUuid) {
+        this.clientUuid = clientUuid;
     }
 
     public Member getMember() {
