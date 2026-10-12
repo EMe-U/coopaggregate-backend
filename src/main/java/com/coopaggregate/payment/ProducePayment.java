@@ -6,7 +6,6 @@ import java.util.UUID;
 
 import org.hibernate.annotations.CreationTimestamp;
 
-import com.coopaggregate.lot.Lot;
 import com.coopaggregate.member.Member;
 
 import jakarta.persistence.Column;
@@ -32,9 +31,6 @@ public class ProducePayment {
 
     @ManyToOne(fetch = FetchType.LAZY)
     private Member member;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    private Lot lot;
 
     private LocalDate paymentDate;
 
@@ -75,14 +71,6 @@ public class ProducePayment {
 
     public void setMember(Member member) {
         this.member = member;
-    }
-
-    public Lot getLot() {
-        return lot;
-    }
-
-    public void setLot(Lot lot) {
-        this.lot = lot;
     }
 
     public LocalDate getPaymentDate() {
