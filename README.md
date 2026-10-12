@@ -197,7 +197,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
 | GET | `/api/lots/{id}/share-preview` | JWT | How a sold lot's money would be shared, per member. Saves nothing |
 | POST | `/api/lots/{id}/share` | JWT | Saves the shares and marks the lot `SHARED`. Only once per lot |
-| GET | `/api/payments/owed?search=` | JWT | Members still owed money, largest first, with `totalOwedRwf` |
+| GET | `/api/payments/balances?search=&status=` | JWT | Share, deductions, paid and balance per member with a shared lot, plus `totalOwedRwf` and `paidThisWeekRwf` |
 | POST | `/api/payments` | JWT | Pays a member. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page) |
 | GET | `/api/members/{id}/statement` | JWT | A member's shares, deductions, payments, amount owed and lots waiting for sharing |
@@ -401,7 +401,8 @@ saves it and sets the lot to `SHARED`.
 
 ### Payments
 
-What a member is owed = their shares - their deductions - what they were already paid,
+Payments are made to a member for everything they are owed, not to one lot. What a member
+is owed (their balance) = their shares - their deductions - what they were already paid,
 counting only shared lots.
 
 Request body for `POST /api/payments`:
@@ -417,14 +418,20 @@ Request body for `POST /api/payments`:
 }
 ```
 
-- `method` is `CASH` or `MOMO`. A `MOMO` payment needs `reference` (otherwise `400`).
+- `method` is `CASH`, `MOMO` or `BANK`. `MOMO` and `BANK` payments need `reference`, the
+  MoMo or bank transaction number (otherwise `400`).
+- Each payment gets its own code, `PAY-` and 4 digits (`PAY-0001`), the highest existing
+  number plus one. It is separate from `reference`.
 - `amountRwf` must be more than 0 and at most what the member is owed (otherwise `400`).
 - `paidAt` is an optional date and defaults to today (Kigali time).
 - Sending the same `clientUuid` again returns the existing payment with `200`.
-- Each payment adds a `PAYMENT` ledger entry with the amount.
-- `GET /api/payments/owed` lists members with something still owed, largest amount first.
-  `search` matches part of the name, member number or phone number; `totalOwedRwf` adds up
-  the members in the list.
+- Each payment adds a `PAYMENT` ledger entry with the amount and the payment code.
+- `GET /api/payments/balances` lists every member with at least one shared lot:
+  `shareRwf`, `deductionRwf`, `paidRwf`, `balanceRwf` and `status`, largest balance first.
+  `status` is `UNPAID` (nothing paid yet), `PART_PAID` or `PAID` (balance 0).
+  `search` (name, member number or phone) and `status` filter the list only:
+  `totalOwedRwf` (all balances) and `paidThisWeekRwf` (payments dated Monday to Sunday of the
+  current week, Kigali time) always cover all members.
 
 ### Member statement
 
