@@ -12,6 +12,7 @@ import com.coopaggregate.lot.LotQuantities;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
+import com.coopaggregate.member.MemberRepository;
 
 import jakarta.persistence.EntityNotFoundException;
 
@@ -21,11 +22,14 @@ public class SharingService {
     private final LotShareRepository lotShareRepository;
     private final LotRepository lotRepository;
     private final LotService lotService;
+    private final MemberRepository memberRepository;
 
-    public SharingService(LotShareRepository lotShareRepository, LotRepository lotRepository, LotService lotService) {
+    public SharingService(LotShareRepository lotShareRepository, LotRepository lotRepository, LotService lotService,
+                          MemberRepository memberRepository) {
         this.lotShareRepository = lotShareRepository;
         this.lotRepository = lotRepository;
         this.lotService = lotService;
+        this.memberRepository = memberRepository;
     }
 
     @Transactional(readOnly = true)
@@ -34,6 +38,28 @@ public class SharingService {
                 .orElseThrow(() -> new EntityNotFoundException("Lot " + lotId + " does not exist."));
         checkCanBeShared(lot);
         return calculate(lot);
+    }
+
+    @Transactional
+    public SharePreviewResponse share(Long lotId) {
+        // The row lock makes a second share request for the same lot wait, then find it SHARED.
+        Lot lot = lotRepository.findForUpdateById(lotId)
+                .orElseThrow(() -> new EntityNotFoundException("Lot " + lotId + " does not exist."));
+        checkCanBeShared(lot);
+
+        SharePreviewResponse result = calculate(lot);
+        for (SharePreviewResponse.MemberShare member : result.members()) {
+            LotShare share = new LotShare();
+            share.setLot(lot);
+            share.setMember(memberRepository.getReferenceById(member.memberId()));
+            share.setMemberKg(member.memberKg());
+            share.setLotKg(result.deliveredKg());
+            share.setShareAmount(member.shareRwf());
+            share.setDeductionAmount(member.deductionRwf());
+            lotShareRepository.save(share);
+        }
+        lot.setStatus(LotStatus.SHARED);
+        return result;
     }
 
     SharePreviewResponse calculate(Lot lot) {

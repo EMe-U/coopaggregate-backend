@@ -2,6 +2,7 @@ package com.coopaggregate.share;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -25,5 +26,11 @@ public class ShareController {
     @Operation(summary = "Show how a sold lot's money would be shared, without saving anything")
     public SharePreviewResponse preview(@PathVariable Long lotId) {
         return sharingService.preview(lotId);
+    }
+
+    @PostMapping("/share")
+    @Operation(summary = "Share a sold lot: save each member's share and mark the lot SHARED. Can only be done once")
+    public SharePreviewResponse share(@PathVariable Long lotId) {
+        return sharingService.share(lotId);
     }
 }
