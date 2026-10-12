@@ -7,11 +7,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.error.BadRequestException;
+import com.coopaggregate.ledger.LedgerEntryType;
+import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotQuantities;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
+import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.MemberRepository;
 
 import jakarta.persistence.EntityNotFoundException;
@@ -23,13 +26,15 @@ public class SharingService {
     private final LotRepository lotRepository;
     private final LotService lotService;
     private final MemberRepository memberRepository;
+    private final LedgerService ledgerService;
 
     public SharingService(LotShareRepository lotShareRepository, LotRepository lotRepository, LotService lotService,
-                          MemberRepository memberRepository) {
+                          MemberRepository memberRepository, LedgerService ledgerService) {
         this.lotShareRepository = lotShareRepository;
         this.lotRepository = lotRepository;
         this.lotService = lotService;
         this.memberRepository = memberRepository;
+        this.ledgerService = ledgerService;
     }
 
     @Transactional(readOnly = true)
@@ -41,7 +46,7 @@ public class SharingService {
     }
 
     @Transactional
-    public SharePreviewResponse share(Long lotId) {
+    public SharePreviewResponse share(Long lotId, Manager manager) {
         // The row lock makes a second share request for the same lot wait, then find it SHARED.
         Lot lot = lotRepository.findForUpdateById(lotId)
                 .orElseThrow(() -> new EntityNotFoundException("Lot " + lotId + " does not exist."));
@@ -56,7 +61,11 @@ public class SharingService {
             share.setLotKg(result.deliveredKg());
             share.setShareAmount(member.shareRwf());
             share.setDeductionAmount(member.deductionRwf());
-            lotShareRepository.save(share);
+            LotShare saved = lotShareRepository.save(share);
+
+            // The amount is the gross share; the deduction was already recorded with each delivery.
+            ledgerService.record(LedgerEntryType.SHARE, "LOT_SHARE", saved.getId(), saved.getMemberKg(),
+                    saved.getShareAmount(), "Share of " + lot.getLotCode(), manager);
         }
         lot.setStatus(LotStatus.SHARED);
         return result;
