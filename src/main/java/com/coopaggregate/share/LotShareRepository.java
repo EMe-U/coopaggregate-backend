@@ -17,4 +17,15 @@ public interface LotShareRepository extends JpaRepository<LotShare, Long> {
             ORDER BY SUM(d.quantityKg) DESC, m.id
             """)
     List<MemberDelivered> findDeliveredByMember(Long lotId);
+
+    List<LotShare> findByMemberId(Long memberId);
+
+    @Query("""
+            SELECT new com.coopaggregate.share.MemberLotKg(l.id, l.lotCode, l.status, SUM(d.quantityKg))
+            FROM Delivery d JOIN d.lot l
+            WHERE d.member.id = :memberId
+            GROUP BY l.id, l.lotCode, l.status
+            ORDER BY l.id DESC
+            """)
+    List<MemberLotKg> findLotsOfMember(Long memberId);
 }

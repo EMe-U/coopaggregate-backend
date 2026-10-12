@@ -36,6 +36,8 @@ public interface ProducePaymentRepository extends JpaRepository<ProducePayment, 
 
     Optional<ProducePayment> findByClientUuid(UUID clientUuid);
 
+    List<ProducePayment> findByMemberIdOrderByPaymentDateDescIdDesc(Long memberId);
+
     @Query("SELECT COALESCE(SUM(ls.shareAmount - ls.deductionAmount), 0) FROM LotShare ls "
             + "WHERE ls.member.id = :memberId")
     long netSharesOf(Long memberId);
