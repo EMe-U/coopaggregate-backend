@@ -5,9 +5,13 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -37,14 +41,17 @@ public class SaleService {
     private static final int MAX_PAGE_SIZE = 100;
 
     private final SaleRepository saleRepository;
+    private final SaleOrderRepository saleOrderRepository;
     private final LotRepository lotRepository;
     private final BuyerRepository buyerRepository;
     private final LotService lotService;
     private final LedgerService ledgerService;
 
-    public SaleService(SaleRepository saleRepository, LotRepository lotRepository,
-                       BuyerRepository buyerRepository, LotService lotService, LedgerService ledgerService) {
+    public SaleService(SaleRepository saleRepository, SaleOrderRepository saleOrderRepository,
+                       LotRepository lotRepository, BuyerRepository buyerRepository, LotService lotService,
+                       LedgerService ledgerService) {
         this.saleRepository = saleRepository;
+        this.saleOrderRepository = saleOrderRepository;
         this.lotRepository = lotRepository;
         this.buyerRepository = buyerRepository;
         this.lotService = lotService;
@@ -64,38 +71,57 @@ public class SaleService {
             return new RecordedSale(SaleResponse.from(existing.get()), false);
         }
 
-        if (lot.getStatus() != LotStatus.CLOSED) {
-            throw new BadRequestException("Lot " + lot.getLotCode() + " is " + lot.getStatus()
-                    + ". Only a closed lot can be sold.");
-        }
-        Buyer buyer = buyerRepository.findById(request.buyerId())
-                .orElseThrow(() -> new BadRequestException("Buyer " + request.buyerId() + " does not exist."));
-
-        BigDecimal remainingKg = lotService.quantitiesOf(lot).remainingKg();
-        if (request.quantityKg().compareTo(remainingKg) > 0) {
-            throw new BadRequestException("Only " + remainingKg.toPlainString() + " kg remain in lot "
-                    + lot.getLotCode() + ".");
-        }
-
-        Sale sale = new Sale();
-        sale.setClientUuid(request.clientUuid());
-        sale.setSaleCode(ShortCodes.unique("SAL-", saleRepository::existsBySaleCode));
-        sale.setLot(lot);
-        sale.setBuyer(buyer);
-        sale.setSaleDate(request.soldAt() != null ? request.soldAt() : KigaliTime.today());
-        sale.setQuantityKg(request.quantityKg());
-        sale.setPricePerKg(request.pricePerKg());
-        sale.setTotalAmount(totalAmount(request.quantityKg(), request.pricePerKg()));
-        sale.setBelowFloorPrice(isBelowFloor(lot, request.pricePerKg()));
-        Sale saved = saleRepository.save(sale);
-        ledgerService.record(LedgerEntryType.SALE, "SALE", saved.getId(), saved.getQuantityKg(),
-                saved.getTotalAmount(),
-                "Sale " + saved.getSaleCode() + " from " + lot.getLotCode() + " to " + buyer.getName(), manager);
-
-        if (request.quantityKg().compareTo(remainingKg) == 0) {
-            lot.setStatus(LotStatus.SOLD);
-        }
+        BigDecimal remainingKg = checkSellable(lot, request.quantityKg());
+        Buyer buyer = findBuyer(request.buyerId());
+        LocalDate saleDate = request.soldAt() != null ? request.soldAt() : KigaliTime.today();
+        Sale saved = saveSale(lot, buyer, request.clientUuid(), null, saleDate, request.quantityKg(),
+                request.pricePerKg(), remainingKg, manager);
         return new RecordedSale(SaleResponse.from(saved), true);
+    }
+
+    @Transactional
+    public RecordedSaleOrder recordOrder(SaleOrderRequest request, Manager manager) {
+        List<Long> lotIds = request.items().stream().map(SaleOrderRequest.Item::lotId).toList();
+        if (new HashSet<>(lotIds).size() != lotIds.size()) {
+            throw new BadRequestException("Each lot can appear only once in an order.");
+        }
+
+        // Locked in id order, so two orders that share lots always lock them in the same order and cannot
+        // deadlock. The locks also make a repeated client UUID wait for the first request.
+        Map<Long, Lot> lots = new HashMap<>();
+        for (Long lotId : lotIds.stream().sorted().toList()) {
+            lots.put(lotId, lotRepository.findForUpdateById(lotId)
+                    .orElseThrow(() -> new BadRequestException("Lot " + lotId + " does not exist.")));
+        }
+
+        Optional<SaleOrder> existing = saleOrderRepository.findByClientUuid(request.clientUuid());
+        if (existing.isPresent()) {
+            return new RecordedSaleOrder(toResponse(existing.get()), false);
+        }
+
+        // Every item is checked before anything is saved, so a problem in any item saves nothing.
+        Buyer buyer = findBuyer(request.buyerId());
+        Map<Long, BigDecimal> remainingByLot = new HashMap<>();
+        for (SaleOrderRequest.Item item : request.items()) {
+            remainingByLot.put(item.lotId(), checkSellable(lots.get(item.lotId()), item.quantityKg()));
+        }
+
+        SaleOrder order = new SaleOrder();
+        order.setOrderCode(ShortCodes.unique("ORD-", saleOrderRepository::existsByOrderCode));
+        order.setClientUuid(request.clientUuid());
+        order.setBuyer(buyer);
+        order.setSaleDate(request.soldAt() != null ? request.soldAt() : KigaliTime.today());
+        SaleOrder savedOrder = saleOrderRepository.save(order);
+
+        List<SaleResponse> sales = new ArrayList<>();
+        for (SaleOrderRequest.Item item : request.items()) {
+            // The order holds the client UUID, so each sale row gets a random one of its own.
+            Sale saved = saveSale(lots.get(item.lotId()), buyer, UUID.randomUUID(), savedOrder,
+                    savedOrder.getSaleDate(), item.quantityKg(), item.pricePerKg(),
+                    remainingByLot.get(item.lotId()), manager);
+            sales.add(SaleResponse.from(saved));
+        }
+        return new RecordedSaleOrder(SaleOrderResponse.from(savedOrder, sales), true);
     }
 
     @Transactional(readOnly = true)
@@ -122,6 +148,55 @@ public class SaleService {
                 : BigDecimal.valueOf(amount).divide(kg, 2, RoundingMode.HALF_UP);
         return new SaleSummaryResponse(amount, kg,
                 saleRepository.buyerCountBetween(firstDayOfMonth, lastDayOfMonth), averagePricePerKg);
+    }
+
+    private SaleOrderResponse toResponse(SaleOrder order) {
+        return SaleOrderResponse.from(order, saleRepository.findBySaleOrderIdOrderByIdAsc(order.getId()).stream()
+                .map(SaleResponse::from)
+                .toList());
+    }
+
+    private Buyer findBuyer(Long buyerId) {
+        return buyerRepository.findById(buyerId)
+                .orElseThrow(() -> new BadRequestException("Buyer " + buyerId + " does not exist."));
+    }
+
+    // Returns the lot's remaining kg after checking the lot can be sold and holds enough.
+    private BigDecimal checkSellable(Lot lot, BigDecimal quantityKg) {
+        if (lot.getStatus() != LotStatus.CLOSED) {
+            throw new BadRequestException("Lot " + lot.getLotCode() + " is " + lot.getStatus()
+                    + ". Only a closed lot can be sold.");
+        }
+        BigDecimal remainingKg = lotService.quantitiesOf(lot).remainingKg();
+        if (quantityKg.compareTo(remainingKg) > 0) {
+            throw new BadRequestException("Only " + remainingKg.toPlainString() + " kg remain in lot "
+                    + lot.getLotCode() + ".");
+        }
+        return remainingKg;
+    }
+
+    private Sale saveSale(Lot lot, Buyer buyer, UUID clientUuid, SaleOrder order, LocalDate saleDate,
+                          BigDecimal quantityKg, long pricePerKg, BigDecimal remainingKg, Manager manager) {
+        Sale sale = new Sale();
+        sale.setClientUuid(clientUuid);
+        sale.setSaleCode(ShortCodes.unique("SAL-", saleRepository::existsBySaleCode));
+        sale.setSaleOrder(order);
+        sale.setLot(lot);
+        sale.setBuyer(buyer);
+        sale.setSaleDate(saleDate);
+        sale.setQuantityKg(quantityKg);
+        sale.setPricePerKg(pricePerKg);
+        sale.setTotalAmount(totalAmount(quantityKg, pricePerKg));
+        sale.setBelowFloorPrice(isBelowFloor(lot, pricePerKg));
+        Sale saved = saleRepository.save(sale);
+        ledgerService.record(LedgerEntryType.SALE, "SALE", saved.getId(), saved.getQuantityKg(),
+                saved.getTotalAmount(),
+                "Sale " + saved.getSaleCode() + " from " + lot.getLotCode() + " to " + buyer.getName(), manager);
+
+        if (quantityKg.compareTo(remainingKg) == 0) {
+            lot.setStatus(LotStatus.SOLD);
+        }
+        return saved;
     }
 
     // Amounts are stored in whole RWF, so fractions are rounded (half up).

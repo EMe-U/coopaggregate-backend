@@ -9,6 +9,7 @@ import com.coopaggregate.lot.LotStatus;
 public record SaleResponse(
         Long id,
         String saleCode,
+        String orderCode,
         Long lotId,
         String lotCode,
         LotStatus lotStatus,
@@ -25,6 +26,7 @@ public record SaleResponse(
         return new SaleResponse(
                 sale.getId(),
                 sale.getSaleCode(),
+                sale.getSaleOrder() == null ? null : sale.getSaleOrder().getOrderCode(),
                 sale.getLot().getId(),
                 sale.getLot().getLotCode(),
                 sale.getLot().getStatus(),

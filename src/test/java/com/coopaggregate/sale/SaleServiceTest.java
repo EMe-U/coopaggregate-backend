@@ -94,7 +94,8 @@ class SaleServiceTest {
         });
 
         manager = new Manager();
-        service = new SaleService(saleRepository, lotRepository, buyerRepository, lotService, ledgerService);
+        service = new SaleService(saleRepository, mock(SaleOrderRepository.class), lotRepository, buyerRepository,
+                lotService, ledgerService);
     }
 
     @Test
