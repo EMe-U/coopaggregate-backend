@@ -1,12 +1,84 @@
 package com.coopaggregate.lot;
 
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
 
 import com.coopaggregate.grade.Grade;
 
-public interface LotRepository extends JpaRepository<Lot, Long> {
+import jakarta.persistence.LockModeType;
+
+public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificationExecutor<Lot> {
 
     Optional<Lot> findFirstByGradeAndStatus(Grade grade, LotStatus status);
+
+    Optional<Lot> findFirstByGradeIdAndStatus(Long gradeId, LotStatus status);
+
+    long countByLotCodeStartingWith(String prefix);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<Lot> findForUpdateById(Long id);
+
+    @Query("SELECT l.grade.id FROM Lot l WHERE l.id = :id")
+    Optional<Long> findGradeIdById(Long id);
+
+    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d WHERE d.lot.id = :lotId")
+    BigDecimal totalDeliveredKg(Long lotId);
+
+    @EntityGraph(attributePaths = "grade")
+    List<Lot> findByStatusIn(Collection<LotStatus> statuses);
+
+    @Override
+    @EntityGraph(attributePaths = "grade")
+    Page<Lot> findAll(Specification<Lot> spec, Pageable pageable);
+
+    // One query for a whole page of lots; the remaining kg is derived from these sums, never stored.
+    @Query("""
+            SELECT new com.coopaggregate.lot.LotQuantities(
+                l.id,
+                (SELECT SUM(d.quantityKg) FROM Delivery d WHERE d.lot.id = l.id),
+                (SELECT SUM(x.quantityKg) FROM Loss x WHERE x.lot.id = l.id),
+                (SELECT SUM(s.quantityKg) FROM Sale s WHERE s.lot.id = l.id),
+                (SELECT SUM(s2.totalAmount) FROM Sale s2 WHERE s2.lot.id = l.id),
+                (SELECT COUNT(DISTINCT d2.member.id) FROM Delivery d2 WHERE d2.lot.id = l.id))
+            FROM Lot l
+            WHERE l.id IN :lotIds
+            """)
+    List<LotQuantities> findQuantities(Collection<Long> lotIds);
+
+    @Query("""
+            SELECT new com.coopaggregate.lot.LotMemberResponse(m.id, m.fullName, m.memberCode, SUM(d.quantityKg))
+            FROM Delivery d JOIN d.member m
+            WHERE d.lot.id = :lotId
+            GROUP BY m.id, m.fullName, m.memberCode
+            ORDER BY SUM(d.quantityKg) DESC, m.fullName
+            """)
+    List<LotMemberResponse> findMembers(Long lotId);
+
+    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d")
+    BigDecimal totalDeliveredKg();
+
+    @Query("SELECT COALESCE(SUM(x.quantityKg), 0) FROM Loss x")
+    BigDecimal totalLostKg();
+
+    @Query("SELECT COALESCE(SUM(s.quantityKg), 0) FROM Sale s")
+    BigDecimal totalSoldKg();
+
+    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d "
+            + "WHERE d.deliveredAt >= :from AND d.deliveredAt < :to")
+    BigDecimal deliveredKgBetween(Instant from, Instant to);
+
+    @Query("SELECT COUNT(d) FROM Delivery d WHERE d.deliveredAt >= :from AND d.deliveredAt < :to")
+    long deliveryCountBetween(Instant from, Instant to);
 }

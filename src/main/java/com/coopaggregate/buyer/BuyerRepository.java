@@ -1,6 +1,11 @@
 package com.coopaggregate.buyer;
 
-import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.Optional;
 
-public interface BuyerRepository extends JpaRepository<Buyer, Long> {
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+
+public interface BuyerRepository extends JpaRepository<Buyer, Long>, JpaSpecificationExecutor<Buyer> {
+
+    Optional<Buyer> findByPhone(String phone);
 }

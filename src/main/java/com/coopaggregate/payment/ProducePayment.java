@@ -2,10 +2,10 @@ package com.coopaggregate.payment;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 import org.hibernate.annotations.CreationTimestamp;
 
-import com.coopaggregate.lot.Lot;
 import com.coopaggregate.member.Member;
 
 import jakarta.persistence.Column;
@@ -25,11 +25,12 @@ public class ProducePayment {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    private Member member;
+    private UUID clientUuid;
+
+    private String paymentCode;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    private Lot lot;
+    private Member member;
 
     private LocalDate paymentDate;
 
@@ -48,20 +49,28 @@ public class ProducePayment {
         return id;
     }
 
+    public UUID getClientUuid() {
+        return clientUuid;
+    }
+
+    public void setClientUuid(UUID clientUuid) {
+        this.clientUuid = clientUuid;
+    }
+
+    public String getPaymentCode() {
+        return paymentCode;
+    }
+
+    public void setPaymentCode(String paymentCode) {
+        this.paymentCode = paymentCode;
+    }
+
     public Member getMember() {
         return member;
     }
 
     public void setMember(Member member) {
         this.member = member;
-    }
-
-    public Lot getLot() {
-        return lot;
-    }
-
-    public void setLot(Lot lot) {
-        this.lot = lot;
     }
 
     public LocalDate getPaymentDate() {
