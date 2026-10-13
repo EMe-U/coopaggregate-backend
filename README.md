@@ -297,10 +297,10 @@ Request body for `POST /api/deliveries`:
 | `memberId` | Required. The member must exist and be active, otherwise `400` |
 | `gradeId` | Required. The grade must exist, otherwise `400` |
 | `quantityKg` | Required. More than 0, at most 5000, at most 2 decimals |
-| `deliveredAt` | Optional. Defaults to the time the server receives the delivery |
+| `deliveredAt` | Optional. When the delivery happened, for example the time on the device when it was recorded offline. At most 5 minutes in the future and at most 7 days in the past, otherwise `400`. Defaults to the time the server receives the delivery |
 
-- The response contains the receipt code, member, grade, lot, quantity, deduction and
-  delivery time.
+- The response contains the receipt code, member, grade, lot, quantity, deduction,
+  `deliveredAt` (when the delivery happened) and `syncedAt` (when the server saved it).
 - **Deduction:** `quantityKg` x `deduction_per_kg` from the `setting` table (5 RWF),
   rounded half up to whole RWF. For example 12.25 kg gives 61 RWF.
 - **Lot:** the delivery goes to the open lot of its grade. If the grade has no open lot, a
@@ -319,6 +319,32 @@ Request body for `POST /api/deliveries`:
   entries can never change.
 - `from` and `to` filter by delivery day in Kigali time (`yyyy-MM-dd`, both inclusive).
 - Deliveries cannot be edited or deleted. A mistake is corrected with a ledger reversal.
+
+#### Offline sync
+
+The app records deliveries offline and sends them later, possibly hours later. The server
+follows these rules:
+
+- **Delivery time:** `deliveredAt` from the device is kept as the delivery time.
+  `syncedAt` shows when the server saved it. A time more than 5 minutes in the future (a
+  device clock that is wrong) or more than 7 days in the past returns `400`.
+- **Sending again is safe:** the same `clientUuid` always returns the delivery that was
+  saved the first time, with `200`. It is saved once and adds one ledger entry, however
+  often it is sent. This check comes first, so a re-sent delivery still gets `200` after the
+  7-day window, after its member was deactivated, or after its lot was closed.
+- **Lot at sync time:** the lot is chosen when the delivery reaches the server: the open
+  lot of its grade at that moment. If the lot that was open when the delivery was recorded
+  has been closed in the meantime, the delivery goes to a new lot, because a closed lot
+  may already be on sale and its kilograms must not change.
+- **Errors that will not go away on retry** return a `4xx` status with a message, never
+  `500`, so the app can show the message and stop retrying:
+  - `400`: invalid body (missing fields, malformed `clientUuid`, quantity out of range,
+    `deliveredAt` without a time zone or outside the time window), unknown member or
+    grade, inactive member.
+  - `409`: the request clashes with data already saved.
+
+  `401` means the login has expired; the app should ask the manager to log in again and
+  then retry. Network errors and `5xx` can be retried later with the same `clientUuid`.
 
 ### Lots and losses
 
