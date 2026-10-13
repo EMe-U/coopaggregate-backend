@@ -1,5 +1,6 @@
 package com.coopaggregate.delivery;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -11,6 +12,7 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
 
 public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSpecificationExecutor<Delivery> {
 
@@ -27,4 +29,12 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
 
     @EntityGraph(attributePaths = {"member", "lot"})
     List<Delivery> findByIdIn(Collection<Long> ids);
+
+    @Query("""
+            SELECT new com.coopaggregate.delivery.GradeDeliveredKg(g.name, SUM(d.quantityKg))
+            FROM Delivery d JOIN d.lot l JOIN l.grade g
+            WHERE d.deliveredAt >= :from AND d.deliveredAt < :to
+            GROUP BY g.name
+            """)
+    List<GradeDeliveredKg> findKgByGradeBetween(Instant from, Instant to);
 }
