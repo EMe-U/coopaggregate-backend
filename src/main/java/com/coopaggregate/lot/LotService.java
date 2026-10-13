@@ -157,7 +157,7 @@ public class LotService {
         return LotResponse.from(lot, quantitiesOf(lot));
     }
 
-    Map<Long, LotQuantities> quantitiesOf(List<Lot> lots) {
+    public Map<Long, LotQuantities> quantitiesOf(List<Lot> lots) {
         if (lots.isEmpty()) {
             return Map.of();
         }

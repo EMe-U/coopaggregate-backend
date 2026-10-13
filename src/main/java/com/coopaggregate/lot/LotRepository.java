@@ -27,6 +27,8 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
 
     long countByLotCodeStartingWith(String prefix);
 
+    long countByStatus(LotStatus status);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<Lot> findForUpdateById(Long id);
 

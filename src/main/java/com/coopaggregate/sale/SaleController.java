@@ -64,4 +64,16 @@ public class SaleController {
         RecordedSale result = saleService.record(request, authService.currentManager(jwt.getSubject()));
         return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK).body(result.sale());
     }
+
+    @PostMapping("/orders")
+    @Operation(summary = "Record one buyer order taken from several closed lots. Each lot gets its own sale; "
+            + "if any item is invalid, nothing is saved")
+    @ApiResponse(responseCode = "201", description = "Order recorded")
+    @ApiResponse(responseCode = "200",
+            description = "An order with this clientUuid already exists; it is returned unchanged")
+    public ResponseEntity<SaleOrderResponse> recordOrder(@Valid @RequestBody SaleOrderRequest request,
+                                                         @AuthenticationPrincipal Jwt jwt) {
+        RecordedSaleOrder result = saleService.recordOrder(request, authService.currentManager(jwt.getSubject()));
+        return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK).body(result.order());
+    }
 }

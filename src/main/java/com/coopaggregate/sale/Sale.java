@@ -39,6 +39,9 @@ public class Sale {
     @ManyToOne(fetch = FetchType.LAZY)
     private BuyerRequest buyerRequest;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    private SaleOrder saleOrder;
+
     private LocalDate saleDate;
 
     private BigDecimal quantityKg;
@@ -97,6 +100,14 @@ public class Sale {
 
     public void setBuyerRequest(BuyerRequest buyerRequest) {
         this.buyerRequest = buyerRequest;
+    }
+
+    public SaleOrder getSaleOrder() {
+        return saleOrder;
+    }
+
+    public void setSaleOrder(SaleOrder saleOrder) {
+        this.saleOrder = saleOrder;
     }
 
     public LocalDate getSaleDate() {

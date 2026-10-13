@@ -2,6 +2,8 @@ package com.coopaggregate.sale;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -19,8 +21,10 @@ public interface SaleRepository extends JpaRepository<Sale, Long>, JpaSpecificat
 
     boolean existsBySaleCode(String saleCode);
 
+    List<Sale> findBySaleOrderIdOrderByIdAsc(Long saleOrderId);
+
     @Override
-    @EntityGraph(attributePaths = {"lot", "buyer"})
+    @EntityGraph(attributePaths = {"lot", "buyer", "saleOrder"})
     Page<Sale> findAll(Specification<Sale> spec, Pageable pageable);
 
     @Query("SELECT COALESCE(SUM(s.totalAmount), 0) FROM Sale s WHERE s.saleDate BETWEEN :from AND :to")
@@ -31,4 +35,7 @@ public interface SaleRepository extends JpaRepository<Sale, Long>, JpaSpecificat
 
     @Query("SELECT COUNT(DISTINCT s.buyer.id) FROM Sale s WHERE s.saleDate BETWEEN :from AND :to")
     long buyerCountBetween(LocalDate from, LocalDate to);
+
+    @EntityGraph(attributePaths = {"lot", "buyer"})
+    List<Sale> findByIdIn(Collection<Long> ids);
 }

@@ -1,5 +1,8 @@
 package com.coopaggregate.ledger;
 
+import java.time.LocalDate;
+
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -17,6 +20,7 @@ import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.manager.Manager;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -28,18 +32,37 @@ import jakarta.validation.Valid;
 public class LedgerController {
 
     private final LedgerService ledgerService;
+    private final LedgerQueryService ledgerQueryService;
     private final AuthService authService;
 
-    public LedgerController(LedgerService ledgerService, AuthService authService) {
+    public LedgerController(LedgerService ledgerService, LedgerQueryService ledgerQueryService,
+                            AuthService authService) {
         this.ledgerService = ledgerService;
+        this.ledgerQueryService = ledgerQueryService;
         this.authService = authService;
     }
 
     @GetMapping
-    @Operation(summary = "List ledger entries, newest first (max 100 per page)")
-    public PageResponse<LedgerEntryResponse> list(@RequestParam(defaultValue = "0") int page,
-                                                  @RequestParam(defaultValue = "20") int size) {
-        return ledgerService.listEntries(page, size);
+    @Operation(summary = "List ledger entries, newest first (max 100 per page). All filters are optional")
+    public PageResponse<LedgerEntryResponse> list(
+            @RequestParam(required = false) LedgerEntryType type,
+            @RequestParam(required = false) Long memberId,
+            @RequestParam(required = false) Long lotId,
+            @Parameter(description = "First day, inclusive (yyyy-MM-dd, Kigali time)")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @Parameter(description = "Last day, inclusive (yyyy-MM-dd, Kigali time)")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @Parameter(description = "Part of a reference code (RCT-, SAL-, ORD-, PAY-) or a member name")
+            @RequestParam(required = false) String search,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ledgerQueryService.list(new LedgerFilter(type, memberId, lotId, from, to, search), page, size);
+    }
+
+    @GetMapping("/summary")
+    @Operation(summary = "Number of entries, time of the latest entry and entries made today (Kigali time)")
+    public LedgerSummaryResponse summary() {
+        return ledgerQueryService.summary();
     }
 
     @GetMapping("/verify")
@@ -56,6 +79,6 @@ public class LedgerController {
                                        @AuthenticationPrincipal Jwt jwt) {
         Manager manager = authService.currentManager(jwt.getSubject());
         LedgerEntry reversal = ledgerService.reverse(id, request.reason(), manager);
-        return LedgerEntryResponse.from(reversal, null);
+        return ledgerQueryService.toResponse(reversal);
     }
 }

@@ -1,7 +1,9 @@
 package com.coopaggregate.share;
 
+import java.util.Collection;
 import java.util.List;
 
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
@@ -28,4 +30,7 @@ public interface LotShareRepository extends JpaRepository<LotShare, Long> {
             ORDER BY l.id DESC
             """)
     List<MemberLotKg> findLotsOfMember(Long memberId);
+
+    @EntityGraph(attributePaths = {"member", "lot"})
+    List<LotShare> findByIdIn(Collection<Long> ids);
 }
