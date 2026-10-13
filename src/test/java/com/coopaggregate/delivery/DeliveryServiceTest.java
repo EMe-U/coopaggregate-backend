@@ -326,6 +326,25 @@ class DeliveryServiceTest {
         verify(ledgerService, times(1)).record(any(), any(), any(), any(), any(), any(), any());
     }
 
+    @Test
+    void responseShowsWhenTheServerSavedTheDelivery() {
+        givenOpenLot();
+        Instant savedAt = Instant.now();
+        when(deliveryRepository.save(any(Delivery.class))).thenAnswer(invocation -> {
+            Delivery delivery = invocation.getArgument(0);
+            ReflectionTestUtils.setField(delivery, "id", 100L);
+            // Hibernate fills created_at when the row is inserted.
+            ReflectionTestUtils.setField(delivery, "createdAt", savedAt);
+            return delivery;
+        });
+        Instant recordedOffline = savedAt.minus(Duration.ofHours(4));
+
+        DeliveryResponse response = recordAt(recordedOffline).delivery();
+
+        assertEquals(recordedOffline, response.deliveredAt());
+        assertEquals(savedAt, response.syncedAt());
+    }
+
     private RecordedDelivery recordAt(Instant deliveredAt) {
         return service.record(new DeliveryRequest(CLIENT_UUID, 5L, 1L, new BigDecimal("100"), deliveredAt), manager);
     }

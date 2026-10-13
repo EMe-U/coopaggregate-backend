@@ -7,6 +7,10 @@ import com.coopaggregate.grade.Grade;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.member.Member;
 
+/**
+ * deliveredAt is when the delivery happened (the device time for offline deliveries); syncedAt is when the
+ * server saved it.
+ */
 public record DeliveryResponse(
         Long id,
         String receiptCode,
@@ -19,7 +23,8 @@ public record DeliveryResponse(
         String lotCode,
         BigDecimal quantityKg,
         Long deductionRwf,
-        Instant deliveredAt) {
+        Instant deliveredAt,
+        Instant syncedAt) {
 
     public static DeliveryResponse from(Delivery delivery) {
         Member member = delivery.getMember();
@@ -37,6 +42,7 @@ public record DeliveryResponse(
                 lot.getLotCode(),
                 delivery.getQuantityKg(),
                 delivery.getDeductionAmount(),
-                delivery.getDeliveredAt());
+                delivery.getDeliveredAt(),
+                delivery.getCreatedAt());
     }
 }
