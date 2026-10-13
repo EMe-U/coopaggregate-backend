@@ -345,6 +345,30 @@ class DeliveryServiceTest {
         assertEquals(savedAt, response.syncedAt());
     }
 
+    @Test
+    void offlineDeliveryGoesToTheLotThatIsOpenWhenItSyncs() {
+        Lot openNow = givenOpenLot();
+
+        DeliveryResponse response = recordAt(Instant.now().minus(Duration.ofDays(2))).delivery();
+
+        assertEquals(openNow.getId(), response.lotId());
+    }
+
+    @Test
+    void offlineDeliveryOpensANewLotWhenItsLotWasClosedBeforeSync() {
+        int year = KigaliTime.today().getYear();
+        when(lotRepository.findFirstByGradeAndStatus(grade, LotStatus.OPEN)).thenReturn(Optional.empty());
+        when(lotRepository.countByLotCodeStartingWith("A-" + year + "-")).thenReturn(1L);
+
+        DeliveryResponse response = recordAt(Instant.now().minus(Duration.ofDays(2))).delivery();
+
+        ArgumentCaptor<Lot> lot = ArgumentCaptor.forClass(Lot.class);
+        verify(lotRepository).save(lot.capture());
+        assertEquals("A-" + year + "-02", response.lotCode());
+        // The new lot opens on the sync day, not on the day the delivery was recorded offline.
+        assertEquals(KigaliTime.today(), lot.getValue().getOpenDate());
+    }
+
     private RecordedDelivery recordAt(Instant deliveredAt) {
         return service.record(new DeliveryRequest(CLIENT_UUID, 5L, 1L, new BigDecimal("100"), deliveredAt), manager);
     }
