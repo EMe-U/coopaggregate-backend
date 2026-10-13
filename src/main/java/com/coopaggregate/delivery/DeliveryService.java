@@ -2,6 +2,7 @@ package com.coopaggregate.delivery;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -36,6 +37,8 @@ import jakarta.persistence.criteria.Predicate;
 public class DeliveryService {
 
     private static final int MAX_PAGE_SIZE = 100;
+    private static final Duration MAX_CLOCK_AHEAD = Duration.ofMinutes(5);
+    private static final Duration MAX_SYNC_DELAY = Duration.ofDays(7);
 
     private final DeliveryRepository deliveryRepository;
     private final MemberRepository memberRepository;
@@ -68,13 +71,15 @@ public class DeliveryService {
             return new RecordedDelivery(DeliveryResponse.from(existing.get()), false);
         }
 
+        Instant deliveredAt = request.deliveredAt() != null ? request.deliveredAt() : Instant.now();
+        checkDeliveryTime(deliveredAt);
         Member member = activeMember(request.memberId());
 
         Delivery delivery = new Delivery();
         delivery.setClientUuid(request.clientUuid());
         delivery.setMember(member);
         delivery.setLot(lotService.findOrOpenLot(grade));
-        delivery.setDeliveredAt(request.deliveredAt() != null ? request.deliveredAt() : Instant.now());
+        delivery.setDeliveredAt(deliveredAt);
         delivery.setQuantityKg(request.quantityKg());
         delivery.setDeductionAmount(deductionFor(request.quantityKg()));
         delivery.setReceiptCode(ShortCodes.unique("RCT-", deliveryRepository::existsByReceiptCode));
@@ -101,6 +106,20 @@ public class DeliveryService {
         return deliveryRepository.findById(id)
                 .map(DeliveryResponse::from)
                 .orElseThrow(() -> new EntityNotFoundException("Delivery " + id + " does not exist."));
+    }
+
+    // Offline deliveries can arrive hours later, but a time far in the future or the past means a wrong
+    // device clock or a mistake, and would put the delivery in the wrong day or week.
+    private static void checkDeliveryTime(Instant deliveredAt) {
+        Instant now = Instant.now();
+        if (deliveredAt.isAfter(now.plus(MAX_CLOCK_AHEAD))) {
+            throw new BadRequestException(
+                    "deliveredAt is in the future. Check the date and time on the device.");
+        }
+        if (deliveredAt.isBefore(now.minus(MAX_SYNC_DELAY))) {
+            throw new BadRequestException(
+                    "deliveredAt is more than 7 days ago. Offline deliveries must be synced within 7 days.");
+        }
     }
 
     private Member activeMember(Long memberId) {

@@ -13,7 +13,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -235,12 +237,80 @@ class DeliveryServiceTest {
     @Test
     void deliveredAtFromDeviceIsKept() {
         givenOpenLot();
-        Instant offlineTime = Instant.parse("2026-10-08T06:15:00Z");
+        Instant offlineTime = Instant.now().minus(Duration.ofHours(5)).truncatedTo(ChronoUnit.SECONDS);
 
         RecordedDelivery result = service.record(
                 new DeliveryRequest(CLIENT_UUID, 5L, 1L, new BigDecimal("100"), offlineTime), manager);
 
         assertEquals(offlineTime, result.delivery().deliveredAt());
+    }
+
+    @Test
+    void deliveryRecordedOfflineDaysAgoIsAccepted() {
+        givenOpenLot();
+        Instant sixDaysAgo = Instant.now().minus(Duration.ofDays(6));
+
+        assertEquals(sixDaysAgo, recordAt(sixDaysAgo).delivery().deliveredAt());
+    }
+
+    @Test
+    void deviceClockSlightlyAheadIsAccepted() {
+        givenOpenLot();
+        Instant fourMinutesAhead = Instant.now().plus(Duration.ofMinutes(4));
+
+        assertEquals(fourMinutesAhead, recordAt(fourMinutesAhead).delivery().deliveredAt());
+    }
+
+    @Test
+    void deliveredAtInTheFutureIsRejected() {
+        givenOpenLot();
+
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> recordAt(Instant.now().plus(Duration.ofMinutes(10))));
+
+        assertEquals("deliveredAt is in the future. Check the date and time on the device.", e.getMessage());
+        verify(deliveryRepository, never()).save(any());
+    }
+
+    @Test
+    void deliveredAtMoreThanSevenDaysAgoIsRejected() {
+        givenOpenLot();
+
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> recordAt(Instant.now().minus(Duration.ofDays(7)).minus(Duration.ofMinutes(1))));
+
+        assertEquals("deliveredAt is more than 7 days ago. Offline deliveries must be synced within 7 days.",
+                e.getMessage());
+        verify(deliveryRepository, never()).save(any());
+    }
+
+    @Test
+    void alreadySavedDeliveryIsReturnedEvenWhenItsTimeIsOld() {
+        Lot lot = givenOpenLot();
+        Delivery existing = existingDelivery(lot);
+        existing.setDeliveredAt(Instant.now().minus(Duration.ofDays(10)));
+        when(deliveryRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(existing));
+
+        RecordedDelivery result = recordAt(existing.getDeliveredAt());
+
+        assertFalse(result.created());
+        assertEquals(42L, result.delivery().id());
+    }
+
+    private RecordedDelivery recordAt(Instant deliveredAt) {
+        return service.record(new DeliveryRequest(CLIENT_UUID, 5L, 1L, new BigDecimal("100"), deliveredAt), manager);
+    }
+
+    private Delivery existingDelivery(Lot lot) {
+        Delivery existing = new Delivery();
+        ReflectionTestUtils.setField(existing, "id", 42L);
+        existing.setClientUuid(CLIENT_UUID);
+        existing.setMember(member);
+        existing.setLot(lot);
+        existing.setQuantityKg(new BigDecimal("80.00"));
+        existing.setDeductionAmount(400L);
+        existing.setReceiptCode("RCT-7K2Q");
+        return existing;
     }
 
     private RecordedDelivery record(String quantityKg) {
