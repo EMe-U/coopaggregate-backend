@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -295,6 +296,34 @@ class DeliveryServiceTest {
 
         assertFalse(result.created());
         assertEquals(42L, result.delivery().id());
+    }
+
+    @Test
+    void sameOfflineDeliverySentThreeTimesIsSavedOnce() {
+        givenOpenLot();
+        // Behaves like the database: once saved, the delivery is found by its client UUID.
+        AtomicReference<Delivery> stored = new AtomicReference<>();
+        when(deliveryRepository.findByClientUuid(CLIENT_UUID))
+                .thenAnswer(invocation -> Optional.ofNullable(stored.get()));
+        when(deliveryRepository.save(any(Delivery.class))).thenAnswer(invocation -> {
+            Delivery delivery = invocation.getArgument(0);
+            ReflectionTestUtils.setField(delivery, "id", 100L);
+            stored.set(delivery);
+            return delivery;
+        });
+        Instant recordedOffline = Instant.now().minus(Duration.ofHours(3));
+
+        RecordedDelivery first = recordAt(recordedOffline);
+        RecordedDelivery second = recordAt(recordedOffline);
+        RecordedDelivery third = recordAt(recordedOffline);
+
+        assertTrue(first.created());
+        assertFalse(second.created());
+        assertFalse(third.created());
+        assertEquals(first.delivery(), second.delivery());
+        assertEquals(first.delivery(), third.delivery());
+        verify(deliveryRepository, times(1)).save(any(Delivery.class));
+        verify(ledgerService, times(1)).record(any(), any(), any(), any(), any(), any(), any());
     }
 
     private RecordedDelivery recordAt(Instant deliveredAt) {
