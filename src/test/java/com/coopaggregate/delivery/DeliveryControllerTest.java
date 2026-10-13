@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
@@ -26,10 +27,12 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 
 import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.config.SecurityConfig;
+import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.manager.Manager;
 
 @WebMvcTest(DeliveryController.class)
@@ -121,6 +124,86 @@ class DeliveryControllerTest {
                 .andExpect(status().isUnauthorized());
 
         verifyNoInteractions(deliveryService);
+    }
+
+    // Errors that will never succeed on retry must come back as 4xx with a message, never as 500.
+
+    @Test
+    void malformedClientUuidReturns400() throws Exception {
+        postDelivery("""
+                {"clientUuid": "not-a-uuid", "memberId": 5, "gradeId": 1, "quantityKg": 120.5}
+                """)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        "The request is missing data or has a value in the wrong format."));
+
+        verifyNoInteractions(deliveryService);
+    }
+
+    @Test
+    void deliveredAtWithoutTimeZoneReturns400() throws Exception {
+        postDelivery("""
+                {"clientUuid": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "memberId": 5, "gradeId": 1,
+                 "quantityKg": 120.5, "deliveredAt": "2026-10-13T08:00:00"}
+                """)
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(deliveryService);
+    }
+
+    @Test
+    void quantityThatIsNotANumberReturns400() throws Exception {
+        postDelivery("""
+                {"clientUuid": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "memberId": 5, "gradeId": 1,
+                 "quantityKg": "a lot"}
+                """)
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void inactiveMemberReturns400WithMessage() throws Exception {
+        when(deliveryService.record(any(), any())).thenThrow(new BadRequestException(
+                "Member M-0005 is inactive. Activate the member before recording a delivery."));
+
+        postDelivery(VALID_BODY)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        "Member M-0005 is inactive. Activate the member before recording a delivery."));
+    }
+
+    @Test
+    void unknownGradeReturns400WithMessage() throws Exception {
+        when(deliveryService.record(any(), any())).thenThrow(new BadRequestException("Grade 9 does not exist."));
+
+        postDelivery(VALID_BODY)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Grade 9 does not exist."));
+    }
+
+    @Test
+    void deliveryTimeOutsideTheWindowReturns400WithMessage() throws Exception {
+        when(deliveryService.record(any(), any())).thenThrow(new BadRequestException(
+                "deliveredAt is more than 7 days ago. Offline deliveries must be synced within 7 days."));
+
+        postDelivery(VALID_BODY)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        "deliveredAt is more than 7 days ago. Offline deliveries must be synced within 7 days."));
+    }
+
+    @Test
+    void uniqueKeyClashReturns409InsteadOf500() throws Exception {
+        when(deliveryService.record(any(), any())).thenThrow(
+                new DataIntegrityViolationException("duplicate key value violates unique constraint"));
+
+        postDelivery(VALID_BODY)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("The request conflicts with existing data."));
+    }
+
+    private ResultActions postDelivery(String body) throws Exception {
+        return mockMvc.perform(post("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                .contentType(MediaType.APPLICATION_JSON).content(body));
     }
 
     private static DeliveryResponse response() {
