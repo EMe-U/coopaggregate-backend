@@ -1,5 +1,6 @@
 package com.coopaggregate.ledger;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -22,4 +23,7 @@ public interface LedgerEntryRepository extends JpaRepository<LedgerEntry, Long>,
     // Held until the transaction ends. Selecting 1 avoids mapping Postgres's void return type.
     @Query(value = "SELECT 1 FROM pg_advisory_xact_lock(:key)", nativeQuery = true)
     Integer lockForAppend(long key);
+
+    @Query("SELECT COUNT(e) FROM LedgerEntry e WHERE e.entryDate >= :from AND e.entryDate < :to")
+    long countBetween(Instant from, Instant to);
 }

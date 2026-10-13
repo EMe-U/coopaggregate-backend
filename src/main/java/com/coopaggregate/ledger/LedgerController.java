@@ -59,6 +59,12 @@ public class LedgerController {
         return ledgerQueryService.list(new LedgerFilter(type, memberId, lotId, from, to, search), page, size);
     }
 
+    @GetMapping("/summary")
+    @Operation(summary = "Number of entries, time of the latest entry and entries made today (Kigali time)")
+    public LedgerSummaryResponse summary() {
+        return ledgerQueryService.summary();
+    }
+
     @GetMapping("/verify")
     @Operation(summary = "Recompute every hash and check that the ledger has not been changed")
     public VerifyResult verify() {

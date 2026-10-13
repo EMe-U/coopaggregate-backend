@@ -76,6 +76,17 @@ public class LedgerQueryService {
     }
 
     @Transactional(readOnly = true)
+    public LedgerSummaryResponse summary() {
+        LocalDate today = KigaliTime.today();
+        // Entries are appended in order, so the highest id is also the latest entry.
+        Instant lastEntryAt = ledgerEntryRepository.findTopByOrderByIdDesc()
+                .map(LedgerEntry::getEntryDate)
+                .orElse(null);
+        return new LedgerSummaryResponse(ledgerEntryRepository.count(), lastEntryAt,
+                ledgerEntryRepository.countBetween(startOfDay(today), startOfDay(today.plusDays(1))));
+    }
+
+    @Transactional(readOnly = true)
     public LedgerEntryResponse toResponse(LedgerEntry entry) {
         return toResponses(List.of(entry)).get(0);
     }
