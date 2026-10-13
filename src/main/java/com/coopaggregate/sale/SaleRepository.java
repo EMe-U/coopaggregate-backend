@@ -2,6 +2,7 @@ package com.coopaggregate.sale;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -34,4 +35,7 @@ public interface SaleRepository extends JpaRepository<Sale, Long>, JpaSpecificat
 
     @Query("SELECT COUNT(DISTINCT s.buyer.id) FROM Sale s WHERE s.saleDate BETWEEN :from AND :to")
     long buyerCountBetween(LocalDate from, LocalDate to);
+
+    @EntityGraph(attributePaths = "lot")
+    List<Sale> findByIdIn(Collection<Long> ids);
 }

@@ -73,6 +73,6 @@ public class LedgerController {
                                        @AuthenticationPrincipal Jwt jwt) {
         Manager manager = authService.currentManager(jwt.getSubject());
         LedgerEntry reversal = ledgerService.reverse(id, request.reason(), manager);
-        return LedgerEntryResponse.from(reversal, null);
+        return ledgerQueryService.toResponse(reversal);
     }
 }

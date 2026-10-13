@@ -1,5 +1,7 @@
 package com.coopaggregate.delivery;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -22,4 +24,7 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
     @Override
     @EntityGraph(attributePaths = {"member", "lot", "lot.grade"})
     Page<Delivery> findAll(Specification<Delivery> spec, Pageable pageable);
+
+    @EntityGraph(attributePaths = {"member", "lot"})
+    List<Delivery> findByIdIn(Collection<Long> ids);
 }

@@ -3,9 +3,12 @@ package com.coopaggregate.ledger;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -19,11 +22,16 @@ import org.springframework.transaction.annotation.Transactional;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.delivery.Delivery;
+import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.loss.Loss;
+import com.coopaggregate.loss.LossRepository;
 import com.coopaggregate.payment.ProducePayment;
+import com.coopaggregate.payment.ProducePaymentRepository;
 import com.coopaggregate.sale.Sale;
 import com.coopaggregate.sale.SaleOrder;
+import com.coopaggregate.sale.SaleRepository;
 import com.coopaggregate.share.LotShare;
+import com.coopaggregate.share.LotShareRepository;
 
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
@@ -40,9 +48,21 @@ public class LedgerQueryService {
     private static final int MAX_PAGE_SIZE = 100;
 
     private final LedgerEntryRepository ledgerEntryRepository;
+    private final DeliveryRepository deliveryRepository;
+    private final LossRepository lossRepository;
+    private final SaleRepository saleRepository;
+    private final LotShareRepository lotShareRepository;
+    private final ProducePaymentRepository paymentRepository;
 
-    public LedgerQueryService(LedgerEntryRepository ledgerEntryRepository) {
+    public LedgerQueryService(LedgerEntryRepository ledgerEntryRepository, DeliveryRepository deliveryRepository,
+                              LossRepository lossRepository, SaleRepository saleRepository,
+                              LotShareRepository lotShareRepository, ProducePaymentRepository paymentRepository) {
         this.ledgerEntryRepository = ledgerEntryRepository;
+        this.deliveryRepository = deliveryRepository;
+        this.lossRepository = lossRepository;
+        this.saleRepository = saleRepository;
+        this.lotShareRepository = lotShareRepository;
+        this.paymentRepository = paymentRepository;
     }
 
     @Transactional(readOnly = true)
@@ -50,13 +70,84 @@ public class LedgerQueryService {
         PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
                 Sort.by(Sort.Direction.DESC, "id"));
         Page<LedgerEntry> entries = ledgerEntryRepository.findAll(matching(filter), pageRequest);
+        List<LedgerEntryResponse> responses = toResponses(entries.getContent());
+        return new PageResponse<>(responses, entries.getNumber(), entries.getSize(), entries.getTotalElements(),
+                entries.getTotalPages());
+    }
 
-        List<Long> entryIds = entries.map(LedgerEntry::getId).toList();
-        Map<Long, Long> reversalIdByEntryId = ledgerEntryRepository.findByReversesIdIn(entryIds).stream()
+    @Transactional(readOnly = true)
+    public LedgerEntryResponse toResponse(LedgerEntry entry) {
+        return toResponses(List.of(entry)).get(0);
+    }
+
+    // One lookup per kind of business record on the page, not one per entry.
+    List<LedgerEntryResponse> toResponses(List<LedgerEntry> entries) {
+        Map<Long, Long> reversalIdByEntryId = ledgerEntryRepository
+                .findByReversesIdIn(entries.stream().map(LedgerEntry::getId).toList()).stream()
                 .collect(Collectors.toMap(reversal -> reversal.getReverses().getId(), LedgerEntry::getId));
+        Map<String, Map<Long, LedgerReference>> references = references(entries);
 
-        return PageResponse.from(entries.map(
-                entry -> LedgerEntryResponse.from(entry, reversalIdByEntryId.get(entry.getId()))));
+        return entries.stream().map(entry -> {
+            LedgerReference reference = references
+                    .getOrDefault(entry.getRelatedEntityType(), Map.of())
+                    .getOrDefault(entry.getRelatedEntityId(), LedgerReference.NONE);
+            return new LedgerEntryResponse(
+                    entry.getId(),
+                    entry.getEntryDate(),
+                    entry.getEntryType(),
+                    describe(entry),
+                    reference.referenceCode(),
+                    reference.memberId(),
+                    reference.memberName(),
+                    reference.lotId(),
+                    reference.lotCode(),
+                    entry.getQuantityKg(),
+                    entry.getAmount(),
+                    entry.getCurrentHash().substring(0, 10),
+                    entry.getCurrentHash(),
+                    entry.getPreviousHash(),
+                    entry.getReverses() == null ? null : entry.getReverses().getId(),
+                    reversalIdByEntryId.get(entry.getId()));
+        }).toList();
+    }
+
+    private Map<String, Map<Long, LedgerReference>> references(List<LedgerEntry> entries) {
+        Map<String, Set<Long>> idsByType = new HashMap<>();
+        for (LedgerEntry entry : entries) {
+            if (entry.getRelatedEntityType() != null && entry.getRelatedEntityId() != null) {
+                idsByType.computeIfAbsent(entry.getRelatedEntityType(), type -> new HashSet<>())
+                        .add(entry.getRelatedEntityId());
+            }
+        }
+
+        Map<String, Map<Long, LedgerReference>> references = new HashMap<>();
+        idsByType.forEach((type, ids) -> references.put(type, switch (type) {
+            case "DELIVERY" -> deliveryRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
+                    Delivery::getId, d -> new LedgerReference(d.getReceiptCode(), d.getMember().getId(),
+                            d.getMember().getFullName(), d.getLot().getId(), d.getLot().getLotCode())));
+            case "LOSS" -> lossRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
+                    Loss::getId, loss -> new LedgerReference(null, null, null, loss.getLot().getId(),
+                            loss.getLot().getLotCode())));
+            case "SALE" -> saleRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
+                    Sale::getId, s -> new LedgerReference(s.getSaleCode(), null, null, s.getLot().getId(),
+                            s.getLot().getLotCode())));
+            case "LOT_SHARE" -> lotShareRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
+                    LotShare::getId, share -> new LedgerReference(null, share.getMember().getId(),
+                            share.getMember().getFullName(), share.getLot().getId(), share.getLot().getLotCode())));
+            case "PAYMENT" -> paymentRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
+                    ProducePayment::getId, p -> new LedgerReference(p.getPaymentCode(), p.getMember().getId(),
+                            p.getMember().getFullName(), null, null)));
+            default -> Map.of();
+        }));
+        return references;
+    }
+
+    private static String describe(LedgerEntry entry) {
+        if (entry.getEntryType() == LedgerEntryType.REVERSAL && entry.getReverses() != null) {
+            return "Reversal of entry #" + entry.getReverses().getId()
+                    + (entry.getReason() != null ? ": " + entry.getReason() : "");
+        }
+        return entry.getReason() != null ? entry.getReason() : entry.getEntryType().name();
     }
 
     // A ledger entry only points to its business record (related type and id), so the member, lot and

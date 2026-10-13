@@ -1,6 +1,7 @@
 package com.coopaggregate.payment;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -53,4 +54,7 @@ public interface ProducePaymentRepository extends JpaRepository<ProducePayment, 
 
     @Query("SELECT COALESCE(SUM(p.amount), 0) FROM ProducePayment p WHERE p.paymentDate BETWEEN :from AND :to")
     long paidBetween(LocalDate from, LocalDate to);
+
+    @EntityGraph(attributePaths = "member")
+    List<ProducePayment> findByIdIn(Collection<Long> ids);
 }
