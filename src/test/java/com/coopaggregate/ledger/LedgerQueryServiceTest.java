@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
@@ -170,11 +171,7 @@ class LedgerQueryServiceTest {
         loss.setLot(lotA);
         when(lossRepository.findByIdIn(Set.of(300L))).thenReturn(List.of(loss));
 
-        Sale sale = new Sale();
-        ReflectionTestUtils.setField(sale, "id", 400L);
-        sale.setSaleCode("SAL-9MNP");
-        sale.setLot(lotA);
-        when(saleRepository.findByIdIn(Set.of(400L))).thenReturn(List.of(sale));
+        when(saleRepository.findByIdIn(Set.of(400L))).thenReturn(List.of(sale(400L)));
 
         LotShare share = new LotShare();
         ReflectionTestUtils.setField(share, "id", 500L);
@@ -237,6 +234,56 @@ class LedgerQueryServiceTest {
         verify(deliveryRepository).findByIdIn(Set.of(100L));
     }
 
+    @Test
+    void saleEntriesShowTheBuyer() {
+        when(saleRepository.findByIdIn(Set.of(400L))).thenReturn(List.of(sale(400L)));
+        LedgerEntry saleEntry = entry(4L, LedgerEntryType.SALE, "SALE", 400L, "Sale SAL-9MNP");
+        LedgerEntry reversal = entry(8L, LedgerEntryType.REVERSAL, "SALE", 400L, "Wrong buyer");
+        reversal.setReverses(saleEntry);
+
+        List<LedgerEntryResponse> responses = service.toResponses(List.of(reversal, saleEntry));
+
+        assertEquals("Kalisa Traders", responses.get(0).buyerName());
+        assertEquals("Kalisa Traders", responses.get(1).buyerName());
+    }
+
+    @Test
+    void otherEntriesHaveNoBuyer() {
+        Loss loss = new Loss();
+        ReflectionTestUtils.setField(loss, "id", 300L);
+        loss.setLot(lotA);
+        when(lossRepository.findByIdIn(Set.of(300L))).thenReturn(List.of(loss));
+
+        LedgerEntryResponse response = service.toResponses(List.of(
+                entry(3L, LedgerEntryType.LOSS, "LOSS", 300L, "Loss from A-2026-01: ROT"))).get(0);
+
+        assertNull(response.buyerName());
+    }
+
+    @Test
+    void reversalShowsTypeOfTheEntryItReverses() {
+        LedgerEntry payment = entry(2L, LedgerEntryType.PAYMENT, "PAYMENT", 200L, "Payment PAY-0001 by CASH");
+        LedgerEntry reversal = entry(9L, LedgerEntryType.REVERSAL, "PAYMENT", 200L, "Paid twice");
+        // The reversal only holds a reference to the original, as when it is read from the database.
+        LedgerEntry reference = new LedgerEntry();
+        ReflectionTestUtils.setField(reference, "id", 2L);
+        reversal.setReverses(reference);
+        when(ledgerEntryRepository.findAllById(List.of(2L))).thenReturn(List.of(payment));
+
+        List<LedgerEntryResponse> responses = service.toResponses(List.of(reversal, payment));
+
+        assertEquals(LedgerEntryType.PAYMENT, responses.get(0).reversedType());
+        assertNull(responses.get(1).reversedType());
+        verify(ledgerEntryRepository).findAllById(List.of(2L));
+    }
+
+    @Test
+    void pageWithoutReversalsDoesNotLookUpReversedEntries() {
+        service.toResponses(List.of(entry(3L, LedgerEntryType.LOSS, "LOSS", 300L, "Loss")));
+
+        verify(ledgerEntryRepository, never()).findAllById(any());
+    }
+
     // --- Summary ---
 
     @Test
@@ -280,6 +327,17 @@ class LedgerQueryServiceTest {
 
     private static CriteriaQuery<?> deepQuery() {
         return mock(CriteriaQuery.class, RETURNS_DEEP_STUBS);
+    }
+
+    private Sale sale(Long id) {
+        Buyer buyer = new Buyer();
+        buyer.setName("Kalisa Traders");
+        Sale sale = new Sale();
+        ReflectionTestUtils.setField(sale, "id", id);
+        sale.setSaleCode("SAL-9MNP");
+        sale.setLot(lotA);
+        sale.setBuyer(buyer);
+        return sale;
     }
 
     private static void assertReference(LedgerEntryResponse response, String code, Long memberId, String memberName,

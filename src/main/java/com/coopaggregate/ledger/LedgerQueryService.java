@@ -97,6 +97,7 @@ public class LedgerQueryService {
                 .findByReversesIdIn(entries.stream().map(LedgerEntry::getId).toList()).stream()
                 .collect(Collectors.toMap(reversal -> reversal.getReverses().getId(), LedgerEntry::getId));
         Map<String, Map<Long, LedgerReference>> references = references(entries);
+        Map<Long, LedgerEntryType> reversedTypes = reversedTypes(entries);
 
         return entries.stream().map(entry -> {
             LedgerReference reference = references
@@ -106,10 +107,12 @@ public class LedgerQueryService {
                     entry.getId(),
                     entry.getEntryDate(),
                     entry.getEntryType(),
+                    entry.getReverses() == null ? null : reversedTypes.get(entry.getReverses().getId()),
                     describe(entry),
                     reference.referenceCode(),
                     reference.memberId(),
                     reference.memberName(),
+                    reference.buyerName(),
                     reference.lotId(),
                     reference.lotCode(),
                     entry.getQuantityKg(),
@@ -120,6 +123,19 @@ public class LedgerQueryService {
                     entry.getReverses() == null ? null : entry.getReverses().getId(),
                     reversalIdByEntryId.get(entry.getId()));
         }).toList();
+    }
+
+    // The entries that reversals cancel, loaded in one query instead of one per reversal.
+    private Map<Long, LedgerEntryType> reversedTypes(List<LedgerEntry> entries) {
+        List<Long> reversedIds = entries.stream()
+                .filter(entry -> entry.getReverses() != null)
+                .map(entry -> entry.getReverses().getId())
+                .toList();
+        if (reversedIds.isEmpty()) {
+            return Map.of();
+        }
+        return ledgerEntryRepository.findAllById(reversedIds).stream()
+                .collect(Collectors.toMap(LedgerEntry::getId, LedgerEntry::getEntryType));
     }
 
     private Map<String, Map<Long, LedgerReference>> references(List<LedgerEntry> entries) {
@@ -135,19 +151,20 @@ public class LedgerQueryService {
         idsByType.forEach((type, ids) -> references.put(type, switch (type) {
             case "DELIVERY" -> deliveryRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     Delivery::getId, d -> new LedgerReference(d.getReceiptCode(), d.getMember().getId(),
-                            d.getMember().getFullName(), d.getLot().getId(), d.getLot().getLotCode())));
+                            d.getMember().getFullName(), d.getLot().getId(), d.getLot().getLotCode(), null)));
             case "LOSS" -> lossRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     Loss::getId, loss -> new LedgerReference(null, null, null, loss.getLot().getId(),
-                            loss.getLot().getLotCode())));
+                            loss.getLot().getLotCode(), null)));
             case "SALE" -> saleRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     Sale::getId, s -> new LedgerReference(s.getSaleCode(), null, null, s.getLot().getId(),
-                            s.getLot().getLotCode())));
+                            s.getLot().getLotCode(), s.getBuyer().getName())));
             case "LOT_SHARE" -> lotShareRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     LotShare::getId, share -> new LedgerReference(null, share.getMember().getId(),
-                            share.getMember().getFullName(), share.getLot().getId(), share.getLot().getLotCode())));
+                            share.getMember().getFullName(), share.getLot().getId(), share.getLot().getLotCode(),
+                            null)));
             case "PAYMENT" -> paymentRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     ProducePayment::getId, p -> new LedgerReference(p.getPaymentCode(), p.getMember().getId(),
-                            p.getMember().getFullName(), null, null)));
+                            p.getMember().getFullName(), null, null, null)));
             default -> Map.of();
         }));
         return references;

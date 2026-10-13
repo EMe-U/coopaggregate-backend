@@ -36,6 +36,6 @@ public interface SaleRepository extends JpaRepository<Sale, Long>, JpaSpecificat
     @Query("SELECT COUNT(DISTINCT s.buyer.id) FROM Sale s WHERE s.saleDate BETWEEN :from AND :to")
     long buyerCountBetween(LocalDate from, LocalDate to);
 
-    @EntityGraph(attributePaths = "lot")
+    @EntityGraph(attributePaths = {"lot", "buyer"})
     List<Sale> findByIdIn(Collection<Long> ids);
 }
