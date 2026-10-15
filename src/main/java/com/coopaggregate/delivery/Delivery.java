@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import org.hibernate.annotations.CreationTimestamp;
 
+import com.coopaggregate.ledger.LedgerEntry;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.member.Member;
 
@@ -39,6 +40,17 @@ public class Delivery {
     private Long deductionAmount = 0L;
 
     private String receiptCode;
+
+    private Instant reversedAt;
+
+    private String reversalReason;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    private LedgerEntry reversalLedgerEntry;
+
+    // The delivery this one replaces, when it was recorded as a correction.
+    @ManyToOne(fetch = FetchType.LAZY)
+    private Delivery corrects;
 
     @CreationTimestamp
     @Column(updatable = false)
@@ -102,6 +114,37 @@ public class Delivery {
 
     public void setReceiptCode(String receiptCode) {
         this.receiptCode = receiptCode;
+    }
+
+    public boolean isReversed() {
+        return reversedAt != null;
+    }
+
+    public Instant getReversedAt() {
+        return reversedAt;
+    }
+
+    public String getReversalReason() {
+        return reversalReason;
+    }
+
+    public LedgerEntry getReversalLedgerEntry() {
+        return reversalLedgerEntry;
+    }
+
+    /** Marks this record as cancelled by the given REVERSAL ledger entry. */
+    public void markReversed(LedgerEntry reversal) {
+        this.reversedAt = reversal.getEntryDate();
+        this.reversalReason = reversal.getReason();
+        this.reversalLedgerEntry = reversal;
+    }
+
+    public Delivery getCorrects() {
+        return corrects;
+    }
+
+    public void setCorrects(Delivery corrects) {
+        this.corrects = corrects;
     }
 
     public Instant getCreatedAt() {
