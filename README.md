@@ -174,7 +174,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
 | GET | `/api/ledger/verify` | JWT | Recomputes every hash. Returns `{valid, checkedEntries, firstBrokenEntryId}` |
-| POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Adds a REVERSAL entry and returns it |
+| POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Reverses the entry through its business action (see Reversals) and returns the REVERSAL entry |
 | GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member |
@@ -199,11 +199,14 @@ ERD: see `docs/erd.png`.
 | POST | `/api/lots/{id}/share` | JWT | Saves the shares and marks the lot `SHARED`. Only once per lot |
 | GET | `/api/payments/balances?search=&status=` | JWT | Share, deductions, paid and balance per member with a shared lot, plus `totalOwedRwf` and `paidThisWeekRwf` |
 | POST | `/api/payments` | JWT | Pays a member. `201` when new, `200` when the same `clientUuid` was already recorded |
-| GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page) |
+| GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page). Reversed payments are listed with `reversed: true` |
+| POST | `/api/payments/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a payment; the member is owed the amount again |
 | GET | `/api/members/{id}/statement` | JWT | A member's shares, deductions, payments, amount owed and lots waiting for sharing |
 | POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
-| GET | `/api/deliveries?memberId=&lotId=&from=&to=&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional |
-| GET | `/api/deliveries/{id}` | JWT | One delivery |
+| GET | `/api/deliveries?memberId=&lotId=&from=&to=&includeReversed=false&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional. Reversed deliveries only with `includeReversed=true` |
+| GET | `/api/deliveries/{id}` | JWT | One delivery, also when it was reversed |
+| POST | `/api/deliveries/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a delivery recorded by mistake |
+| POST | `/api/deliveries/{id}/correct` | JWT | Body `{"reason", "memberId", "gradeId", "quantityKg"}`. Replaces a wrong delivery, returns the corrected one with `201` |
 
 More endpoints coming soon.
 
@@ -238,6 +241,28 @@ of its own data plus the previous entry's hash, so changing any past entry break
 chain and `GET /api/ledger/verify` reports the first broken entry. Mistakes are fixed
 with a REVERSAL entry that cancels the original. A reversal cannot be reversed, and an
 entry can only be reversed once.
+
+### Reversals
+
+A reversal changes the business data and the ledger together, in one transaction, so
+the totals and the ledger always agree. The reversed delivery or payment stays in its
+table for the history (`reversed: true`, `reversalReason`) but is no longer counted
+anywhere: lot kilograms, stock, the dashboard, sharing, member statements and balances.
+
+- **Delivery:** `POST /api/deliveries/{id}/reverse`. Only while the delivery's lot has no
+  sales, because sold potatoes and shared money already depend on the lot's kilograms
+  (otherwise `409`). Also `409` when the delivery is already reversed, or when the lot's
+  recorded losses would leave it with less than 0 kg.
+- **Correction:** `POST /api/deliveries/{id}/correct` reverses the delivery and saves the
+  corrected one in the same transaction: new receipt code, the open lot of its grade, the
+  same `deliveredAt`, its own `DELIVERY` ledger entry. The two are linked by `correctsId`
+  (on the new delivery) and `correctedById` (on the original). Same rules as a reversal.
+- **Payment:** `POST /api/payments/{id}/reverse`. The member's balance goes back up.
+- **Ledger:** `POST /api/ledger/{id}/reverse` does the same as the endpoints above for
+  `DELIVERY` and `PAYMENT` entries. `SHARE`, `SALE` and `LOSS` entries cannot be reversed
+  (`409`): a share has already divided the money, a sale cannot be undone once its lot is
+  shared, and a loss cannot be undone once its lot has sales. Sales and losses cannot be
+  reversed at all yet, because they have no place to record a reversal.
 
 ### Members
 
@@ -318,7 +343,8 @@ Request body for `POST /api/deliveries`:
   The member is linked through the delivery, not written into the reason, because ledger
   entries can never change.
 - `from` and `to` filter by delivery day in Kigali time (`yyyy-MM-dd`, both inclusive).
-- Deliveries cannot be edited or deleted. A mistake is corrected with a ledger reversal.
+- Deliveries cannot be edited or deleted. A mistake is fixed by reversing or correcting
+  the delivery (see Reversals).
 
 #### Offline sync
 
