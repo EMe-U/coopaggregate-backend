@@ -48,9 +48,11 @@ public class DeliveryController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @Parameter(description = "Last day, inclusive (yyyy-MM-dd, Kigali time)")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @Parameter(description = "Also list deliveries that were reversed (default false)")
+            @RequestParam(defaultValue = "false") boolean includeReversed,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return deliveryService.list(memberId, lotId, from, to, page, size);
+        return deliveryService.list(memberId, lotId, from, to, includeReversed, page, size);
     }
 
     @GetMapping("/{id}")

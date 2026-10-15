@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -43,6 +44,11 @@ import com.coopaggregate.member.MemberRepository;
 import com.coopaggregate.member.MemberStatus;
 import com.coopaggregate.setting.Setting;
 import com.coopaggregate.setting.SettingRepository;
+
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Path;
+import jakarta.persistence.criteria.Root;
 
 class DeliveryServiceTest {
 
@@ -367,6 +373,23 @@ class DeliveryServiceTest {
         assertEquals("A-" + year + "-02", response.lotCode());
         // The new lot opens on the sync day, not on the day the delivery was recorded offline.
         assertEquals(KigaliTime.today(), lot.getValue().getOpenDate());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deliveryListLeavesOutReversedDeliveriesUnlessAsked() {
+        Root<Delivery> root = mock(Root.class, RETURNS_DEEP_STUBS);
+        Path<Object> reversedAt = root.get("reversedAt");
+
+        CriteriaBuilder defaultList = mock(CriteriaBuilder.class);
+        DeliveryService.matching(null, null, null, null, false)
+                .toPredicate(root, mock(CriteriaQuery.class), defaultList);
+        verify(defaultList).isNull(reversedAt);
+
+        CriteriaBuilder withReversed = mock(CriteriaBuilder.class);
+        DeliveryService.matching(null, null, null, null, true)
+                .toPredicate(root, mock(CriteriaQuery.class), withReversed);
+        verify(withReversed, never()).isNull(reversedAt);
     }
 
     private RecordedDelivery recordAt(Instant deliveredAt) {

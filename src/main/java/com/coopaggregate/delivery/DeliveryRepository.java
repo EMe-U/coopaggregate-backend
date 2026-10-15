@@ -33,7 +33,7 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
     @Query("""
             SELECT new com.coopaggregate.delivery.GradeDeliveredKg(g.name, SUM(d.quantityKg))
             FROM Delivery d JOIN d.lot l JOIN l.grade g
-            WHERE d.deliveredAt >= :from AND d.deliveredAt < :to
+            WHERE d.deliveredAt >= :from AND d.deliveredAt < :to AND d.reversedAt IS NULL
             GROUP BY g.name
             """)
     List<GradeDeliveredKg> findKgByGradeBetween(Instant from, Instant to);

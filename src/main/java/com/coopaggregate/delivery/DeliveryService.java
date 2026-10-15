@@ -97,10 +97,11 @@ public class DeliveryService {
 
     @Transactional(readOnly = true)
     public PageResponse<DeliveryResponse> list(Long memberId, Long lotId, LocalDate from, LocalDate to,
-                                               int page, int size) {
+                                               boolean includeReversed, int page, int size) {
         PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
                 Sort.by(Sort.Direction.DESC, "deliveredAt", "id"));
-        return PageResponse.from(deliveryRepository.findAll(matching(memberId, lotId, from, to), pageRequest)
+        return PageResponse.from(deliveryRepository.findAll(matching(memberId, lotId, from, to, includeReversed),
+                pageRequest)
                 .map(DeliveryResponse::from));
     }
 
@@ -147,9 +148,13 @@ public class DeliveryService {
 
 
     // from and to are whole days in Kigali time; to is inclusive.
-    private static Specification<Delivery> matching(Long memberId, Long lotId, LocalDate from, LocalDate to) {
+    static Specification<Delivery> matching(Long memberId, Long lotId, LocalDate from, LocalDate to,
+                                            boolean includeReversed) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
+            if (!includeReversed) {
+                predicates.add(cb.isNull(root.get("reversedAt")));
+            }
             if (memberId != null) {
                 predicates.add(cb.equal(root.get("member").get("id"), memberId));
             }

@@ -52,7 +52,7 @@ public class StatementService {
                 .map(lot -> lotLine(lot, sharesByLot.get(lot.lotId()), lotTotals.get(lot.lotId())))
                 .toList();
         List<StatementResponse.PaymentLine> payments =
-                paymentRepository.findByMemberIdOrderByPaymentDateDescIdDesc(memberId).stream()
+                paymentRepository.findByMemberIdAndReversedAtIsNullOrderByPaymentDateDescIdDesc(memberId).stream()
                         .map(payment -> new StatementResponse.PaymentLine(payment.getPaymentCode(),
                                 payment.getPaymentDate(), payment.getAmount(), payment.getMethod(),
                                 payment.getReferenceNo()))

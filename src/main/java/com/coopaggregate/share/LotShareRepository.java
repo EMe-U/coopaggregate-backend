@@ -14,7 +14,7 @@ public interface LotShareRepository extends JpaRepository<LotShare, Long> {
             SELECT new com.coopaggregate.share.MemberDelivered(
                 m.id, m.fullName, m.memberCode, SUM(d.quantityKg), SUM(d.deductionAmount))
             FROM Delivery d JOIN d.member m
-            WHERE d.lot.id = :lotId
+            WHERE d.lot.id = :lotId AND d.reversedAt IS NULL
             GROUP BY m.id, m.fullName, m.memberCode
             ORDER BY SUM(d.quantityKg) DESC, m.id
             """)
@@ -25,7 +25,7 @@ public interface LotShareRepository extends JpaRepository<LotShare, Long> {
     @Query("""
             SELECT new com.coopaggregate.share.MemberLotKg(l.id, l.lotCode, l.status, SUM(d.quantityKg))
             FROM Delivery d JOIN d.lot l
-            WHERE d.member.id = :memberId
+            WHERE d.member.id = :memberId AND d.reversedAt IS NULL
             GROUP BY l.id, l.lotCode, l.status
             ORDER BY l.id DESC
             """)
