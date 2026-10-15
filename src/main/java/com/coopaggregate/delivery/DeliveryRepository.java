@@ -37,4 +37,7 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
             GROUP BY g.name
             """)
     List<GradeDeliveredKg> findKgByGradeBetween(Instant from, Instant to);
+
+    @Query("SELECT d.lot.id FROM Delivery d WHERE d.id = :id")
+    Optional<Long> findLotIdById(Long id);
 }

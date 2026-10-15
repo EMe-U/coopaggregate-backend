@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.common.PageResponse;
+import com.coopaggregate.ledger.ReverseRequest;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -70,5 +71,15 @@ public class DeliveryController {
                                                    @AuthenticationPrincipal Jwt jwt) {
         RecordedDelivery result = deliveryService.record(request, authService.currentManager(jwt.getSubject()));
         return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK).body(result.delivery());
+    }
+
+    @PostMapping("/{id}/reverse")
+    @Operation(summary = "Cancel a delivery recorded by mistake. It stays visible as reversed but is no longer "
+            + "counted. Not possible once its lot has sales")
+    public DeliveryResponse reverse(@PathVariable Long id, @Valid @RequestBody ReverseRequest request,
+                                    @AuthenticationPrincipal Jwt jwt) {
+        Delivery delivery = deliveryService.reverse(id, request.reason(),
+                authService.currentManager(jwt.getSubject()));
+        return DeliveryResponse.from(delivery);
     }
 }

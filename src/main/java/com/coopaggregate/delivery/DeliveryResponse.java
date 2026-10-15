@@ -24,7 +24,9 @@ public record DeliveryResponse(
         BigDecimal quantityKg,
         Long deductionRwf,
         Instant deliveredAt,
-        Instant syncedAt) {
+        Instant syncedAt,
+        boolean reversed,
+        String reversalReason) {
 
     public static DeliveryResponse from(Delivery delivery) {
         Member member = delivery.getMember();
@@ -43,6 +45,8 @@ public record DeliveryResponse(
                 delivery.getQuantityKg(),
                 delivery.getDeductionAmount(),
                 delivery.getDeliveredAt(),
-                delivery.getCreatedAt());
+                delivery.getCreatedAt(),
+                delivery.isReversed(),
+                delivery.getReversalReason());
     }
 }

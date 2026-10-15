@@ -17,6 +17,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -32,19 +33,24 @@ import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
+import com.coopaggregate.ledger.LedgerEntry;
+import com.coopaggregate.ledger.LedgerEntryRepository;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotRepository;
+import com.coopaggregate.lot.LotQuantities;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 import com.coopaggregate.member.MemberStatus;
+import com.coopaggregate.sale.SaleRepository;
 import com.coopaggregate.setting.Setting;
 import com.coopaggregate.setting.SettingRepository;
 
+import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Path;
@@ -58,6 +64,8 @@ class DeliveryServiceTest {
     private MemberRepository memberRepository;
     private LotRepository lotRepository;
     private LedgerService ledgerService;
+    private SaleRepository saleRepository;
+    private LedgerEntryRepository ledgerEntryRepository;
     private Setting setting;
     private Grade grade;
     private Member member;
@@ -97,8 +105,11 @@ class DeliveryServiceTest {
         when(lotRepository.save(any(Lot.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         manager = new Manager();
+        saleRepository = mock(SaleRepository.class);
+        ledgerEntryRepository = mock(LedgerEntryRepository.class);
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
-                new LotService(lotRepository, gradeRepository), ledgerService);
+                new LotService(lotRepository, gradeRepository), ledgerService, lotRepository, saleRepository,
+                ledgerEntryRepository);
     }
 
     @ParameterizedTest
@@ -390,6 +401,94 @@ class DeliveryServiceTest {
         DeliveryService.matching(null, null, null, null, true)
                 .toPredicate(root, mock(CriteriaQuery.class), withReversed);
         verify(withReversed, never()).isNull(reversedAt);
+    }
+
+    // --- Reversing a delivery ---
+
+    @Test
+    void reversingMarksTheDeliveryAndAddsALedgerReversal() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        LedgerEntry reversal = reversalEntry("Weighed twice");
+        when(ledgerService.reverse(77L, "Weighed twice", manager)).thenReturn(reversal);
+
+        Delivery reversed = service.reverse(42L, "Weighed twice", manager);
+
+        assertTrue(reversed.isReversed());
+        assertEquals("Weighed twice", reversed.getReversalReason());
+        assertEquals(reversal.getEntryDate(), reversed.getReversedAt());
+        assertEquals(reversal, reversed.getReversalLedgerEntry());
+        assertTrue(DeliveryResponse.from(reversed).reversed());
+    }
+
+    @Test
+    void deliveryOfALotWithSalesCannotBeReversed() {
+        givenStoredDelivery("100.00");
+        when(saleRepository.existsByLotId(3L)).thenReturn(true);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.reverse(42L, "Weighed twice", manager));
+
+        assertEquals("Lot A-2026-01 already has sales, so its deliveries can no longer be reversed or corrected.",
+                e.getMessage());
+        verify(ledgerService, never()).reverse(any(), any(), any());
+    }
+
+    @Test
+    void deliveryCannotBeReversedTwice() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.markReversed(reversalEntry("First time"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.reverse(42L, "Again", manager));
+
+        assertEquals("Delivery RCT-7K2Q has already been reversed.", e.getMessage());
+        verify(ledgerService, never()).reverse(any(), any(), any());
+    }
+
+    @Test
+    void reversalThatWouldLeaveLessThanZeroKgIsRefused() {
+        givenStoredDelivery("100.00");
+        // The lot holds 150 kg, of which 80 kg were lost: only 70 kg remain, less than the 100 kg delivery.
+        when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
+                new BigDecimal("150.00"), new BigDecimal("80.00"), null, null, null)));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.reverse(42L, "Weighed twice", manager));
+
+        assertEquals("Lot A-2026-01 would have less than 0 kg left, because some of its potatoes were already "
+                + "recorded as lost.", e.getMessage());
+    }
+
+    @Test
+    void reversingAnUnknownDeliveryIsNotFound() {
+        when(deliveryRepository.findLotIdById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(EntityNotFoundException.class, () -> service.reverse(99L, "Unknown", manager));
+    }
+
+    private Delivery givenStoredDelivery(String quantityKg) {
+        Lot lot = givenOpenLot();
+        Delivery delivery = existingDelivery(lot);
+        delivery.setQuantityKg(new BigDecimal(quantityKg));
+        when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.of(3L));
+        when(lotRepository.findForUpdateById(3L)).thenReturn(Optional.of(lot));
+        when(deliveryRepository.findById(42L)).thenReturn(Optional.of(delivery));
+        when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
+                new BigDecimal("500.00"), null, null, null, null)));
+        LedgerEntry entry = new LedgerEntry();
+        ReflectionTestUtils.setField(entry, "id", 77L);
+        when(ledgerEntryRepository.findFirstByEntryTypeAndRelatedEntityTypeAndRelatedEntityId(
+                LedgerEntryType.DELIVERY, "DELIVERY", 42L)).thenReturn(Optional.of(entry));
+        return delivery;
+    }
+
+    private static LedgerEntry reversalEntry(String reason) {
+        LedgerEntry reversal = new LedgerEntry();
+        ReflectionTestUtils.setField(reversal, "id", 90L);
+        reversal.setEntryType(LedgerEntryType.REVERSAL);
+        reversal.setEntryDate(Instant.parse("2026-10-15T09:00:00Z"));
+        reversal.setReason(reason);
+        return reversal;
     }
 
     private RecordedDelivery recordAt(Instant deliveredAt) {

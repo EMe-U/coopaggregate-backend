@@ -38,4 +38,6 @@ public interface SaleRepository extends JpaRepository<Sale, Long>, JpaSpecificat
 
     @EntityGraph(attributePaths = {"lot", "buyer"})
     List<Sale> findByIdIn(Collection<Long> ids);
+
+    boolean existsByLotId(Long lotId);
 }

@@ -21,13 +21,18 @@ import com.coopaggregate.common.ShortCodes;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
+import com.coopaggregate.ledger.LedgerEntry;
+import com.coopaggregate.ledger.LedgerEntryRepository;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
+import com.coopaggregate.lot.Lot;
+import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 import com.coopaggregate.member.MemberStatus;
+import com.coopaggregate.sale.SaleRepository;
 import com.coopaggregate.setting.SettingRepository;
 
 import jakarta.persistence.EntityNotFoundException;
@@ -46,16 +51,23 @@ public class DeliveryService {
     private final SettingRepository settingRepository;
     private final LotService lotService;
     private final LedgerService ledgerService;
+    private final LotRepository lotRepository;
+    private final SaleRepository saleRepository;
+    private final LedgerEntryRepository ledgerEntryRepository;
 
     public DeliveryService(DeliveryRepository deliveryRepository, MemberRepository memberRepository,
                            GradeRepository gradeRepository, SettingRepository settingRepository,
-                           LotService lotService, LedgerService ledgerService) {
+                           LotService lotService, LedgerService ledgerService, LotRepository lotRepository,
+                           SaleRepository saleRepository, LedgerEntryRepository ledgerEntryRepository) {
         this.deliveryRepository = deliveryRepository;
         this.memberRepository = memberRepository;
         this.gradeRepository = gradeRepository;
         this.settingRepository = settingRepository;
         this.lotService = lotService;
         this.ledgerService = ledgerService;
+        this.lotRepository = lotRepository;
+        this.saleRepository = saleRepository;
+        this.ledgerEntryRepository = ledgerEntryRepository;
     }
 
     @Transactional
@@ -110,6 +122,58 @@ public class DeliveryService {
         return deliveryRepository.findById(id)
                 .map(DeliveryResponse::from)
                 .orElseThrow(() -> new EntityNotFoundException("Delivery " + id + " does not exist."));
+    }
+
+    /**
+     * Cancels a delivery: it gets a REVERSAL ledger entry and is no longer counted anywhere. Only allowed while
+     * its lot has no sales, because sold potatoes and shared money already depend on the lot's kilograms.
+     */
+    @Transactional
+    public Delivery reverse(Long deliveryId, String reason, Manager manager) {
+        Lot lot = lockLotOf(deliveryId);
+        Delivery delivery = findDelivery(deliveryId);
+        checkCanChange(delivery, lot, BigDecimal.ZERO);
+        return markReversed(delivery, reason, manager);
+    }
+
+    // Sales and losses lock the lot too, so the checks below cannot be passed by two requests at once.
+    private Lot lockLotOf(Long deliveryId) {
+        Long lotId = deliveryRepository.findLotIdById(deliveryId)
+                .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
+        return lotRepository.findForUpdateById(lotId).orElseThrow();
+    }
+
+    private Delivery findDelivery(Long deliveryId) {
+        return deliveryRepository.findById(deliveryId)
+                .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
+    }
+
+    // addedBackKg is what a correction puts back into the same lot.
+    private void checkCanChange(Delivery delivery, Lot lot, BigDecimal addedBackKg) {
+        if (delivery.isReversed()) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has already been reversed.");
+        }
+        if (saleRepository.existsByLotId(lot.getId())) {
+            throw new IllegalStateException("Lot " + lot.getLotCode()
+                    + " already has sales, so its deliveries can no longer be reversed or corrected.");
+        }
+        BigDecimal remainingAfter = lotService.quantitiesOf(lot).remainingKg()
+                .subtract(delivery.getQuantityKg())
+                .add(addedBackKg);
+        if (remainingAfter.signum() < 0) {
+            throw new IllegalStateException("Lot " + lot.getLotCode() + " would have less than 0 kg left, because "
+                    + "some of its potatoes were already recorded as lost.");
+        }
+    }
+
+    private Delivery markReversed(Delivery delivery, String reason, Manager manager) {
+        LedgerEntry entry = ledgerEntryRepository
+                .findFirstByEntryTypeAndRelatedEntityTypeAndRelatedEntityId(
+                        LedgerEntryType.DELIVERY, "DELIVERY", delivery.getId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Delivery " + delivery.getReceiptCode() + " has no ledger entry to reverse."));
+        delivery.markReversed(ledgerService.reverse(entry.getId(), reason, manager));
+        return delivery;
     }
 
     // Offline deliveries can arrive hours later, but a time far in the future or the past means a wrong
