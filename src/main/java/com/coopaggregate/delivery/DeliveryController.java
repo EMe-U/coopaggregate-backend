@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.coopaggregate.auth.AuthService;
@@ -80,6 +81,16 @@ public class DeliveryController {
                                     @AuthenticationPrincipal Jwt jwt) {
         Delivery delivery = deliveryService.reverse(id, request.reason(),
                 authService.currentManager(jwt.getSubject()));
-        return DeliveryResponse.from(delivery);
+        return deliveryService.toResponse(delivery);
+    }
+
+    @PostMapping("/{id}/correct")
+    @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Replace a wrong delivery: the original is reversed and the corrected delivery is saved "
+            + "with a new receipt code in the open lot of its grade. Not possible once the original's lot has sales")
+    public DeliveryResponse correct(@PathVariable Long id, @Valid @RequestBody CorrectDeliveryRequest request,
+                                    @AuthenticationPrincipal Jwt jwt) {
+        return DeliveryResponse.from(
+                deliveryService.correct(id, request, authService.currentManager(jwt.getSubject())));
     }
 }

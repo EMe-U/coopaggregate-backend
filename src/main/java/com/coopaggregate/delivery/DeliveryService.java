@@ -7,7 +7,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -28,6 +32,7 @@ import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
+import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
@@ -114,14 +119,12 @@ public class DeliveryService {
                 Sort.by(Sort.Direction.DESC, "deliveredAt", "id"));
         return PageResponse.from(deliveryRepository.findAll(matching(memberId, lotId, from, to, includeReversed),
                 pageRequest)
-                .map(DeliveryResponse::from));
+                .map(this::toResponse));
     }
 
     @Transactional(readOnly = true)
     public DeliveryResponse get(Long id) {
-        return deliveryRepository.findById(id)
-                .map(DeliveryResponse::from)
-                .orElseThrow(() -> new EntityNotFoundException("Delivery " + id + " does not exist."));
+        return toResponse(findDelivery(id));
     }
 
     /**
@@ -134,6 +137,50 @@ public class DeliveryService {
         Delivery delivery = findDelivery(deliveryId);
         checkCanChange(delivery, lot, BigDecimal.ZERO);
         return markReversed(delivery, reason, manager);
+    }
+
+    /**
+     * Replaces a wrong delivery: the original is reversed and a corrected delivery is saved in its place, with
+     * a new receipt code, in the open lot of its grade, and linked to the original by corrects_id.
+     */
+    @Transactional
+    public Delivery correct(Long deliveryId, CorrectDeliveryRequest request, Manager manager) {
+        // Same lock order as a new delivery and closing a lot: the grade first, then the lot.
+        Grade grade = gradeRepository.findForUpdateById(request.gradeId())
+                .orElseThrow(() -> new BadRequestException("Grade " + request.gradeId() + " does not exist."));
+        Lot originalLot = lockLotOf(deliveryId);
+        Delivery original = findDelivery(deliveryId);
+        Member member = activeMember(request.memberId());
+
+        // A correction that stays in the same open lot puts its kilograms straight back into that lot.
+        boolean sameLot = originalLot.getStatus() == LotStatus.OPEN
+                && originalLot.getGrade().getId().equals(grade.getId());
+        checkCanChange(original, originalLot, sameLot ? request.quantityKg() : BigDecimal.ZERO);
+        markReversed(original, request.reason(), manager);
+
+        Delivery corrected = new Delivery();
+        corrected.setClientUuid(UUID.randomUUID());
+        corrected.setCorrects(original);
+        corrected.setMember(member);
+        corrected.setLot(lotService.findOrOpenLot(grade));
+        corrected.setDeliveredAt(original.getDeliveredAt());
+        corrected.setQuantityKg(request.quantityKg());
+        corrected.setDeductionAmount(deductionFor(request.quantityKg()));
+        corrected.setReceiptCode(ShortCodes.unique("RCT-", deliveryRepository::existsByReceiptCode));
+        Delivery saved = deliveryRepository.save(corrected);
+
+        ledgerService.record(LedgerEntryType.DELIVERY, "DELIVERY", saved.getId(), saved.getQuantityKg(),
+                saved.getDeductionAmount(),
+                "Delivery " + saved.getReceiptCode() + " corrects " + original.getReceiptCode(), manager);
+        return saved;
+    }
+
+    public DeliveryResponse toResponse(Delivery delivery) {
+        Long correctedById = deliveryRepository.findByCorrectsIdIn(List.of(delivery.getId())).stream()
+                .findFirst()
+                .map(Delivery::getId)
+                .orElse(null);
+        return DeliveryResponse.from(delivery, correctedById);
     }
 
     // Sales and losses lock the lot too, so the checks below cannot be passed by two requests at once.

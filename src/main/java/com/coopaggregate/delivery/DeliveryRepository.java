@@ -40,4 +40,6 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
 
     @Query("SELECT d.lot.id FROM Delivery d WHERE d.id = :id")
     Optional<Long> findLotIdById(Long id);
+
+    List<Delivery> findByCorrectsIdIn(Collection<Long> ids);
 }

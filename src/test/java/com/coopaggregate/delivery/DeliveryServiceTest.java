@@ -64,6 +64,7 @@ class DeliveryServiceTest {
     private MemberRepository memberRepository;
     private LotRepository lotRepository;
     private LedgerService ledgerService;
+    private GradeRepository gradeRepository;
     private SaleRepository saleRepository;
     private LedgerEntryRepository ledgerEntryRepository;
     private Setting setting;
@@ -78,7 +79,7 @@ class DeliveryServiceTest {
         memberRepository = mock(MemberRepository.class);
         lotRepository = mock(LotRepository.class);
         ledgerService = mock(LedgerService.class);
-        GradeRepository gradeRepository = mock(GradeRepository.class);
+        gradeRepository = mock(GradeRepository.class);
         SettingRepository settingRepository = mock(SettingRepository.class);
 
         grade = new Grade();
@@ -466,10 +467,96 @@ class DeliveryServiceTest {
         assertThrows(EntityNotFoundException.class, () -> service.reverse(99L, "Unknown", manager));
     }
 
+    // --- Correcting a delivery ---
+
+    @Test
+    void correctionMovesTheKilogramsToTheRightMemberAndGrade() {
+        Delivery original = givenStoredDelivery("100.00");
+        Member bosco = new Member();
+        ReflectionTestUtils.setField(bosco, "id", 6L);
+        bosco.setMemberCode("M-0006");
+        bosco.setFullName("Bosco Habimana");
+        when(memberRepository.findById(6L)).thenReturn(Optional.of(bosco));
+        Grade normal = new Grade();
+        ReflectionTestUtils.setField(normal, "id", 2L);
+        normal.setCode("B");
+        normal.setName("Normal");
+        when(gradeRepository.findForUpdateById(2L)).thenReturn(Optional.of(normal));
+        Lot lotB = new Lot();
+        ReflectionTestUtils.setField(lotB, "id", 8L);
+        lotB.setLotCode("B-2026-01");
+        lotB.setGrade(normal);
+        when(lotRepository.findFirstByGradeAndStatus(normal, LotStatus.OPEN)).thenReturn(Optional.of(lotB));
+        when(ledgerService.reverse(77L, "Wrong member and grade", manager)).thenReturn(reversalEntry("Wrong"));
+
+        Delivery corrected = service.correct(42L,
+                new CorrectDeliveryRequest("Wrong member and grade", 6L, 2L, new BigDecimal("95.50")), manager);
+
+        assertTrue(original.isReversed());
+        assertEquals(bosco, corrected.getMember());
+        assertEquals(lotB, corrected.getLot());
+        assertEquals(new BigDecimal("95.50"), corrected.getQuantityKg());
+        assertEquals(478L, corrected.getDeductionAmount());
+        assertEquals(original, corrected.getCorrects());
+        assertEquals(original.getDeliveredAt(), corrected.getDeliveredAt());
+        assertTrue(!corrected.getReceiptCode().equals(original.getReceiptCode()));
+        verify(ledgerService).record(LedgerEntryType.DELIVERY, "DELIVERY", 100L, new BigDecimal("95.50"), 478L,
+                "Delivery " + corrected.getReceiptCode() + " corrects RCT-7K2Q", manager);
+        assertEquals(42L, DeliveryResponse.from(corrected).correctsId());
+    }
+
+    @Test
+    void correctionInTheSameOpenLotCountsItsOwnKilograms() {
+        givenStoredDelivery("100.00");
+        // 150 kg delivered and 80 kg lost: removing the 100 kg delivery alone would go below 0,
+        // but the corrected 90 kg go back into the same lot.
+        when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
+                new BigDecimal("150.00"), new BigDecimal("80.00"), null, null, null)));
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
+
+        Delivery corrected = service.correct(42L,
+                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
+
+        assertEquals(new BigDecimal("90.00"), corrected.getQuantityKg());
+    }
+
+    @Test
+    void correctionIsBlockedOnceTheLotHasSales() {
+        givenStoredDelivery("100.00");
+        when(saleRepository.existsByLotId(3L)).thenReturn(true);
+
+        assertThrows(IllegalStateException.class, () -> service.correct(42L,
+                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager));
+
+        verify(deliveryRepository, never()).save(any());
+        verify(ledgerService, never()).reverse(any(), any(), any());
+    }
+
+    @Test
+    void correctionToAnInactiveMemberIsRejected() {
+        givenStoredDelivery("100.00");
+        member.setStatus(MemberStatus.INACTIVE);
+
+        assertThrows(BadRequestException.class, () -> service.correct(42L,
+                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager));
+        verify(ledgerService, never()).reverse(any(), any(), any());
+    }
+
+    @Test
+    void originalShowsWhichDeliveryCorrectedIt() {
+        Delivery original = givenStoredDelivery("100.00");
+        Delivery corrected = new Delivery();
+        ReflectionTestUtils.setField(corrected, "id", 43L);
+        when(deliveryRepository.findByCorrectsIdIn(List.of(42L))).thenReturn(List.of(corrected));
+
+        assertEquals(43L, service.toResponse(original).correctedById());
+    }
+
     private Delivery givenStoredDelivery(String quantityKg) {
         Lot lot = givenOpenLot();
         Delivery delivery = existingDelivery(lot);
         delivery.setQuantityKg(new BigDecimal(quantityKg));
+        delivery.setDeliveredAt(Instant.parse("2026-10-14T07:30:00Z"));
         when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.of(3L));
         when(lotRepository.findForUpdateById(3L)).thenReturn(Optional.of(lot));
         when(deliveryRepository.findById(42L)).thenReturn(Optional.of(delivery));

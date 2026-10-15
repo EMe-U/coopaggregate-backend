@@ -9,7 +9,7 @@ import com.coopaggregate.member.Member;
 
 /**
  * deliveredAt is when the delivery happened (the device time for offline deliveries); syncedAt is when the
- * server saved it.
+ * server saved it. correctsId and correctedById link a corrected delivery and the one it replaced.
  */
 public record DeliveryResponse(
         Long id,
@@ -26,9 +26,16 @@ public record DeliveryResponse(
         Instant deliveredAt,
         Instant syncedAt,
         boolean reversed,
-        String reversalReason) {
+        String reversalReason,
+        Long correctsId,
+        Long correctedById) {
 
     public static DeliveryResponse from(Delivery delivery) {
+        return from(delivery, null);
+    }
+
+    /** correctedById is the delivery that replaced this one, if it was corrected. */
+    public static DeliveryResponse from(Delivery delivery, Long correctedById) {
         Member member = delivery.getMember();
         Lot lot = delivery.getLot();
         Grade grade = lot.getGrade();
@@ -47,6 +54,8 @@ public record DeliveryResponse(
                 delivery.getDeliveredAt(),
                 delivery.getCreatedAt(),
                 delivery.isReversed(),
-                delivery.getReversalReason());
+                delivery.getReversalReason(),
+                delivery.getCorrects() == null ? null : delivery.getCorrects().getId(),
+                correctedById);
     }
 }
