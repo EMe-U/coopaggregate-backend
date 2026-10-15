@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -24,11 +25,15 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
+import com.coopaggregate.ledger.LedgerEntry;
+import com.coopaggregate.ledger.LedgerEntryRepository;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
+
+import jakarta.persistence.EntityNotFoundException;
 
 class PaymentServiceTest {
 
@@ -37,6 +42,7 @@ class PaymentServiceTest {
     private ProducePaymentRepository paymentRepository;
     private MemberRepository memberRepository;
     private LedgerService ledgerService;
+    private LedgerEntryRepository ledgerEntryRepository;
     private Member alice;
     private Manager manager;
     private PaymentService service;
@@ -61,7 +67,8 @@ class PaymentServiceTest {
         });
 
         manager = new Manager();
-        service = new PaymentService(paymentRepository, memberRepository, ledgerService);
+        ledgerEntryRepository = mock(LedgerEntryRepository.class);
+        service = new PaymentService(paymentRepository, memberRepository, ledgerService, ledgerEntryRepository);
     }
 
     @Test
@@ -224,6 +231,81 @@ class PaymentServiceTest {
         when(paymentRepository.findPaymentsByMember()).thenReturn(List.of(
                 new MemberAmount(1L, 1_000_000L), new MemberAmount(3L, 580_400L)));
         when(memberRepository.findAllById(any())).thenReturn(List.of(alice, bosco, carine));
+    }
+
+    // --- Reversing a payment ---
+
+    @Test
+    void reversingAPaymentMarksItAndAddsALedgerReversal() {
+        givenStoredPayment(200_000L);
+        LedgerEntry reversal = reversalEntry("Paid twice");
+        when(ledgerService.reverse(55L, "Paid twice", manager)).thenReturn(reversal);
+
+        ProducePayment reversed = service.reverse(9L, "Paid twice", manager);
+
+        assertTrue(reversed.isReversed());
+        assertEquals("Paid twice", reversed.getReversalReason());
+        assertEquals(reversal, reversed.getReversalLedgerEntry());
+        assertTrue(PaymentResponse.from(reversed).reversed());
+        verify(memberRepository).findForUpdateById(1L);
+    }
+
+    @Test
+    void reversedPaymentIsOwedAgain() {
+        ProducePayment payment = givenStoredPayment(200_000L);
+        // Behaves like the paidTo query: reversed payments are left out.
+        when(paymentRepository.paidTo(1L)).thenAnswer(invocation -> payment.isReversed() ? 0L : 200_000L);
+        when(paymentRepository.netSharesOf(1L)).thenReturn(1_451_000L);
+        when(ledgerService.reverse(55L, "Paid twice", manager)).thenReturn(reversalEntry("Paid twice"));
+
+        assertEquals(1_251_000L, service.owedTo(1L));
+        service.reverse(9L, "Paid twice", manager);
+
+        assertEquals(1_451_000L, service.owedTo(1L));
+    }
+
+    @Test
+    void paymentCannotBeReversedTwice() {
+        ProducePayment payment = givenStoredPayment(200_000L);
+        payment.markReversed(reversalEntry("First time"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.reverse(9L, "Again", manager));
+
+        assertEquals("Payment PAY-0009 has already been reversed.", e.getMessage());
+        verify(ledgerService, never()).reverse(any(), any(), any());
+    }
+
+    @Test
+    void reversingAnUnknownPaymentIsNotFound() {
+        when(paymentRepository.findMemberIdById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(EntityNotFoundException.class, () -> service.reverse(99L, "Unknown", manager));
+    }
+
+    private ProducePayment givenStoredPayment(long amount) {
+        ProducePayment payment = new ProducePayment();
+        ReflectionTestUtils.setField(payment, "id", 9L);
+        payment.setPaymentCode("PAY-0009");
+        payment.setMember(alice);
+        payment.setAmount(amount);
+        payment.setMethod(PaymentMethod.CASH);
+        when(paymentRepository.findMemberIdById(9L)).thenReturn(Optional.of(1L));
+        when(paymentRepository.findById(9L)).thenReturn(Optional.of(payment));
+        LedgerEntry entry = new LedgerEntry();
+        ReflectionTestUtils.setField(entry, "id", 55L);
+        when(ledgerEntryRepository.findFirstByEntryTypeAndRelatedEntityTypeAndRelatedEntityId(
+                LedgerEntryType.PAYMENT, "PAYMENT", 9L)).thenReturn(Optional.of(entry));
+        return payment;
+    }
+
+    private static LedgerEntry reversalEntry(String reason) {
+        LedgerEntry reversal = new LedgerEntry();
+        ReflectionTestUtils.setField(reversal, "id", 91L);
+        reversal.setEntryType(LedgerEntryType.REVERSAL);
+        reversal.setEntryDate(Instant.parse("2026-10-15T09:00:00Z"));
+        reversal.setReason(reason);
+        return reversal;
     }
 
     private RecordedPayment pay(long amount, PaymentMethod method, String reference) {

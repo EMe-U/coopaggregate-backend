@@ -21,12 +21,15 @@ import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.RwandanPhoneNumber;
 import com.coopaggregate.error.BadRequestException;
+import com.coopaggregate.ledger.LedgerEntry;
+import com.coopaggregate.ledger.LedgerEntryRepository;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 
+import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.Predicate;
 
 @Service
@@ -37,12 +40,14 @@ public class PaymentService {
     private final ProducePaymentRepository paymentRepository;
     private final MemberRepository memberRepository;
     private final LedgerService ledgerService;
+    private final LedgerEntryRepository ledgerEntryRepository;
 
     public PaymentService(ProducePaymentRepository paymentRepository, MemberRepository memberRepository,
-                          LedgerService ledgerService) {
+                          LedgerService ledgerService, LedgerEntryRepository ledgerEntryRepository) {
         this.paymentRepository = paymentRepository;
         this.memberRepository = memberRepository;
         this.ledgerService = ledgerService;
+        this.ledgerEntryRepository = ledgerEntryRepository;
     }
 
     @Transactional
@@ -92,6 +97,27 @@ public class PaymentService {
                 Sort.by(Sort.Direction.DESC, "paymentDate", "id"));
         return PageResponse.from(paymentRepository.findAll(matching(memberId, method), pageRequest)
                 .map(PaymentResponse::from));
+    }
+
+    /** Cancels a payment: it gets a REVERSAL ledger entry and the member is owed that amount again. */
+    @Transactional
+    public ProducePayment reverse(Long paymentId, String reason, Manager manager) {
+        // The same member lock as recording a payment, so a reversal and a new payment cannot overlap.
+        Long memberId = paymentRepository.findMemberIdById(paymentId)
+                .orElseThrow(() -> new EntityNotFoundException("Payment " + paymentId + " does not exist."));
+        memberRepository.findForUpdateById(memberId);
+        ProducePayment payment = paymentRepository.findById(paymentId).orElseThrow();
+        if (payment.isReversed()) {
+            throw new IllegalStateException("Payment " + payment.getPaymentCode() + " has already been reversed.");
+        }
+
+        LedgerEntry entry = ledgerEntryRepository
+                .findFirstByEntryTypeAndRelatedEntityTypeAndRelatedEntityId(
+                        LedgerEntryType.PAYMENT, "PAYMENT", payment.getId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Payment " + payment.getPaymentCode() + " has no ledger entry to reverse."));
+        payment.markReversed(ledgerService.reverse(entry.getId(), reason, manager));
+        return payment;
     }
 
     public long owedTo(Long memberId) {

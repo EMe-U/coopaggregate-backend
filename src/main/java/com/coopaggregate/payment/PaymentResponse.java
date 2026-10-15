@@ -15,7 +15,9 @@ public record PaymentResponse(
         PaymentMethod method,
         String reference,
         LocalDate paidAt,
-        Instant createdAt) {
+        Instant createdAt,
+        boolean reversed,
+        String reversalReason) {
 
     public static PaymentResponse from(ProducePayment payment) {
         Member member = payment.getMember();
@@ -29,6 +31,8 @@ public record PaymentResponse(
                 payment.getMethod(),
                 payment.getReferenceNo(),
                 payment.getPaymentDate(),
-                payment.getCreatedAt());
+                payment.getCreatedAt(),
+                payment.isReversed(),
+                payment.getReversalReason());
     }
 }

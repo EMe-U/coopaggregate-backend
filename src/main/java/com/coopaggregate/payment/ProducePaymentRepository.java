@@ -60,4 +60,7 @@ public interface ProducePaymentRepository extends JpaRepository<ProducePayment, 
 
     @EntityGraph(attributePaths = "member")
     List<ProducePayment> findByIdIn(Collection<Long> ids);
+
+    @Query("SELECT p.member.id FROM ProducePayment p WHERE p.id = :id")
+    Optional<Long> findMemberIdById(Long id);
 }
