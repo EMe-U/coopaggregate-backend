@@ -33,12 +33,14 @@ public class LedgerController {
 
     private final LedgerService ledgerService;
     private final LedgerQueryService ledgerQueryService;
+    private final LedgerReversalService ledgerReversalService;
     private final AuthService authService;
 
     public LedgerController(LedgerService ledgerService, LedgerQueryService ledgerQueryService,
-                            AuthService authService) {
+                            LedgerReversalService ledgerReversalService, AuthService authService) {
         this.ledgerService = ledgerService;
         this.ledgerQueryService = ledgerQueryService;
+        this.ledgerReversalService = ledgerReversalService;
         this.authService = authService;
     }
 
@@ -73,12 +75,13 @@ public class LedgerController {
 
     @PostMapping("/{id}/reverse")
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Correct a mistake by adding a REVERSAL entry that cancels the given entry")
+    @Operation(summary = "Reverse an entry through its business action: a DELIVERY or PAYMENT entry reverses the "
+            + "delivery or payment too. SHARE, SALE and LOSS entries cannot be reversed (409)")
     public LedgerEntryResponse reverse(@PathVariable Long id,
                                        @Valid @RequestBody ReverseRequest request,
                                        @AuthenticationPrincipal Jwt jwt) {
         Manager manager = authService.currentManager(jwt.getSubject());
-        LedgerEntry reversal = ledgerService.reverse(id, request.reason(), manager);
+        LedgerEntry reversal = ledgerReversalService.reverse(id, request.reason(), manager);
         return ledgerQueryService.toResponse(reversal);
     }
 }
