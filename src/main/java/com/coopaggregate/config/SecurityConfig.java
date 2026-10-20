@@ -33,6 +33,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/health").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                         .requestMatchers("/api/public/**").permitAll()
+                        // Protected by its own secret instead of a login, see InboundSmsController.
+                        .requestMatchers(HttpMethod.POST, "/api/sms/inbound").permitAll()
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         // Spring forwards errors here; without this, a 400 on a public endpoint would show as 401.
                         .requestMatchers("/error").permitAll()

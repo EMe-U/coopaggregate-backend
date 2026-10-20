@@ -45,4 +45,6 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
 
     List<Delivery> findByLotIdAndConfirmationStatusAndReversedAtIsNullOrderById(Long lotId,
                                                                               ConfirmationStatus status);
+
+    Optional<Delivery> findByReceiptCode(String receiptCode);
 }
