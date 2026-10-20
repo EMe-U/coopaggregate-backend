@@ -30,6 +30,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.config.SecurityConfig;
 
@@ -48,6 +49,12 @@ class MemberControllerTest {
 
     @MockitoBean
     private MemberService memberService;
+
+    @MockitoBean
+    private MemberPinService memberPinService;
+
+    @MockitoBean
+    private AuthService authService;
 
     private String bearerToken;
 
@@ -101,7 +108,8 @@ class MemberControllerTest {
     void createReturns201WithMember() throws Exception {
         when(memberService.create(any(MemberRequest.class))).thenReturn(new MemberResponse(
                 1L, "M-0001", "Uwimana Claudine", "+250788123456", null, null,
-                LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z")));
+                LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"),
+                false, false));
 
         mockMvc.perform(post("/api/members")
                         .header(HttpHeaders.AUTHORIZATION, bearerToken)

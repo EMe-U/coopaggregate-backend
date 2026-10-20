@@ -1,6 +1,8 @@
 package com.coopaggregate.member;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -12,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.common.PageResponse;
 
 import io.swagger.v3.oas.annotations.Operation;
@@ -27,9 +30,14 @@ import jakarta.validation.Valid;
 public class MemberController {
 
     private final MemberService memberService;
+    private final MemberPinService memberPinService;
+    private final AuthService authService;
 
-    public MemberController(MemberService memberService) {
+    public MemberController(MemberService memberService, MemberPinService memberPinService,
+                            AuthService authService) {
         this.memberService = memberService;
+        this.memberPinService = memberPinService;
+        this.authService = authService;
     }
 
     @GetMapping
@@ -79,5 +87,14 @@ public class MemberController {
     @Operation(summary = "Activate a member again")
     public MemberResponse activate(@PathVariable Long id) {
         return memberService.setActive(id, true);
+    }
+
+    @PostMapping("/{id}/pin")
+    @Operation(summary = "Set or reset the member's 4-digit PIN for confirming deliveries. A reset unlocks it. "
+            + "The PIN is never returned")
+    public MemberResponse setPin(@PathVariable Long id, @Valid @RequestBody PinRequest request,
+                                 @AuthenticationPrincipal Jwt jwt) {
+        return MemberResponse.from(
+                memberPinService.setPin(id, request.pin(), authService.currentManager(jwt.getSubject())));
     }
 }
