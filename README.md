@@ -296,7 +296,10 @@ Each member can have a 4-digit PIN to confirm their deliveries.
   - If it is wrong: correct or reverse it (see Reversals); that also closes the dispute.
   - A lot cannot be shared while it has open disputes: `POST /api/lots/{id}/share` returns
     `409` listing them.
-- Deliveries recorded before confirmations existed are `CONFIRMED` without a method.
+- Deliveries recorded before confirmations existed are `CONFIRMED` with method
+  `RECORDED_BEFORE_CONFIRMATION`, so they are not counted as waiting. The member never
+  confirmed them. Each delivery also has `confirmationLabel`, the text to show, for example
+  "Recorded before confirmation existed" or "Confirmed by member with PIN".
 
 ### SMS
 

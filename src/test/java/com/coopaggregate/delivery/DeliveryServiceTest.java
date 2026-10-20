@@ -600,6 +600,7 @@ class DeliveryServiceTest {
 
         assertEquals(ConfirmationStatus.CONFIRMED, response.confirmationStatus());
         assertEquals(ConfirmationMethod.PIN, response.confirmationMethod());
+        assertEquals("Confirmed by member with PIN", response.confirmationLabel());
         assertFalse(response.pinMismatch());
     }
 
