@@ -177,6 +177,10 @@ ERD: see `docs/erd.png`.
 | GET | `/api/health` | None | Returns `{"status":"OK"}` |
 | POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
+| POST | `/api/auth/change-password` | JWT | Body `{"currentPassword", "newPassword"}`. Returns `204` (see Authentication) |
+| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg}` |
+| PUT | `/api/settings` | JWT | Saves the settings (see Settings and change history) |
+| GET | `/api/settings/history?page=0&size=20` | JWT | Change history, newest first (max 100 per page) |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
 | GET | `/api/ledger/verify` | JWT | Recomputes every hash. Returns `{valid, checkedEntries, firstBrokenEntryId}` |
 | POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Reverses the entry through its business action (see Reversals) and returns the REVERSAL entry |
@@ -188,7 +192,8 @@ ERD: see `docs/erd.png`.
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
 | POST | `/api/members/{id}/pin` | JWT | Body `{"pin"}`. Sets or resets the member's 4-digit PIN; a reset unlocks it |
-| GET | `/api/grades` | JWT | Active grades `{id, code, name, floorPricePerKg}`, sorted by code. `floorPricePerKg` is `null` when not set |
+| GET | `/api/grades?includeInactive=false` | JWT | Grades `{id, code, name, nameRw, active, floorPricePerKg, description, sizeInfo, packaging}`, sorted by code. Only active ones unless `includeInactive=true`. `floorPricePerKg` is `null` when not set |
+| PUT | `/api/grades/{id}` | JWT | Body `{"name", "nameRw", "active", "floorPricePerKg", "description", "sizeInfo", "packaging"}`. Edits a grade. Grades A, B and C are fixed: they cannot be created or deleted |
 | GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold and remaining kg |
 | GET | `/api/lots/{id}` | JWT | One lot, with the kilograms each member delivered |
 | GET | `/api/lots/stock` | JWT | Stock balance: remaining, delivered, sold and lost kg, today's deliveries, lot counts and remaining kg per grade |
@@ -230,6 +235,20 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
   `{"message": "Invalid email or password"}`.
 - After 5 failed attempts for the same email, logins for that email are refused with
   `429` for 5 minutes. The counter is kept in memory and resets when the app restarts.
+- `POST /api/auth/change-password` needs the current password. The new one must have
+  8 to 72 characters and be different from the current one, otherwise `400` with a
+  clear message. Tokens already given out stay valid until they expire.
+
+### Settings and change history
+
+- `smsEnabled` (default `true`) turns the member SMS on or off.
+- `cooperativeEmail` and `location` are optional. `minOrderKg` (default 100) must be more than 0.
+- `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
+  duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
+- Every change to the settings or a grade, every password change and every member PIN
+  set or reset is written to the change history (`GET /api/settings/history`) with the
+  manager and the time, for example `smsEnabled: true -> false`. Passwords and PINs are
+  never written to it.
 
 ### Errors
 
