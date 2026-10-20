@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.ledger.ReverseRequest;
+import com.coopaggregate.member.PinRequest;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -92,5 +93,12 @@ public class DeliveryController {
                                     @AuthenticationPrincipal Jwt jwt) {
         return DeliveryResponse.from(
                 deliveryService.correct(id, request, authService.currentManager(jwt.getSubject())));
+    }
+
+    @PostMapping("/{id}/confirm")
+    @Operation(summary = "Confirm a pending delivery with the member's PIN. A wrong PIN counts as a failed attempt; "
+            + "3 in a row lock the PIN")
+    public DeliveryResponse confirm(@PathVariable Long id, @Valid @RequestBody PinRequest request) {
+        return deliveryService.toResponse(deliveryService.confirmWithPin(id, request.pin()));
     }
 }

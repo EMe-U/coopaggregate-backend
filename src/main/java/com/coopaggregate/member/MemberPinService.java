@@ -17,6 +17,8 @@ import jakarta.persistence.EntityNotFoundException;
 @Service
 public class MemberPinService {
 
+    public static final int MAX_FAILED_ATTEMPTS = 3;
+
     private final MemberRepository memberRepository;
     private final PasswordEncoder passwordEncoder;
     private final AuditLogRepository auditLogRepository;
@@ -39,5 +41,27 @@ public class MemberPinService {
         member.changePin(passwordEncoder.encode(pin), Instant.now());
         auditLogRepository.save(AuditLog.of(action, member, manager, null));
         return member;
+    }
+
+    /**
+     * Checks a PIN and counts the attempt: a correct PIN clears earlier failures, and the third wrong PIN in a
+     * row locks it. The caller must hold the member's row lock, so two checks at once cannot lose a count.
+     */
+    public PinCheck check(Member member, String pin) {
+        if (pin == null) {
+            return PinCheck.NOT_GIVEN;
+        }
+        if (!member.hasPin()) {
+            return PinCheck.NO_PIN;
+        }
+        if (member.isPinLocked()) {
+            return PinCheck.LOCKED;
+        }
+        if (passwordEncoder.matches(pin, member.getPinHash())) {
+            member.recordPinSuccess();
+            return PinCheck.CORRECT;
+        }
+        member.recordPinFailure(MAX_FAILED_ATTEMPTS, Instant.now());
+        return PinCheck.WRONG;
     }
 }

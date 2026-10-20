@@ -27,8 +27,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
@@ -44,6 +47,7 @@ import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
+import com.coopaggregate.member.MemberPinService;
 import com.coopaggregate.member.MemberRepository;
 import com.coopaggregate.member.MemberStatus;
 import com.coopaggregate.sale.SaleRepository;
@@ -65,6 +69,7 @@ class DeliveryServiceTest {
     private LotRepository lotRepository;
     private LedgerService ledgerService;
     private GradeRepository gradeRepository;
+    private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(4);
     private SaleRepository saleRepository;
     private LedgerEntryRepository ledgerEntryRepository;
     private Setting setting;
@@ -108,9 +113,12 @@ class DeliveryServiceTest {
         manager = new Manager();
         saleRepository = mock(SaleRepository.class);
         ledgerEntryRepository = mock(LedgerEntryRepository.class);
+        when(memberRepository.findForUpdateById(5L)).thenReturn(Optional.of(member));
+        MemberPinService memberPinService = new MemberPinService(memberRepository, encoder,
+                mock(AuditLogRepository.class));
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
                 new LotService(lotRepository, gradeRepository), ledgerService, lotRepository, saleRepository,
-                ledgerEntryRepository);
+                ledgerEntryRepository, memberPinService);
     }
 
     @ParameterizedTest
@@ -576,6 +584,160 @@ class DeliveryServiceTest {
         reversal.setEntryDate(Instant.parse("2026-10-15T09:00:00Z"));
         reversal.setReason(reason);
         return reversal;
+    }
+
+    // --- Confirming with the member's PIN ---
+
+    @Test
+    void correctPinConfirmsTheDelivery() {
+        givenOpenLot();
+        givenMemberPin("2580");
+
+        DeliveryResponse response = recordWithPin("2580").delivery();
+
+        assertEquals(ConfirmationStatus.CONFIRMED, response.confirmationStatus());
+        assertEquals(ConfirmationMethod.PIN, response.confirmationMethod());
+        assertFalse(response.pinMismatch());
+    }
+
+    @Test
+    void deliveryWithoutPinIsPending() {
+        givenOpenLot();
+        givenMemberPin("2580");
+
+        DeliveryResponse response = recordWithPin(null).delivery();
+
+        assertEquals(ConfirmationStatus.PENDING, response.confirmationStatus());
+        assertFalse(response.pinMismatch());
+        verify(memberRepository, never()).findForUpdateById(5L);
+    }
+
+    @Test
+    void wrongPinStillSavesTheDeliveryAsPending() {
+        givenOpenLot();
+        givenMemberPin("2580");
+
+        RecordedDelivery result = recordWithPin("1357");
+
+        assertTrue(result.created());
+        assertEquals(ConfirmationStatus.PENDING, result.delivery().confirmationStatus());
+        assertTrue(result.delivery().pinMismatch());
+        assertEquals(1, member.getPinFailedAttempts());
+        verify(deliveryRepository).save(any(Delivery.class));
+        verify(ledgerService).record(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void threeWrongPinsInARowLockThePin() {
+        givenOpenLot();
+        givenMemberPin("2580");
+
+        recordWithPin("1111");
+        recordWithPin("2222");
+        assertFalse(member.isPinLocked());
+        recordWithPin("3333");
+
+        assertTrue(member.isPinLocked());
+        // Once locked, even the right PIN only saves the delivery as pending until the PIN is reset.
+        DeliveryResponse afterLock = recordWithPin("2580").delivery();
+        assertEquals(ConfirmationStatus.PENDING, afterLock.confirmationStatus());
+        assertFalse(afterLock.pinMismatch());
+    }
+
+    @Test
+    void correctPinClearsEarlierFailures() {
+        givenOpenLot();
+        givenMemberPin("2580");
+
+        recordWithPin("1111");
+        recordWithPin("2222");
+        recordWithPin("2580");
+
+        assertEquals(0, member.getPinFailedAttempts());
+    }
+
+    @Test
+    void pinSentWithAnOfflineDeliveryConfirmsItWhenItSyncs() {
+        givenOpenLot();
+        givenMemberPin("2580");
+
+        DeliveryResponse response = service.record(new DeliveryRequest(CLIENT_UUID, 5L, 1L, new BigDecimal("100"),
+                Instant.now().minus(Duration.ofHours(6)), "2580"), manager).delivery();
+
+        assertEquals(ConfirmationStatus.CONFIRMED, response.confirmationStatus());
+    }
+
+    @Test
+    void pinForAMemberWithoutPinLeavesTheDeliveryPending() {
+        givenOpenLot();
+
+        DeliveryResponse response = recordWithPin("2580").delivery();
+
+        assertEquals(ConfirmationStatus.PENDING, response.confirmationStatus());
+        assertFalse(response.pinMismatch());
+    }
+
+    @Test
+    void pendingDeliveryCanBeConfirmedLaterWithThePin() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        givenMemberPin("2580");
+
+        service.confirmWithPin(42L, "2580");
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+        assertEquals(ConfirmationMethod.PIN, delivery.getConfirmationMethod());
+    }
+
+    @Test
+    void wrongPinWhenConfirmingIsCountedAndRejected() {
+        givenStoredDelivery("100.00");
+        givenMemberPin("2580");
+
+        WrongPinException e = assertThrows(WrongPinException.class, () -> service.confirmWithPin(42L, "1357"));
+
+        assertEquals("Wrong PIN. 2 attempt(s) left before the PIN is locked.", e.getMessage());
+        assertEquals(1, member.getPinFailedAttempts());
+    }
+
+    @Test
+    void wrongPinAttemptIsKeptWhenConfirmingFails() throws Exception {
+        // The exception rolls nothing back, so the failed attempt stays counted in the database.
+        Transactional transactional = DeliveryService.class.getMethod("confirmWithPin", Long.class, String.class)
+                .getAnnotation(Transactional.class);
+
+        assertEquals(List.of(WrongPinException.class), List.of(transactional.noRollbackFor()));
+    }
+
+    @Test
+    void lockedPinCannotConfirm() {
+        givenStoredDelivery("100.00");
+        givenMemberPin("2580");
+        member.recordPinFailure(3, Instant.now());
+        member.recordPinFailure(3, Instant.now());
+        member.recordPinFailure(3, Instant.now());
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.confirmWithPin(42L, "2580"));
+
+        assertEquals("The member's PIN is locked after 3 wrong attempts. Reset the PIN first.", e.getMessage());
+    }
+
+    @Test
+    void onlyAPendingDeliveryCanBeConfirmedWithThePin() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        givenMemberPin("2580");
+        delivery.confirm(ConfirmationMethod.SMS, Instant.now());
+
+        assertThrows(IllegalStateException.class, () -> service.confirmWithPin(42L, "2580"));
+    }
+
+    private void givenMemberPin(String pin) {
+        member.changePin(encoder.encode(pin), Instant.now());
+    }
+
+    private RecordedDelivery recordWithPin(String pin) {
+        return service.record(new DeliveryRequest(UUID.randomUUID(), 5L, 1L, new BigDecimal("100"), null, pin),
+                manager);
     }
 
     private RecordedDelivery recordAt(Instant deliveredAt) {

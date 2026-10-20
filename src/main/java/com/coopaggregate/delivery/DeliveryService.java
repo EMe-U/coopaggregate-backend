@@ -35,8 +35,10 @@ import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
+import com.coopaggregate.member.MemberPinService;
 import com.coopaggregate.member.MemberRepository;
 import com.coopaggregate.member.MemberStatus;
+import com.coopaggregate.member.PinCheck;
 import com.coopaggregate.sale.SaleRepository;
 import com.coopaggregate.setting.SettingRepository;
 
@@ -59,11 +61,13 @@ public class DeliveryService {
     private final LotRepository lotRepository;
     private final SaleRepository saleRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
+    private final MemberPinService memberPinService;
 
     public DeliveryService(DeliveryRepository deliveryRepository, MemberRepository memberRepository,
                            GradeRepository gradeRepository, SettingRepository settingRepository,
                            LotService lotService, LedgerService ledgerService, LotRepository lotRepository,
-                           SaleRepository saleRepository, LedgerEntryRepository ledgerEntryRepository) {
+                           SaleRepository saleRepository, LedgerEntryRepository ledgerEntryRepository,
+                           MemberPinService memberPinService) {
         this.deliveryRepository = deliveryRepository;
         this.memberRepository = memberRepository;
         this.gradeRepository = gradeRepository;
@@ -73,6 +77,7 @@ public class DeliveryService {
         this.lotRepository = lotRepository;
         this.saleRepository = saleRepository;
         this.ledgerEntryRepository = ledgerEntryRepository;
+        this.memberPinService = memberPinService;
     }
 
     @Transactional
@@ -90,11 +95,18 @@ public class DeliveryService {
 
         Instant deliveredAt = request.deliveredAt() != null ? request.deliveredAt() : Instant.now();
         checkDeliveryTime(deliveredAt);
-        Member member = activeMember(request.memberId());
+        // With a PIN the member row is locked, so failed attempts of deliveries syncing at once are all counted.
+        Member member = activeMember(request.memberId(), request.confirmationPin() != null);
 
         Delivery delivery = new Delivery();
         delivery.setClientUuid(request.clientUuid());
         delivery.setMember(member);
+        // A wrong or locked PIN never loses the delivery: it is saved as PENDING and confirmed later.
+        PinCheck pinCheck = memberPinService.check(member, request.confirmationPin());
+        if (pinCheck == PinCheck.CORRECT) {
+            delivery.confirm(ConfirmationMethod.PIN, Instant.now());
+        }
+        delivery.setPinMismatch(pinCheck == PinCheck.WRONG);
         // The lot is chosen when the delivery reaches the server, not from deliveredAt: an offline delivery
         // goes to the lot that is open for its grade at sync time, or opens a new one if that lot was closed
         // in the meantime. A closed lot may already be on sale, so its kilograms must not change.
@@ -150,7 +162,7 @@ public class DeliveryService {
                 .orElseThrow(() -> new BadRequestException("Grade " + request.gradeId() + " does not exist."));
         Lot originalLot = lockLotOf(deliveryId);
         Delivery original = findDelivery(deliveryId);
-        Member member = activeMember(request.memberId());
+        Member member = activeMember(request.memberId(), false);
 
         // A correction that stays in the same open lot puts its kilograms straight back into that lot.
         boolean sameLot = originalLot.getStatus() == LotStatus.OPEN
@@ -173,6 +185,33 @@ public class DeliveryService {
                 saved.getDeductionAmount(),
                 "Delivery " + saved.getReceiptCode() + " corrects " + original.getReceiptCode(), manager);
         return saved;
+    }
+
+    /** Confirms a PENDING delivery with the member's PIN, for example when the member was not there at first. */
+    @Transactional(noRollbackFor = WrongPinException.class)
+    public Delivery confirmWithPin(Long deliveryId, String pin) {
+        Delivery delivery = findDelivery(deliveryId);
+        if (delivery.isReversed()) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has been reversed.");
+        }
+        if (delivery.getConfirmationStatus() != ConfirmationStatus.PENDING) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is "
+                    + delivery.getConfirmationStatus() + ". Only a pending delivery can be confirmed with a PIN.");
+        }
+
+        Member member = memberRepository.findForUpdateById(delivery.getMember().getId()).orElseThrow();
+        switch (memberPinService.check(member, pin)) {
+            case CORRECT -> delivery.confirm(ConfirmationMethod.PIN, Instant.now());
+            case WRONG -> throw new WrongPinException(member.isPinLocked()
+                    ? "Wrong PIN. The PIN is now locked; the manager must reset it."
+                    : "Wrong PIN. " + (MemberPinService.MAX_FAILED_ATTEMPTS - member.getPinFailedAttempts())
+                            + " attempt(s) left before the PIN is locked.");
+            case LOCKED -> throw new IllegalStateException(
+                    "The member's PIN is locked after 3 wrong attempts. Reset the PIN first.");
+            case NO_PIN, NOT_GIVEN -> throw new BadRequestException(
+                    "Member " + member.getMemberCode() + " has no PIN yet. Set a PIN first.");
+        }
+        return delivery;
     }
 
     public DeliveryResponse toResponse(Delivery delivery) {
@@ -237,8 +276,11 @@ public class DeliveryService {
         }
     }
 
-    private Member activeMember(Long memberId) {
-        Member member = memberRepository.findById(memberId)
+    private Member activeMember(Long memberId, boolean lock) {
+        Optional<Member> found = lock
+                ? memberRepository.findForUpdateById(memberId)
+                : memberRepository.findById(memberId);
+        Member member = found
                 .orElseThrow(() -> new BadRequestException("Member " + memberId + " does not exist."));
         if (member.getStatus() != MemberStatus.ACTIVE) {
             throw new BadRequestException("Member " + member.getMemberCode()
