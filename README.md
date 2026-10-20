@@ -84,6 +84,11 @@ cd coopaggregate-backend
 | `MANAGER_NAME` | First start | Name of the manager account |
 | `MANAGER_EMAIL` | First start | Login email of the manager account |
 | `MANAGER_PASSWORD` | First start | Login password of the manager account |
+| `SMS_PROVIDER` | No | `log` (default: SMS are only saved in `sms_log`) or `africastalking` |
+| `AT_USERNAME` | With Africa's Talking | Africa's Talking username; `sandbox` for their sandbox |
+| `AT_API_KEY` | With Africa's Talking | Africa's Talking API key |
+| `AT_SENDER_ID` | No | Sender name shown on members' phones, if your account has one |
+| `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
 | `PORT` | No | HTTP port. Default: `8080` |
 
 The manager is the only user who logs in. On startup, if the `manager` table is empty,
@@ -182,6 +187,7 @@ ERD: see `docs/erd.png`.
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
+| POST | `/api/members/{id}/pin` | JWT | Body `{"pin"}`. Sets or resets the member's 4-digit PIN; a reset unlocks it |
 | GET | `/api/grades` | JWT | Active grades `{id, code, name, floorPricePerKg}`, sorted by code. `floorPricePerKg` is `null` when not set |
 | GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold and remaining kg |
 | GET | `/api/lots/{id}` | JWT | One lot, with the kilograms each member delivered |
@@ -207,6 +213,11 @@ ERD: see `docs/erd.png`.
 | GET | `/api/deliveries/{id}` | JWT | One delivery, also when it was reversed |
 | POST | `/api/deliveries/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a delivery recorded by mistake |
 | POST | `/api/deliveries/{id}/correct` | JWT | Body `{"reason", "memberId", "gradeId", "quantityKg"}`. Replaces a wrong delivery, returns the corrected one with `201` |
+| POST | `/api/deliveries/{id}/confirm` | JWT | Body `{"pin"}`. Confirms a pending delivery with the member's PIN |
+| POST | `/api/deliveries/{id}/dispute` | JWT | Body `{"reason", "note"}`. Records that the member says the delivery is wrong |
+| POST | `/api/deliveries/{id}/resolve-dispute` | JWT | Body `{"note"}`. Closes a dispute after checking the delivery is correct |
+| POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
+| GET | `/api/dashboard` | JWT | Numbers for the home screen, including disputed deliveries and confirmations pending for more than 48 hours |
 
 More endpoints coming soon.
 
@@ -241,6 +252,60 @@ of its own data plus the previous entry's hash, so changing any past entry break
 chain and `GET /api/ledger/verify` reports the first broken entry. Mistakes are fixed
 with a REVERSAL entry that cancels the original. A reversal cannot be reversed, and an
 entry can only be reversed once.
+
+### Member PIN and delivery confirmation
+
+Each member can have a 4-digit PIN to confirm their deliveries.
+
+- **PIN:** `POST /api/members/{id}/pin` sets or resets it. Exactly 4 digits; 4 equal digits
+  or digits in a row (`1234`, `4321`, ...) are refused. Only a BCrypt hash is stored and the
+  PIN is never returned or logged. Member responses show `hasPin` and `pinLocked`. Every set
+  and reset is written to `audit_log`.
+- **Confirming:** `POST /api/deliveries` accepts an optional `confirmationPin`, typed by the
+  member on the manager's device. This also works offline: the PIN travels with the
+  delivery when it syncs.
+  - Right PIN: the delivery is `CONFIRMED` (method `PIN`).
+  - No PIN, or the member has none: `PENDING`.
+  - Wrong PIN: the delivery is **still saved** (`PENDING`, `pinMismatch: true`) and the
+    attempt is counted. 3 wrong PINs in a row lock the PIN until the manager resets it.
+- `POST /api/deliveries/{id}/confirm` confirms a `PENDING` delivery later with the PIN
+  (wrong PIN `400` with the attempts left, locked PIN `409`).
+- **Disputes:** `POST /api/deliveries/{id}/dispute` records a member's complaint
+  (`WRONG_KG`, `WRONG_GRADE`, `NOT_MY_DELIVERY` or `OTHER`, with an optional note).
+  - If the record is right: `POST /api/deliveries/{id}/resolve-dispute` with a note puts it
+    back to `CONFIRMED` (method `MANAGER_REVIEW`).
+  - If it is wrong: correct or reverse it (see Reversals); that also closes the dispute.
+  - A lot cannot be shared while it has open disputes: `POST /api/lots/{id}/share` returns
+    `409` listing them.
+- Deliveries recorded before confirmations existed are `CONFIRMED` without a method.
+
+### SMS
+
+After a delivery is saved, the member gets one SMS in their language (`rw` or `en`):
+
+- Confirmed: "CoopAggregate: you confirmed RCT-7K2Q, 300 kg Big, 19/10. If this was not
+  you, reply 2 RCT-7K2Q."
+- Pending: "CoopAggregate: RCT-7K2Q, 300 kg Big, 19/10. Reply 1 RCT-7K2Q if correct,
+  2 RCT-7K2Q if wrong."
+
+The SMS is sent in the background after the delivery is committed, so a failed SMS never
+fails or slows a delivery. Every message is saved in `sms_log` (`QUEUED`, `SENT` or
+`FAILED`) and failed ones are retried every 5 minutes, up to 5 attempts. No SMS are sent
+when SMS are turned off in the settings.
+
+`SMS_PROVIDER=log` (default) sends nothing; read the messages in `sms_log`.
+`SMS_PROVIDER=africastalking` sends them with Africa's Talking (`AT_USERNAME=sandbox` uses
+their sandbox and simulator).
+
+**Replies:** in the Africa's Talking dashboard, set the SMS callback URL to
+`https://<api-host>/api/sms/inbound?token=<SMS_INBOUND_SECRET>`. The secret can also be sent
+in the `X-Sms-Secret` header; without the right secret the webhook answers `403`.
+
+- `1 RCT-7K2Q` confirms a pending delivery (method `SMS`).
+- `2 RCT-7K2Q <note>` disputes it (reason `OTHER`, with the note), also when it was already
+  confirmed ("this was not me").
+- A reply only counts when it comes from the phone of the member who owns that delivery;
+  everything else is ignored.
 
 ### Reversals
 
@@ -531,6 +596,9 @@ Environment variables to set in Render:
 | `MANAGER_EMAIL` | Login email of the manager account |
 | `MANAGER_PASSWORD` | Login password of the manager account |
 | `JAVA_TOOL_OPTIONS` | `-XX:MaxRAMPercentage=75 -XX:+UseSerialGC` |
+| `SMS_PROVIDER` | `africastalking` to send real SMS, otherwise leave it unset |
+| `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
+| `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
 
 Do not set `PORT`; Render sets it. `JAVA_TOOL_OPTIONS` keeps the JVM within the
 512 MB memory limit of the free plan.
