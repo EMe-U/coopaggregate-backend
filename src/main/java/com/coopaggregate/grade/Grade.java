@@ -16,7 +16,13 @@ public class Grade {
 
     private String name;
 
+    private String nameRw;
+
     private String sizeDescription;
+
+    private String description;
+
+    private String packaging;
 
     private Long floorPricePerKg;
 
@@ -42,12 +48,36 @@ public class Grade {
         this.name = name;
     }
 
+    public String getNameRw() {
+        return nameRw;
+    }
+
+    public void setNameRw(String nameRw) {
+        this.nameRw = nameRw;
+    }
+
     public String getSizeDescription() {
         return sizeDescription;
     }
 
     public void setSizeDescription(String sizeDescription) {
         this.sizeDescription = sizeDescription;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public String getPackaging() {
+        return packaging;
+    }
+
+    public void setPackaging(String packaging) {
+        this.packaging = packaging;
     }
 
     public Long getFloorPricePerKg() {
