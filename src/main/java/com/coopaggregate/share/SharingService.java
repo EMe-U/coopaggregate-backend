@@ -6,6 +6,9 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.delivery.ConfirmationStatus;
+import com.coopaggregate.delivery.Delivery;
+import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
@@ -27,14 +30,17 @@ public class SharingService {
     private final LotService lotService;
     private final MemberRepository memberRepository;
     private final LedgerService ledgerService;
+    private final DeliveryRepository deliveryRepository;
 
     public SharingService(LotShareRepository lotShareRepository, LotRepository lotRepository, LotService lotService,
-                          MemberRepository memberRepository, LedgerService ledgerService) {
+                          MemberRepository memberRepository, LedgerService ledgerService,
+                          DeliveryRepository deliveryRepository) {
         this.lotShareRepository = lotShareRepository;
         this.lotRepository = lotRepository;
         this.lotService = lotService;
         this.memberRepository = memberRepository;
         this.ledgerService = ledgerService;
+        this.deliveryRepository = deliveryRepository;
     }
 
     @Transactional(readOnly = true)
@@ -51,6 +57,7 @@ public class SharingService {
         Lot lot = lotRepository.findForUpdateById(lotId)
                 .orElseThrow(() -> new EntityNotFoundException("Lot " + lotId + " does not exist."));
         checkCanBeShared(lot);
+        checkNoDisputes(lot);
 
         SharePreviewResponse result = calculate(lot);
         for (SharePreviewResponse.MemberShare member : result.members()) {
@@ -94,6 +101,19 @@ public class SharingService {
         return new SharePreviewResponse(lot.getLotCode(), lot.getGrade().getName(), quantities.deliveredKg(),
                 quantities.saleAmountRwf(), members,
                 new SharePreviewResponse.Totals(totalShare, totalDeduction, totalShare - totalDeduction));
+    }
+
+    // A disputed delivery may have the wrong member or kilograms, and shares cannot be changed once saved.
+    private void checkNoDisputes(Lot lot) {
+        List<String> disputed = deliveryRepository
+                .findByLotIdAndConfirmationStatusAndReversedAtIsNullOrderById(lot.getId(), ConfirmationStatus.DISPUTED)
+                .stream()
+                .map(Delivery::getReceiptCode)
+                .toList();
+        if (!disputed.isEmpty()) {
+            throw new IllegalStateException("Lot " + lot.getLotCode() + " has disputed deliveries: "
+                    + String.join(", ", disputed) + ". Resolve, correct or reverse them before sharing.");
+        }
     }
 
     private static void checkCanBeShared(Lot lot) {

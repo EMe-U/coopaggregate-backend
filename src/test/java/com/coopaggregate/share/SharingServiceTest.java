@@ -19,6 +19,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.delivery.ConfirmationStatus;
+import com.coopaggregate.delivery.Delivery;
+import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.ledger.LedgerEntryType;
@@ -36,6 +39,7 @@ class SharingServiceTest {
 
     private LotShareRepository lotShareRepository;
     private LedgerService ledgerService;
+    private DeliveryRepository deliveryRepository;
     private Lot lot;
     private Manager manager;
     private SharingService service;
@@ -78,7 +82,9 @@ class SharingServiceTest {
         });
 
         manager = new Manager();
-        service = new SharingService(lotShareRepository, lotRepository, lotService, memberRepository, ledgerService);
+        deliveryRepository = mock(DeliveryRepository.class);
+        service = new SharingService(lotShareRepository, lotRepository, lotService, memberRepository, ledgerService,
+                deliveryRepository);
     }
 
     @Test
@@ -148,6 +154,26 @@ class SharingServiceTest {
         lot.setStatus(LotStatus.OPEN);
 
         assertThrows(BadRequestException.class, () -> service.preview(3L));
+    }
+
+    @Test
+    void lotWithDisputedDeliveriesCannotBeShared() {
+        when(deliveryRepository.findByLotIdAndConfirmationStatusAndReversedAtIsNullOrderById(3L,
+                ConfirmationStatus.DISPUTED)).thenReturn(List.of(delivery("RCT-7K2Q"), delivery("RCT-9MNP")));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.share(3L, manager));
+
+        assertEquals("Lot A-2026-01 has disputed deliveries: RCT-7K2Q, RCT-9MNP. Resolve, correct or reverse "
+                + "them before sharing.", e.getMessage());
+        verify(lotShareRepository, never()).save(any());
+        verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
+        assertEquals(LotStatus.SOLD, lot.getStatus());
+    }
+
+    private static Delivery delivery(String receiptCode) {
+        Delivery delivery = new Delivery();
+        delivery.setReceiptCode(receiptCode);
+        return delivery;
     }
 
     @Test

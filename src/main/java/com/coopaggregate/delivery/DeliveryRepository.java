@@ -42,4 +42,7 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
     Optional<Long> findLotIdById(Long id);
 
     List<Delivery> findByCorrectsIdIn(Collection<Long> ids);
+
+    List<Delivery> findByLotIdAndConfirmationStatusAndReversedAtIsNullOrderById(Long lotId,
+                                                                              ConfirmationStatus status);
 }

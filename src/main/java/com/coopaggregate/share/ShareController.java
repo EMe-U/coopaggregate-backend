@@ -35,7 +35,8 @@ public class ShareController {
     }
 
     @PostMapping("/share")
-    @Operation(summary = "Share a sold lot: save each member's share and mark the lot SHARED. Can only be done once")
+    @Operation(summary = "Share a sold lot: save each member's share and mark the lot SHARED. Can only be done "
+            + "once, and not while the lot has disputed deliveries (409 lists them)")
     public SharePreviewResponse share(@PathVariable Long lotId, @AuthenticationPrincipal Jwt jwt) {
         return sharingService.share(lotId, authService.currentManager(jwt.getSubject()));
     }
