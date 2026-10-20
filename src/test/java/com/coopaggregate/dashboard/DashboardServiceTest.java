@@ -1,11 +1,15 @@
 package com.coopaggregate.dashboard;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -13,10 +17,12 @@ import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Sort;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.common.KigaliTime;
+import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.delivery.GradeDeliveredKg;
 import com.coopaggregate.grade.Grade;
@@ -150,6 +156,32 @@ class DashboardServiceTest {
 
         assertEquals(monday, lastWeekStart(service.dashboard(monday)));
         assertEquals(monday, lastWeekStart(service.dashboard(sunday)));
+    }
+
+    @Test
+    void confirmationProblemsAreCounted() {
+        when(deliveryRepository.countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus.DISPUTED))
+                .thenReturn(2L);
+        when(deliveryRepository.countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(
+                eq(ConfirmationStatus.PENDING), any())).thenReturn(5L);
+
+        DashboardResponse dashboard = service.dashboard(WEDNESDAY);
+
+        assertEquals(2, dashboard.disputedDeliveries());
+        assertEquals(5, dashboard.pendingConfirmationsOver48h());
+    }
+
+    @Test
+    void pendingCountUsesDeliveriesSavedMoreThan48HoursAgo() {
+        Instant before = Instant.now();
+
+        service.dashboard(WEDNESDAY);
+
+        ArgumentCaptor<Instant> cutoff = ArgumentCaptor.forClass(Instant.class);
+        verify(deliveryRepository).countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(
+                eq(ConfirmationStatus.PENDING), cutoff.capture());
+        Duration age = Duration.between(cutoff.getValue(), before);
+        assertTrue(age.compareTo(Duration.ofHours(47)) > 0 && age.compareTo(Duration.ofHours(48)) <= 0, age.toString());
     }
 
     @Test

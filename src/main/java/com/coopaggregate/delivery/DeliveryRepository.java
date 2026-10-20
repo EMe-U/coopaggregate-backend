@@ -47,4 +47,8 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
                                                                               ConfirmationStatus status);
 
     Optional<Delivery> findByReceiptCode(String receiptCode);
+
+    long countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus status);
+
+    long countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(ConfirmationStatus status, Instant before);
 }

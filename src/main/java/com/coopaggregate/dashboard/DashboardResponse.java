@@ -17,7 +17,9 @@ public record DashboardResponse(
         long membersAwaitingPayment,
         long lotsReadyToShare,
         long lotsReadyToSell,
-        List<WeekDeliveries> weeklyDeliveries) {
+        List<WeekDeliveries> weeklyDeliveries,
+        long disputedDeliveries,
+        long pendingConfirmationsOver48h) {
 
     public record GradeKg(String gradeName, BigDecimal kg) {
     }
