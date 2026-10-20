@@ -6,9 +6,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.coopaggregate.audit.AuditEntryResponse;
+import com.coopaggregate.audit.AuditService;
 import com.coopaggregate.auth.AuthService;
+import com.coopaggregate.common.PageResponse;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -22,10 +26,12 @@ import jakarta.validation.Valid;
 public class SettingController {
 
     private final SettingService settingService;
+    private final AuditService auditService;
     private final AuthService authService;
 
-    public SettingController(SettingService settingService, AuthService authService) {
+    public SettingController(SettingService settingService, AuditService auditService, AuthService authService) {
         this.settingService = settingService;
+        this.auditService = auditService;
         this.authService = authService;
     }
 
@@ -39,5 +45,13 @@ public class SettingController {
     @Operation(summary = "Save the settings. committeeEmails: at most 10 valid emails")
     public SettingsResponse update(@Valid @RequestBody SettingsRequest request, @AuthenticationPrincipal Jwt jwt) {
         return settingService.update(request, authService.currentManager(jwt.getSubject()));
+    }
+
+    @GetMapping("/history")
+    @Operation(summary = "Change history, newest first (max 100 per page): settings, grades, password changes and "
+            + "member PINs")
+    public PageResponse<AuditEntryResponse> history(@RequestParam(defaultValue = "0") int page,
+                                                    @RequestParam(defaultValue = "20") int size) {
+        return auditService.history(page, size);
     }
 }

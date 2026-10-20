@@ -25,6 +25,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import com.coopaggregate.audit.AuditService;
 import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.config.SecurityConfig;
@@ -45,6 +46,9 @@ class SettingControllerTest {
 
     @MockitoBean
     private AuthService authService;
+
+    @MockitoBean
+    private AuditService auditService;
 
     private String bearerToken;
 
