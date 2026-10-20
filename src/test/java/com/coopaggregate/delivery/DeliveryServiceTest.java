@@ -731,6 +731,88 @@ class DeliveryServiceTest {
         assertThrows(IllegalStateException.class, () -> service.confirmWithPin(42L, "2580"));
     }
 
+    // --- Disputes ---
+
+    @Test
+    void confirmedDeliveryCanBeDisputed() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.confirm(ConfirmationMethod.PIN, Instant.now());
+
+        service.dispute(42L, DisputeReason.WRONG_KG, "  Was 80 kg, not 100  ");
+
+        assertEquals(ConfirmationStatus.DISPUTED, delivery.getConfirmationStatus());
+        assertEquals(DisputeReason.WRONG_KG, delivery.getDisputeReason());
+        assertEquals("Was 80 kg, not 100", delivery.getDisputeNote());
+        assertTrue(delivery.getDisputedAt() != null);
+    }
+
+    @Test
+    void deliveryCannotBeDisputedTwice() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.dispute(DisputeReason.OTHER, null, Instant.now());
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.dispute(42L, DisputeReason.WRONG_GRADE, null));
+
+        assertEquals("Delivery RCT-7K2Q is already disputed.", e.getMessage());
+    }
+
+    @Test
+    void reversedDeliveryCannotBeDisputed() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.markReversed(reversalEntry("Gone"));
+
+        assertThrows(IllegalStateException.class, () -> service.dispute(42L, DisputeReason.OTHER, null));
+    }
+
+    @Test
+    void checkedDisputeGoesBackToConfirmedByManagerReview() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.dispute(DisputeReason.WRONG_KG, "Says 80 kg", Instant.now());
+
+        service.resolveDispute(42L, "Scale receipt shows 100 kg");
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+        assertEquals(ConfirmationMethod.MANAGER_REVIEW, delivery.getConfirmationMethod());
+        assertEquals("Scale receipt shows 100 kg", delivery.getResolutionNote());
+        assertEquals(DisputeReason.WRONG_KG, delivery.getDisputeReason());
+    }
+
+    @Test
+    void onlyADisputedDeliveryCanBeResolved() {
+        givenStoredDelivery("100.00");
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.resolveDispute(42L, "Checked"));
+
+        assertEquals("Delivery RCT-7K2Q is not disputed.", e.getMessage());
+    }
+
+    @Test
+    void reversingADisputedDeliveryClosesTheDispute() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.dispute(DisputeReason.NOT_MY_DELIVERY, null, Instant.now());
+        when(ledgerService.reverse(77L, "Recorded for the wrong member", manager))
+                .thenReturn(reversalEntry("Recorded for the wrong member"));
+
+        service.reverse(42L, "Recorded for the wrong member", manager);
+
+        assertTrue(delivery.isReversed());
+        assertEquals("Reversed: Recorded for the wrong member", delivery.getResolutionNote());
+    }
+
+    @Test
+    void correctingADisputedDeliveryClosesTheDispute() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.dispute(DisputeReason.WRONG_KG, "Was 90 kg", Instant.now());
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
+
+        Delivery corrected = service.correct(42L,
+                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
+
+        assertEquals("Corrected by " + corrected.getReceiptCode() + ": Weight", delivery.getResolutionNote());
+    }
+
     private void givenMemberPin(String pin) {
         member.changePin(encoder.encode(pin), Instant.now());
     }

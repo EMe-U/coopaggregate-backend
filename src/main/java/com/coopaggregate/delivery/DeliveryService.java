@@ -180,6 +180,9 @@ public class DeliveryService {
         corrected.setDeductionAmount(deductionFor(request.quantityKg()));
         corrected.setReceiptCode(ShortCodes.unique("RCT-", deliveryRepository::existsByReceiptCode));
         Delivery saved = deliveryRepository.save(corrected);
+        if (original.getConfirmationStatus() == ConfirmationStatus.DISPUTED) {
+            original.setResolutionNote("Corrected by " + saved.getReceiptCode() + ": " + request.reason());
+        }
 
         ledgerService.record(LedgerEntryType.DELIVERY, "DELIVERY", saved.getId(), saved.getQuantityKg(),
                 saved.getDeductionAmount(),
@@ -211,6 +214,37 @@ public class DeliveryService {
             case NO_PIN, NOT_GIVEN -> throw new BadRequestException(
                     "Member " + member.getMemberCode() + " has no PIN yet. Set a PIN first.");
         }
+        return delivery;
+    }
+
+    /** Records a member's complaint about a delivery, made in person or by SMS. */
+    @Transactional
+    public Delivery dispute(Long deliveryId, DisputeReason reason, String note) {
+        Delivery delivery = findDelivery(deliveryId);
+        if (delivery.isReversed()) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has been reversed.");
+        }
+        if (delivery.getConfirmationStatus() == ConfirmationStatus.DISPUTED) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is already disputed.");
+        }
+        delivery.dispute(reason, note == null || note.isBlank() ? null : note.trim(), Instant.now());
+        return delivery;
+    }
+
+    /**
+     * Closes a dispute after the manager checked the delivery and found it correct. A wrong delivery is fixed
+     * with correct or reverse instead, which also closes the dispute.
+     */
+    @Transactional
+    public Delivery resolveDispute(Long deliveryId, String note) {
+        Delivery delivery = findDelivery(deliveryId);
+        if (delivery.isReversed()) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has been reversed.");
+        }
+        if (delivery.getConfirmationStatus() != ConfirmationStatus.DISPUTED) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is not disputed.");
+        }
+        delivery.resolveDispute(note.trim(), Instant.now());
         return delivery;
     }
 
@@ -259,6 +293,9 @@ public class DeliveryService {
                 .orElseThrow(() -> new IllegalStateException(
                         "Delivery " + delivery.getReceiptCode() + " has no ledger entry to reverse."));
         delivery.markReversed(ledgerService.reverse(entry.getId(), reason, manager));
+        if (delivery.getConfirmationStatus() == ConfirmationStatus.DISPUTED) {
+            delivery.setResolutionNote("Reversed: " + reason);
+        }
         return delivery;
     }
 

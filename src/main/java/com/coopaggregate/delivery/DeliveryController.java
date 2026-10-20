@@ -101,4 +101,17 @@ public class DeliveryController {
     public DeliveryResponse confirm(@PathVariable Long id, @Valid @RequestBody PinRequest request) {
         return deliveryService.toResponse(deliveryService.confirmWithPin(id, request.pin()));
     }
+
+    @PostMapping("/{id}/dispute")
+    @Operation(summary = "Record that the member says a delivery is wrong. Disputed deliveries block sharing their lot")
+    public DeliveryResponse dispute(@PathVariable Long id, @Valid @RequestBody DisputeRequest request) {
+        return deliveryService.toResponse(deliveryService.dispute(id, request.reason(), request.note()));
+    }
+
+    @PostMapping("/{id}/resolve-dispute")
+    @Operation(summary = "Close a dispute after checking that the delivery is correct. A wrong delivery is fixed with "
+            + "correct or reverse instead")
+    public DeliveryResponse resolveDispute(@PathVariable Long id, @Valid @RequestBody ResolveDisputeRequest request) {
+        return deliveryService.toResponse(deliveryService.resolveDispute(id, request.note()));
+    }
 }
