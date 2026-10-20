@@ -150,6 +150,23 @@ class DashboardServiceTest {
     }
 
     @Test
+    void weekWithSeveralGradesListsEachGradeWithItsKg() {
+        when(deliveryRepository.findKgByGradeBetween(start(2026, 10, 12), start(2026, 10, 19))).thenReturn(List.of(
+                new GradeDeliveredKg("Small", new BigDecimal("40.00")),
+                new GradeDeliveredKg("Big", new BigDecimal("1200.50")),
+                new GradeDeliveredKg("Normal", new BigDecimal("310.25"))));
+        when(deliveryRepository.findKgByGradeBetween(start(2026, 10, 5), start(2026, 10, 12))).thenReturn(List.of(
+                new GradeDeliveredKg("Normal", new BigDecimal("90.00"))));
+
+        List<DashboardResponse.WeekDeliveries> weeks = service.dashboard(WEDNESDAY).weeklyDeliveries();
+
+        assertEquals(grades("1200.50", "310.25", "40.00"), weeks.get(3).grades());
+        assertEquals(grades("0", "90.00", "0"), weeks.get(2).grades());
+        weeks.forEach(week -> assertEquals(List.of("Big", "Normal", "Small"),
+                week.grades().stream().map(DashboardResponse.GradeKg::gradeName).toList()));
+    }
+
+    @Test
     void mondayAndSundayBelongToTheSameWeek() {
         LocalDate monday = LocalDate.of(2026, 10, 12);
         LocalDate sunday = LocalDate.of(2026, 10, 18);
