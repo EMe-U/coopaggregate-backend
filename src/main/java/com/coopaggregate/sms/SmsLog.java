@@ -4,6 +4,7 @@ import java.time.Instant;
 
 import org.hibernate.annotations.CreationTimestamp;
 
+import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.member.Member;
 
 import jakarta.persistence.Column;
@@ -26,12 +27,21 @@ public class SmsLog {
     @ManyToOne(fetch = FetchType.LAZY)
     private Member member;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    private Delivery delivery;
+
     private String phone;
 
     private String message;
 
     @Enumerated(EnumType.STRING)
-    private SmsStatus status = SmsStatus.PENDING;
+    private SmsStatus status = SmsStatus.QUEUED;
+
+    private String provider;
+
+    private int attempts;
+
+    private String lastError;
 
     private Instant sentAt;
 
@@ -49,6 +59,14 @@ public class SmsLog {
 
     public void setMember(Member member) {
         this.member = member;
+    }
+
+    public Delivery getDelivery() {
+        return delivery;
+    }
+
+    public void setDelivery(Delivery delivery) {
+        this.delivery = delivery;
     }
 
     public String getPhone() {
@@ -71,16 +89,35 @@ public class SmsLog {
         return status;
     }
 
-    public void setStatus(SmsStatus status) {
-        this.status = status;
+    public String getProvider() {
+        return provider;
+    }
+
+    public int getAttempts() {
+        return attempts;
+    }
+
+    public String getLastError() {
+        return lastError;
     }
 
     public Instant getSentAt() {
         return sentAt;
     }
 
-    public void setSentAt(Instant sentAt) {
-        this.sentAt = sentAt;
+    public void markSent(String provider, Instant now) {
+        this.attempts++;
+        this.provider = provider;
+        this.status = SmsStatus.SENT;
+        this.sentAt = now;
+        this.lastError = null;
+    }
+
+    public void markFailed(String provider, String error) {
+        this.attempts++;
+        this.provider = provider;
+        this.status = SmsStatus.FAILED;
+        this.lastError = error;
     }
 
     public Instant getCreatedAt() {
