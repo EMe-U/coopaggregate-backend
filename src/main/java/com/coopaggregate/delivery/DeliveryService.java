@@ -13,6 +13,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -62,12 +63,13 @@ public class DeliveryService {
     private final SaleRepository saleRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final MemberPinService memberPinService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public DeliveryService(DeliveryRepository deliveryRepository, MemberRepository memberRepository,
                            GradeRepository gradeRepository, SettingRepository settingRepository,
                            LotService lotService, LedgerService ledgerService, LotRepository lotRepository,
                            SaleRepository saleRepository, LedgerEntryRepository ledgerEntryRepository,
-                           MemberPinService memberPinService) {
+                           MemberPinService memberPinService, ApplicationEventPublisher eventPublisher) {
         this.deliveryRepository = deliveryRepository;
         this.memberRepository = memberRepository;
         this.gradeRepository = gradeRepository;
@@ -78,6 +80,7 @@ public class DeliveryService {
         this.saleRepository = saleRepository;
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.memberPinService = memberPinService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -121,6 +124,7 @@ public class DeliveryService {
         // through the delivery; a member number in the text would go stale if numbers were ever renamed.
         ledgerService.record(LedgerEntryType.DELIVERY, "DELIVERY", saved.getId(),
                 saved.getQuantityKg(), saved.getDeductionAmount(), "Delivery " + saved.getReceiptCode(), manager);
+        eventPublisher.publishEvent(new DeliveryRecordedEvent(saved.getId()));
         return new RecordedDelivery(DeliveryResponse.from(saved), true);
     }
 
@@ -187,6 +191,7 @@ public class DeliveryService {
         ledgerService.record(LedgerEntryType.DELIVERY, "DELIVERY", saved.getId(), saved.getQuantityKg(),
                 saved.getDeductionAmount(),
                 "Delivery " + saved.getReceiptCode() + " corrects " + original.getReceiptCode(), manager);
+        eventPublisher.publishEvent(new DeliveryRecordedEvent(saved.getId()));
         return saved;
     }
 

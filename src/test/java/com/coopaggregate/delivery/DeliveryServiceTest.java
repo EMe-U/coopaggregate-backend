@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
@@ -69,6 +70,7 @@ class DeliveryServiceTest {
     private LotRepository lotRepository;
     private LedgerService ledgerService;
     private GradeRepository gradeRepository;
+    private ApplicationEventPublisher eventPublisher;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(4);
     private SaleRepository saleRepository;
     private LedgerEntryRepository ledgerEntryRepository;
@@ -114,11 +116,12 @@ class DeliveryServiceTest {
         saleRepository = mock(SaleRepository.class);
         ledgerEntryRepository = mock(LedgerEntryRepository.class);
         when(memberRepository.findForUpdateById(5L)).thenReturn(Optional.of(member));
+        eventPublisher = mock(ApplicationEventPublisher.class);
         MemberPinService memberPinService = new MemberPinService(memberRepository, encoder,
                 mock(AuditLogRepository.class));
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
                 new LotService(lotRepository, gradeRepository), ledgerService, lotRepository, saleRepository,
-                ledgerEntryRepository, memberPinService);
+                ledgerEntryRepository, memberPinService, eventPublisher);
     }
 
     @ParameterizedTest
@@ -811,6 +814,38 @@ class DeliveryServiceTest {
                 new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
 
         assertEquals("Corrected by " + corrected.getReceiptCode() + ": Weight", delivery.getResolutionNote());
+    }
+
+    // --- SMS after the delivery is saved ---
+
+    @Test
+    void newDeliveryAnnouncesItselfForTheSms() {
+        givenOpenLot();
+
+        record("100");
+
+        verify(eventPublisher).publishEvent(new DeliveryRecordedEvent(100L));
+    }
+
+    @Test
+    void repeatedOfflineDeliveryDoesNotSendASecondSms() {
+        Lot lot = givenOpenLot();
+        when(deliveryRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(existingDelivery(lot)));
+
+        record("100");
+
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void correctedDeliveryAlsoGetsAnSms() {
+        givenStoredDelivery("100.00");
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
+
+        Delivery corrected = service.correct(42L,
+                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
+
+        verify(eventPublisher).publishEvent(new DeliveryRecordedEvent(corrected.getId()));
     }
 
     private void givenMemberPin(String pin) {
