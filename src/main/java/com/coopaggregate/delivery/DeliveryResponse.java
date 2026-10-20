@@ -28,7 +28,15 @@ public record DeliveryResponse(
         boolean reversed,
         String reversalReason,
         Long correctsId,
-        Long correctedById) {
+        Long correctedById,
+        ConfirmationStatus confirmationStatus,
+        ConfirmationMethod confirmationMethod,
+        Instant confirmedAt,
+        boolean pinMismatch,
+        DisputeReason disputeReason,
+        String disputeNote,
+        Instant disputedAt,
+        String resolutionNote) {
 
     public static DeliveryResponse from(Delivery delivery) {
         return from(delivery, null);
@@ -56,6 +64,14 @@ public record DeliveryResponse(
                 delivery.isReversed(),
                 delivery.getReversalReason(),
                 delivery.getCorrects() == null ? null : delivery.getCorrects().getId(),
-                correctedById);
+                correctedById,
+                delivery.getConfirmationStatus(),
+                delivery.getConfirmationMethod(),
+                delivery.getConfirmedAt(),
+                delivery.isPinMismatch(),
+                delivery.getDisputeReason(),
+                delivery.getDisputeNote(),
+                delivery.getDisputedAt(),
+                delivery.getResolutionNote());
     }
 }

@@ -12,6 +12,8 @@ import com.coopaggregate.member.Member;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -47,6 +49,25 @@ public class Delivery {
 
     @ManyToOne(fetch = FetchType.LAZY)
     private LedgerEntry reversalLedgerEntry;
+
+    @Enumerated(EnumType.STRING)
+    private ConfirmationStatus confirmationStatus = ConfirmationStatus.PENDING;
+
+    @Enumerated(EnumType.STRING)
+    private ConfirmationMethod confirmationMethod;
+
+    private Instant confirmedAt;
+
+    @Enumerated(EnumType.STRING)
+    private DisputeReason disputeReason;
+
+    private String disputeNote;
+
+    private Instant disputedAt;
+
+    private String resolutionNote;
+
+    private boolean pinMismatch;
 
     // The delivery this one replaces, when it was recorded as a correction.
     @ManyToOne(fetch = FetchType.LAZY)
@@ -145,6 +166,65 @@ public class Delivery {
 
     public void setCorrects(Delivery corrects) {
         this.corrects = corrects;
+    }
+
+    public ConfirmationStatus getConfirmationStatus() {
+        return confirmationStatus;
+    }
+
+    public ConfirmationMethod getConfirmationMethod() {
+        return confirmationMethod;
+    }
+
+    public Instant getConfirmedAt() {
+        return confirmedAt;
+    }
+
+    public DisputeReason getDisputeReason() {
+        return disputeReason;
+    }
+
+    public String getDisputeNote() {
+        return disputeNote;
+    }
+
+    public Instant getDisputedAt() {
+        return disputedAt;
+    }
+
+    public String getResolutionNote() {
+        return resolutionNote;
+    }
+
+    public boolean isPinMismatch() {
+        return pinMismatch;
+    }
+
+    public void setPinMismatch(boolean pinMismatch) {
+        this.pinMismatch = pinMismatch;
+    }
+
+    public void confirm(ConfirmationMethod method, Instant now) {
+        this.confirmationStatus = ConfirmationStatus.CONFIRMED;
+        this.confirmationMethod = method;
+        this.confirmedAt = now;
+    }
+
+    public void dispute(DisputeReason reason, String note, Instant now) {
+        this.confirmationStatus = ConfirmationStatus.DISPUTED;
+        this.disputeReason = reason;
+        this.disputeNote = note;
+        this.disputedAt = now;
+    }
+
+    /** The manager checked the delivery and found it correct. */
+    public void resolveDispute(String note, Instant now) {
+        this.resolutionNote = note;
+        confirm(ConfirmationMethod.MANAGER_REVIEW, now);
+    }
+
+    public void setResolutionNote(String resolutionNote) {
+        this.resolutionNote = resolutionNote;
     }
 
     public Instant getCreatedAt() {
