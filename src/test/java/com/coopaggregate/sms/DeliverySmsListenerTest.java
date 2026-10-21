@@ -32,7 +32,7 @@ class DeliverySmsListenerTest {
 
     @Test
     void queuedMessageIsSent() {
-        when(smsService.queueDeliveryMessage(42L)).thenReturn(Optional.of(7L));
+        when(smsService.queueCodeMessage(42L, 0)).thenReturn(Optional.of(7L));
 
         listener.onDeliveryRecorded(new DeliveryRecordedEvent(42L));
 
@@ -41,7 +41,7 @@ class DeliverySmsListenerTest {
 
     @Test
     void nothingIsSentWhenNoMessageWasQueued() {
-        when(smsService.queueDeliveryMessage(42L)).thenReturn(Optional.empty());
+        when(smsService.queueCodeMessage(42L, 0)).thenReturn(Optional.empty());
 
         listener.onDeliveryRecorded(new DeliveryRecordedEvent(42L));
 
@@ -50,7 +50,7 @@ class DeliverySmsListenerTest {
 
     @Test
     void smsFailureNeverReachesTheDelivery() {
-        when(smsService.queueDeliveryMessage(42L)).thenThrow(new IllegalStateException("database is busy"));
+        when(smsService.queueCodeMessage(42L, 0)).thenThrow(new IllegalStateException("database is busy"));
 
         listener.onDeliveryRecorded(new DeliveryRecordedEvent(42L));
     }

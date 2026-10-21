@@ -94,6 +94,13 @@ public class DeliveryController {
                 deliveryService.correct(id, request, authService.currentManager(jwt.getSubject())));
     }
 
+    @PostMapping("/{id}/confirm")
+    @Operation(summary = "Confirm a pending delivery with the 6-digit code the member got by SMS. The code expires "
+            + "after 10 minutes and stops working after 3 wrong tries")
+    public DeliveryResponse confirm(@PathVariable Long id, @Valid @RequestBody ConfirmCodeRequest request) {
+        return deliveryService.toResponse(deliveryService.confirmWithCode(id, request.code()));
+    }
+
     @PostMapping("/{id}/dispute")
     @Operation(summary = "Record that the member says a delivery is wrong. Disputed deliveries block sharing their lot")
     public DeliveryResponse dispute(@PathVariable Long id, @Valid @RequestBody DisputeRequest request) {

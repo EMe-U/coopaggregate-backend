@@ -32,7 +32,11 @@ public class SmsLog {
 
     private String phone;
 
+    // The text as sent, except that a one-time code is replaced by SmsMessages.CODE_MASK.
     private String message;
+
+    // 0 for a delivery's first message, 1 to 3 for codes the manager sent again.
+    private int sendNumber;
 
     @Enumerated(EnumType.STRING)
     private SmsStatus status = SmsStatus.QUEUED;
@@ -85,6 +89,14 @@ public class SmsLog {
         this.message = message;
     }
 
+    public int getSendNumber() {
+        return sendNumber;
+    }
+
+    public void setSendNumber(int sendNumber) {
+        this.sendNumber = sendNumber;
+    }
+
     public SmsStatus getStatus() {
         return status;
     }
@@ -118,6 +130,11 @@ public class SmsLog {
         this.provider = provider;
         this.status = SmsStatus.FAILED;
         this.lastError = error;
+    }
+
+    public void cancel(String reason) {
+        this.status = SmsStatus.CANCELLED;
+        this.lastError = reason;
     }
 
     public Instant getCreatedAt() {

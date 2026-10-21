@@ -67,6 +67,15 @@ public class Delivery {
 
     private String resolutionNote;
 
+    // Only a BCrypt hash of the one-time code is stored; the code itself is only in the SMS.
+    private String confirmationCodeHash;
+
+    private Instant confirmationCodeExpiresAt;
+
+    private int confirmationCodeFailedAttempts;
+
+    private int confirmationCodeResends;
+
     // The delivery this one replaces, when it was recorded as a correction.
     @ManyToOne(fetch = FetchType.LAZY)
     private Delivery corrects;
@@ -198,6 +207,39 @@ public class Delivery {
         this.confirmationStatus = ConfirmationStatus.CONFIRMED;
         this.confirmationMethod = method;
         this.confirmedAt = now;
+        clearCode();
+    }
+
+    public String getConfirmationCodeHash() {
+        return confirmationCodeHash;
+    }
+
+    public Instant getConfirmationCodeExpiresAt() {
+        return confirmationCodeExpiresAt;
+    }
+
+    public int getConfirmationCodeFailedAttempts() {
+        return confirmationCodeFailedAttempts;
+    }
+
+    public int getConfirmationCodeResends() {
+        return confirmationCodeResends;
+    }
+
+    /** A new code replaces any earlier one, and its wrong tries start again from 0. */
+    public void issueCode(String codeHash, Instant expiresAt) {
+        this.confirmationCodeHash = codeHash;
+        this.confirmationCodeExpiresAt = expiresAt;
+        this.confirmationCodeFailedAttempts = 0;
+    }
+
+    public void clearCode() {
+        this.confirmationCodeHash = null;
+        this.confirmationCodeExpiresAt = null;
+    }
+
+    public void recordWrongCode() {
+        this.confirmationCodeFailedAttempts++;
     }
 
     public void dispute(DisputeReason reason, String note, Instant now) {

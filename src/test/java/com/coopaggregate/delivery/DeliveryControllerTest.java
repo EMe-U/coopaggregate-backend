@@ -1,5 +1,7 @@
 package com.coopaggregate.delivery;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -199,6 +201,55 @@ class DeliveryControllerTest {
         postDelivery(VALID_BODY)
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value("The request conflicts with existing data."));
+    }
+
+    @Test
+    void confirmationCodeMustBeSixDigits() throws Exception {
+        confirm("{\"code\": \"12345\"}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("code: must be 6 digits"));
+        verifyNoInteractions(deliveryService);
+    }
+
+    @Test
+    void wrongCodeReturns400WithTriesLeft() throws Exception {
+        when(deliveryService.confirmWithCode(100L, "482193"))
+                .thenThrow(new WrongCodeException("Wrong code. 2 tries left."));
+
+        confirm("{\"code\": \"482193\"}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Wrong code. 2 tries left."));
+    }
+
+    @Test
+    void confirmedDeliveryResponseNeverContainsTheCode() throws Exception {
+        Delivery delivery = new Delivery();
+        when(deliveryService.confirmWithCode(100L, "482193")).thenReturn(delivery);
+        when(deliveryService.toResponse(delivery)).thenReturn(response());
+
+        String body = confirm("{\"code\": \"482193\"}")
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertFalse(body.contains("482193"));
+        assertFalse(body.toLowerCase().contains("confirmationcode"));
+    }
+
+    @Test
+    void codeIsMaskedWhenTheRequestIsPrinted() {
+        assertEquals("ConfirmCodeRequest[code=******]", new ConfirmCodeRequest("482193").toString());
+    }
+
+    @Test
+    void deliveryResponseHasNoCodeField() {
+        for (var component : DeliveryResponse.class.getRecordComponents()) {
+            assertFalse(component.getName().startsWith("confirmationCode"), component.getName());
+        }
+    }
+
+    private ResultActions confirm(String body) throws Exception {
+        return mockMvc.perform(post("/api/deliveries/100/confirm").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                .contentType(MediaType.APPLICATION_JSON).content(body));
     }
 
     private ResultActions postDelivery(String body) throws Exception {

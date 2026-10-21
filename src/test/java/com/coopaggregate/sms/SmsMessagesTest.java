@@ -8,69 +8,52 @@ import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
 
-import com.coopaggregate.delivery.ConfirmationStatus;
-
 class SmsMessagesTest {
 
-    private static final Instant OCT_19_MORNING = Instant.parse("2026-10-19T07:30:00Z");
+    private static final Instant OCT_21_MORNING = Instant.parse("2026-10-21T07:30:00Z");
 
     @Test
-    void confirmedDeliveryInEnglish() {
-        assertEquals("CoopAggregate: you confirmed RCT-7K2Q, 300 kg Big, 19/10. If this was not you, "
-                        + "reply 2 RCT-7K2Q.",
-                SmsMessages.delivery("en", ConfirmationStatus.CONFIRMED, "RCT-7K2Q", new BigDecimal("300.00"),
-                        "Big", OCT_19_MORNING));
+    void codeMessageInEnglish() {
+        assertEquals("CoopAggregate: RCT-7K2Q, 300 kg Big, 21/10. If correct, give the manager code 482193. "
+                        + "If wrong, don't give the code, reply 2 RCT-7K2Q.",
+                SmsMessages.deliveryCode("en", "RCT-7K2Q", new BigDecimal("300.00"), "Big", OCT_21_MORNING,
+                        "482193"));
     }
 
     @Test
-    void pendingDeliveryInEnglish() {
-        assertEquals("CoopAggregate: RCT-7K2Q, 300 kg Big, 19/10. Reply 1 RCT-7K2Q if correct, "
-                        + "2 RCT-7K2Q if wrong.",
-                SmsMessages.delivery("en", ConfirmationStatus.PENDING, "RCT-7K2Q", new BigDecimal("300.00"),
-                        "Big", OCT_19_MORNING));
-    }
-
-    @Test
-    void confirmedDeliveryInKinyarwanda() {
-        String text = SmsMessages.delivery("rw", ConfirmationStatus.CONFIRMED, "RCT-7K2Q",
-                new BigDecimal("300.00"), "Big", OCT_19_MORNING);
-
-        assertEquals("CoopAggregate: wemeje RCT-7K2Q, kg 300 Big, 19/10. Niba atari wowe, subiza 2 RCT-7K2Q.", text);
-    }
-
-    @Test
-    void pendingDeliveryInKinyarwanda() {
-        String text = SmsMessages.delivery("rw", ConfirmationStatus.PENDING, "RCT-7K2Q",
-                new BigDecimal("300.00"), "Big", OCT_19_MORNING);
-
-        assertEquals("CoopAggregate: RCT-7K2Q, kg 300 Big, 19/10. Subiza 1 RCT-7K2Q niba ari ukuri, "
-                + "2 RCT-7K2Q niba atari ukuri.", text);
+    void codeMessageInKinyarwanda() {
+        assertEquals("CoopAggregate: RCT-7K2Q, kg 300 Big, 21/10. Niba ari ukuri, ha umuyobozi kode 482193. "
+                        + "Niba atari ukuri, ntutange kode, subiza 2 RCT-7K2Q.",
+                SmsMessages.deliveryCode("rw", "RCT-7K2Q", new BigDecimal("300.00"), "Big", OCT_21_MORNING,
+                        "482193"));
     }
 
     @Test
     void anyLanguageOtherThanEnglishGetsKinyarwanda() {
-        assertTrue(SmsMessages.delivery(null, ConfirmationStatus.PENDING, "RCT-7K2Q", new BigDecimal("1"), "Big",
-                OCT_19_MORNING).contains("Subiza"));
+        assertTrue(SmsMessages.deliveryCode(null, "RCT-7K2Q", new BigDecimal("1"), "Big", OCT_21_MORNING,
+                "482193").contains("subiza 2"));
     }
 
     @Test
     void kilogramsDropTrailingZeros() {
-        assertTrue(SmsMessages.delivery("en", ConfirmationStatus.PENDING, "RCT-7K2Q", new BigDecimal("120.50"),
-                "Normal", OCT_19_MORNING).contains("120.5 kg Normal"));
+        assertTrue(SmsMessages.deliveryCode("en", "RCT-7K2Q", new BigDecimal("120.50"), "Normal", OCT_21_MORNING,
+                "482193").contains("120.5 kg Normal"));
     }
 
     @Test
     void dateIsTheKigaliDay() {
-        // 23:30 UTC on 19 October is already 01:30 on 20 October in Kigali.
-        assertTrue(SmsMessages.delivery("en", ConfirmationStatus.PENDING, "RCT-7K2Q", new BigDecimal("1"), "Big",
-                Instant.parse("2026-10-19T23:30:00Z")).contains(", 20/10."));
+        // 23:30 UTC on 20 October is already 01:30 on 21 October in Kigali.
+        assertTrue(SmsMessages.deliveryCode("en", "RCT-7K2Q", new BigDecimal("1"), "Big",
+                Instant.parse("2026-10-20T23:30:00Z"), "482193").contains(", 21/10."));
     }
 
     @Test
     void messagesFitInOneSms() {
-        String longest = SmsMessages.delivery("rw", ConfirmationStatus.PENDING, "RCT-7K2Q",
-                new BigDecimal("4999.99"), "Normal", OCT_19_MORNING);
+        for (String language : new String[] {"en", "rw"}) {
+            String longest = SmsMessages.deliveryCode(language, "RCT-7K2Q", new BigDecimal("4999.99"), "Normal",
+                    OCT_21_MORNING, "482193");
 
-        assertTrue(longest.length() <= 160, longest.length() + " characters");
+            assertTrue(longest.length() <= 160, language + ": " + longest.length() + " characters");
+        }
     }
 }

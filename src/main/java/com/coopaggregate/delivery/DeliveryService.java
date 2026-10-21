@@ -60,13 +60,14 @@ public class DeliveryService {
     private final LotRepository lotRepository;
     private final SaleRepository saleRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
+    private final ConfirmationCodes confirmationCodes;
     private final ApplicationEventPublisher eventPublisher;
 
     public DeliveryService(DeliveryRepository deliveryRepository, MemberRepository memberRepository,
                            GradeRepository gradeRepository, SettingRepository settingRepository,
                            LotService lotService, LedgerService ledgerService, LotRepository lotRepository,
                            SaleRepository saleRepository, LedgerEntryRepository ledgerEntryRepository,
-                           ApplicationEventPublisher eventPublisher) {
+                           ConfirmationCodes confirmationCodes, ApplicationEventPublisher eventPublisher) {
         this.deliveryRepository = deliveryRepository;
         this.memberRepository = memberRepository;
         this.gradeRepository = gradeRepository;
@@ -76,6 +77,7 @@ public class DeliveryService {
         this.lotRepository = lotRepository;
         this.saleRepository = saleRepository;
         this.ledgerEntryRepository = ledgerEntryRepository;
+        this.confirmationCodes = confirmationCodes;
         this.eventPublisher = eventPublisher;
     }
 
@@ -182,6 +184,44 @@ public class DeliveryService {
                 "Delivery " + saved.getReceiptCode() + " corrects " + original.getReceiptCode(), manager);
         eventPublisher.publishEvent(new DeliveryRecordedEvent(saved.getId()));
         return saved;
+    }
+
+    /**
+     * Confirms a PENDING delivery with the one-time code from the member's SMS. A wrong code counts as a wrong
+     * try; after 3 the code no longer works and the manager must send a new one.
+     */
+    @Transactional(noRollbackFor = WrongCodeException.class)
+    public Delivery confirmWithCode(Long deliveryId, String code) {
+        Delivery delivery = deliveryRepository.findForUpdateById(deliveryId)
+                .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
+        if (delivery.isReversed()) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has been reversed.");
+        }
+        if (delivery.getConfirmationStatus() != ConfirmationStatus.PENDING) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is "
+                    + delivery.getConfirmationStatus() + ". Only a pending delivery can be confirmed with a code.");
+        }
+        if (delivery.getConfirmationCodeHash() == null) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode()
+                    + " has no valid code. Send the member a new code.");
+        }
+        if (Instant.now().isAfter(delivery.getConfirmationCodeExpiresAt())) {
+            throw new IllegalStateException("The code for delivery " + delivery.getReceiptCode()
+                    + " has expired. Send the member a new code.");
+        }
+
+        if (confirmationCodes.matches(delivery, code)) {
+            delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+            return delivery;
+        }
+        delivery.recordWrongCode();
+        int triesLeft = ConfirmationCodes.MAX_WRONG_TRIES - delivery.getConfirmationCodeFailedAttempts();
+        if (triesLeft <= 0) {
+            delivery.clearCode();
+            throw new WrongCodeException("Wrong code. The code no longer works; send the member a new code.");
+        }
+        throw new WrongCodeException("Wrong code. " + triesLeft + " tr" + (triesLeft == 1 ? "y" : "ies")
+                + " left.");
     }
 
     /** Records a member's complaint about a delivery, made in person or by SMS. */

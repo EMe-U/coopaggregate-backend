@@ -28,7 +28,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
@@ -67,6 +69,8 @@ class DeliveryServiceTest {
     private LedgerService ledgerService;
     private GradeRepository gradeRepository;
     private ApplicationEventPublisher eventPublisher;
+    private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(4);
+    private ConfirmationCodes confirmationCodes;
     private SaleRepository saleRepository;
     private LedgerEntryRepository ledgerEntryRepository;
     private Setting setting;
@@ -112,9 +116,10 @@ class DeliveryServiceTest {
         ledgerEntryRepository = mock(LedgerEntryRepository.class);
         when(memberRepository.findForUpdateById(5L)).thenReturn(Optional.of(member));
         eventPublisher = mock(ApplicationEventPublisher.class);
+        confirmationCodes = new ConfirmationCodes(encoder);
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
                 new LotService(lotRepository, gradeRepository), ledgerService, lotRepository, saleRepository,
-                ledgerEntryRepository, eventPublisher);
+                ledgerEntryRepository, confirmationCodes, eventPublisher);
     }
 
     @ParameterizedTest
@@ -582,6 +587,119 @@ class DeliveryServiceTest {
         return reversal;
     }
 
+    // --- Confirming with the one-time code ---
+
+    @Test
+    void newDeliveryWaitsForTheMembersCode() {
+        givenOpenLot();
+
+        DeliveryResponse response = record("100").delivery();
+
+        assertEquals(ConfirmationStatus.PENDING, response.confirmationStatus());
+        assertEquals(null, response.confirmationMethod());
+    }
+
+    @Test
+    void correctCodeConfirmsTheDelivery() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+
+        service.confirmWithCode(42L, code);
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+        assertEquals(ConfirmationMethod.OTP, delivery.getConfirmationMethod());
+        assertEquals("Confirmed by member with the SMS code", delivery.getConfirmationMethod().label());
+        assertEquals(null, delivery.getConfirmationCodeHash());
+    }
+
+    @Test
+    void wrongCodeIsCountedAndRejected() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+
+        WrongCodeException e = assertThrows(WrongCodeException.class,
+                () -> service.confirmWithCode(42L, otherCode(code)));
+
+        assertEquals("Wrong code. 2 tries left.", e.getMessage());
+        assertEquals(1, delivery.getConfirmationCodeFailedAttempts());
+        assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void threeWrongTriesKillTheCodeEvenForTheRightCode() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+        String wrong = otherCode(code);
+
+        assertThrows(WrongCodeException.class, () -> service.confirmWithCode(42L, wrong));
+        WrongCodeException second = assertThrows(WrongCodeException.class, () -> service.confirmWithCode(42L, wrong));
+        assertEquals("Wrong code. 1 try left.", second.getMessage());
+        WrongCodeException third = assertThrows(WrongCodeException.class, () -> service.confirmWithCode(42L, wrong));
+        assertEquals("Wrong code. The code no longer works; send the member a new code.", third.getMessage());
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, code));
+        assertEquals("Delivery RCT-7K2Q has no valid code. Send the member a new code.", e.getMessage());
+        assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void wrongTriesAreKeptWhenConfirmingFails() throws Exception {
+        Transactional transactional = DeliveryService.class.getMethod("confirmWithCode", Long.class, String.class)
+                .getAnnotation(Transactional.class);
+
+        assertEquals(List.of(WrongCodeException.class), List.of(transactional.noRollbackFor()));
+    }
+
+    @Test
+    void expiredCodeCannotConfirm() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now().minus(Duration.ofMinutes(11)));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, code));
+
+        assertEquals("The code for delivery RCT-7K2Q has expired. Send the member a new code.", e.getMessage());
+        assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void codeStillWorksJustBeforeItExpires() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now().minus(Duration.ofMinutes(9)));
+
+        service.confirmWithCode(42L, code);
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void deliveryWithoutCodeCannotBeConfirmedWithACode() {
+        givenDeliveryWithCode();
+
+        assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, "123456"));
+    }
+
+    @Test
+    void onlyAPendingDeliveryCanBeConfirmedWithACode() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+        delivery.dispute(DisputeReason.WRONG_KG, null, Instant.now());
+
+        assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, code));
+    }
+
+    @Test
+    void correctionStartsPendingAndGetsItsOwnCodeSms() {
+        Delivery original = givenStoredDelivery("100.00");
+        original.confirm(ConfirmationMethod.OTP, Instant.now());
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
+
+        Delivery corrected = service.correct(42L,
+                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
+
+        assertEquals(ConfirmationStatus.PENDING, corrected.getConfirmationStatus());
+        verify(eventPublisher).publishEvent(new DeliveryRecordedEvent(corrected.getId()));
+    }
+
     // --- Disputes ---
 
     @Test
@@ -694,6 +812,16 @@ class DeliveryServiceTest {
                 new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
 
         verify(eventPublisher).publishEvent(new DeliveryRecordedEvent(corrected.getId()));
+    }
+
+    private Delivery givenDeliveryWithCode() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        when(deliveryRepository.findForUpdateById(42L)).thenReturn(Optional.of(delivery));
+        return delivery;
+    }
+
+    private static String otherCode(String code) {
+        return code.equals("000000") ? "111111" : "000000";
     }
 
     private RecordedDelivery recordAt(Instant deliveredAt) {

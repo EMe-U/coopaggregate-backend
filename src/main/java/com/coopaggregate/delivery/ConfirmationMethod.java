@@ -3,7 +3,8 @@ package com.coopaggregate.delivery;
 public enum ConfirmationMethod {
     // The old permanent member PIN, kept only for deliveries confirmed with it before it was removed.
     PIN("Confirmed by member with PIN"),
-    SMS("Confirmed by member by SMS"),
+    OTP("Confirmed by member with the SMS code"),
+    SMS("Confirmed by member by SMS reply"),
     MANAGER_REVIEW("Checked by the manager after a dispute"),
     // Deliveries from before confirmations existed. The member never confirmed them.
     RECORDED_BEFORE_CONFIRMATION("Recorded before confirmation existed");

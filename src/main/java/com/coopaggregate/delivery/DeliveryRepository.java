@@ -12,7 +12,10 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+
+import jakarta.persistence.LockModeType;
 
 public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSpecificationExecutor<Delivery> {
 
@@ -47,6 +50,10 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
                                                                               ConfirmationStatus status);
 
     Optional<Delivery> findByReceiptCode(String receiptCode);
+
+    // SELECT ... FOR UPDATE: two code checks or sends at once cannot lose a wrong try or overwrite a code.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<Delivery> findForUpdateById(Long id);
 
     long countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus status);
 
