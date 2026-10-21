@@ -72,7 +72,7 @@ class DashboardServiceTest {
 
         when(memberService.summary()).thenReturn(new MemberSummaryResponse(0, 0, 0, 0));
         when(lotService.stock()).thenReturn(new StockResponse(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, 0, 0, 0, List.of()));
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0, 0, 0, List.of()));
         when(paymentService.balances(null, null)).thenReturn(new BalancesResponse(0, 0, List.of()));
     }
 
@@ -80,7 +80,8 @@ class DashboardServiceTest {
     void valuesMatchMemberStockAndBalancePages() {
         when(memberService.summary()).thenReturn(new MemberSummaryResponse(12, 10, 2, 3));
         when(lotService.stock()).thenReturn(new StockResponse(new BigDecimal("550.00"), new BigDecimal("4000.00"),
-                new BigDecimal("3300.00"), new BigDecimal("150.00"), new BigDecimal("200.00"), 3, 1, 2,
+                new BigDecimal("3300.00"), new BigDecimal("150.00"), BigDecimal.ZERO, new BigDecimal("200.00"), 3,
+                1, 2,
                 List.of(new StockResponse.GradeStock("Big", new BigDecimal("250.00")),
                         new StockResponse.GradeStock("Normal", new BigDecimal("300.00")))));
         when(paymentService.balances(null, null)).thenReturn(new BalancesResponse(1_321_600L, 200_000L, List.of(

@@ -194,9 +194,9 @@ ERD: see `docs/erd.png`.
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
 | GET | `/api/grades?includeInactive=false` | JWT | Grades `{id, code, name, nameRw, active, floorPricePerKg, description, sizeInfo, packaging}`, sorted by code. Only active ones unless `includeInactive=true`. `floorPricePerKg` is `null` when not set |
 | PUT | `/api/grades/{id}` | JWT | Body `{"name", "nameRw", "active", "floorPricePerKg", "description", "sizeInfo", "packaging"}`. Edits a grade. Grades A, B and C are fixed: they cannot be created or deleted |
-| GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold and remaining kg |
+| GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold, remaining and pending-confirmation kg |
 | GET | `/api/lots/{id}` | JWT | One lot, with the kilograms each member delivered |
-| GET | `/api/lots/stock` | JWT | Stock balance: remaining, delivered, sold and lost kg, today's deliveries, lot counts and remaining kg per grade |
+| GET | `/api/lots/stock` | JWT | Stock balance: remaining, delivered, sold, lost and pending-confirmation kg, today's deliveries, lot counts and remaining kg per grade |
 | GET | `/api/lots/open?gradeId=` | JWT | Open lot of the grade `{id, code, gradeName, totalKg}`. `204` if none is open yet, `404` if the grade does not exist |
 | PATCH | `/api/lots/{id}/close` | JWT | Closes an open lot. The next delivery of that grade starts a new lot |
 | POST | `/api/lots/{id}/losses` | JWT | Records a loss on an open or closed lot, returns `201` |
@@ -488,13 +488,19 @@ A lot moves through `OPEN` -> `CLOSED` -> `SOLD` (`SHARED` comes with payment sh
   `remainingKg = deliveredKg - lostKg - soldKg`. `saleAmountRwf` is the sum of the lot's
   sales and `memberCount` the number of members who delivered to it. `createdAt` and
   `closedAt` are the dates the lot was opened and closed.
+- `pendingConfirmationKg` is the part of `deliveredKg` from deliveries that are still
+  `PENDING` (not reversed). It is shown next to the totals and does **not** change them:
+  the potatoes are physically in the store either way. A lot with pending kg cannot be
+  shared yet (see Sharing).
 - **Close:** only an `OPEN` lot can be closed (otherwise `409`). Closing waits for any
   delivery of the same grade that is being recorded, so no delivery ends up in a lot
   after it closed.
 - **Stock:** `GET /api/lots/stock` returns `totalRemainingKg` (open and closed lots) and
   `byGrade` (remaining kg per grade), `totalDeliveredKg`, `totalSoldKg` and `totalLostKg`
   (all lots, so delivered - lost - sold = remaining), `addedTodayKg` and `deliveriesToday`
-  (deliveries whose time falls on today in Kigali), and `openLots` / `closedLots`.
+  (deliveries whose time falls on today in Kigali), `openLots` / `closedLots`, and
+  `pendingConfirmationKg` (all `PENDING`, not reversed deliveries; already included in the
+  totals).
 - **Losses:** body `{"quantityKg", "reason", "recordedAt", "notes"}`. `reason` is `ROT`,
   `DRYING`, `DAMAGE`, `THEFT` or `OTHER`; `recordedAt` (a date) and `notes` are optional. Allowed on
   open and closed lots (otherwise `409`). `quantityKg` must be more than 0 and at most the

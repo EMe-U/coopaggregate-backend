@@ -26,7 +26,8 @@ class ReversedRecordsAreNotCountedTest {
     @CsvSource({
             // repository, method, number of times the query reads deliveries or payments
             "LotRepository, totalDeliveredKg, 1",
-            "LotRepository, findQuantities, 2",
+            "LotRepository, totalPendingConfirmationKg, 1",
+            "LotRepository, findQuantities, 3",
             "LotRepository, findMembers, 1",
             "LotRepository, deliveredKgBetween, 1",
             "LotRepository, deliveryCountBetween, 1",

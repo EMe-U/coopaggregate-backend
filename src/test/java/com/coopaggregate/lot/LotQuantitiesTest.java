@@ -24,6 +24,16 @@ class LotQuantitiesTest {
         assertEquals(BigDecimal.ZERO, quantities.lostKg());
         assertEquals(0L, quantities.saleAmountRwf());
         assertEquals(0L, quantities.memberCount());
+        assertEquals(BigDecimal.ZERO, quantities.pendingConfirmationKg());
+    }
+
+    @Test
+    void pendingKgDoNotChangeTheRemainingStock() {
+        LotQuantities quantities = new LotQuantities(1L, new BigDecimal("1000.00"), new BigDecimal("25.50"),
+                new BigDecimal("400.00"), 120000L, 7L, new BigDecimal("300.00"));
+
+        assertEquals(new BigDecimal("574.50"), quantities.remainingKg());
+        assertEquals(new BigDecimal("300.00"), quantities.pendingConfirmationKg());
     }
 
     @Test

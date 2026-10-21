@@ -101,6 +101,7 @@ public class LotService {
                 lotRepository.totalDeliveredKg(),
                 lotRepository.totalSoldKg(),
                 lotRepository.totalLostKg(),
+                lotRepository.totalPendingConfirmationKg(),
                 lotRepository.deliveredKgBetween(startOfToday, startOfTomorrow),
                 lotRepository.deliveryCountBetween(startOfToday, startOfTomorrow),
                 openLots,

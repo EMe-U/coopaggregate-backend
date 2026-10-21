@@ -55,7 +55,10 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
                 (SELECT SUM(s.quantityKg) FROM Sale s WHERE s.lot.id = l.id),
                 (SELECT SUM(s2.totalAmount) FROM Sale s2 WHERE s2.lot.id = l.id),
                 (SELECT COUNT(DISTINCT d2.member.id) FROM Delivery d2
-                    WHERE d2.lot.id = l.id AND d2.reversedAt IS NULL))
+                    WHERE d2.lot.id = l.id AND d2.reversedAt IS NULL),
+                (SELECT SUM(d3.quantityKg) FROM Delivery d3
+                    WHERE d3.lot.id = l.id AND d3.reversedAt IS NULL
+                    AND d3.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.PENDING))
             FROM Lot l
             WHERE l.id IN :lotIds
             """)
@@ -72,6 +75,10 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
 
     @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d WHERE d.reversedAt IS NULL")
     BigDecimal totalDeliveredKg();
+
+    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d WHERE d.reversedAt IS NULL "
+            + "AND d.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.PENDING")
+    BigDecimal totalPendingConfirmationKg();
 
     @Query("SELECT COALESCE(SUM(x.quantityKg), 0) FROM Loss x")
     BigDecimal totalLostKg();
