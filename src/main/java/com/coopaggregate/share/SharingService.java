@@ -7,7 +7,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.delivery.ConfirmationStatus;
-import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.ledger.LedgerEntryType;
@@ -48,6 +47,7 @@ public class SharingService {
         Lot lot = lotRepository.findById(lotId)
                 .orElseThrow(() -> new EntityNotFoundException("Lot " + lotId + " does not exist."));
         checkCanBeShared(lot);
+        checkAllConfirmed(lot);
         return calculate(lot);
     }
 
@@ -57,7 +57,7 @@ public class SharingService {
         Lot lot = lotRepository.findForUpdateById(lotId)
                 .orElseThrow(() -> new EntityNotFoundException("Lot " + lotId + " does not exist."));
         checkCanBeShared(lot);
-        checkNoDisputes(lot);
+        checkAllConfirmed(lot);
 
         SharePreviewResponse result = calculate(lot);
         for (SharePreviewResponse.MemberShare member : result.members()) {
@@ -103,16 +103,22 @@ public class SharingService {
                 new SharePreviewResponse.Totals(totalShare, totalDeduction, totalShare - totalDeduction));
     }
 
-    // A disputed delivery may have the wrong member or kilograms, and shares cannot be changed once saved.
-    private void checkNoDisputes(Lot lot) {
-        List<String> disputed = deliveryRepository
-                .findByLotIdAndConfirmationStatusAndReversedAtIsNullOrderById(lot.getId(), ConfirmationStatus.DISPUTED)
+    // Only deliveries the member confirmed are shared: a pending or disputed one may have the wrong member or
+    // kilograms, and shares cannot be changed once saved. Reversed deliveries are not counted anyway.
+    private void checkAllConfirmed(Lot lot) {
+        List<UnconfirmedDelivery> unconfirmed = deliveryRepository
+                .findByLotIdAndConfirmationStatusInAndReversedAtIsNullOrderById(lot.getId(),
+                        List.of(ConfirmationStatus.PENDING, ConfirmationStatus.DISPUTED))
                 .stream()
-                .map(Delivery::getReceiptCode)
+                .map(UnconfirmedDelivery::from)
                 .toList();
-        if (!disputed.isEmpty()) {
-            throw new IllegalStateException("Lot " + lot.getLotCode() + " has disputed deliveries: "
-                    + String.join(", ", disputed) + ". Resolve, correct or reverse them before sharing.");
+        if (!unconfirmed.isEmpty()) {
+            String list = String.join(", ", unconfirmed.stream()
+                    .map(delivery -> delivery.receiptCode() + " (" + delivery.status() + ")")
+                    .toList());
+            throw new UnconfirmedDeliveriesException("Lot " + lot.getLotCode() + " has deliveries that are not "
+                    + "confirmed yet: " + list + ". Confirm, resolve, correct or reverse them before sharing.",
+                    unconfirmed);
         }
     }
 

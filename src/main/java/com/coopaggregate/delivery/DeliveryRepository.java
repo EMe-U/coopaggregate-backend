@@ -46,8 +46,9 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
 
     List<Delivery> findByCorrectsIdIn(Collection<Long> ids);
 
-    List<Delivery> findByLotIdAndConfirmationStatusAndReversedAtIsNullOrderById(Long lotId,
-                                                                              ConfirmationStatus status);
+    @EntityGraph(attributePaths = {"member"})
+    List<Delivery> findByLotIdAndConfirmationStatusInAndReversedAtIsNullOrderById(
+            Long lotId, Collection<ConfirmationStatus> statuses);
 
     Optional<Delivery> findByReceiptCode(String receiptCode);
 

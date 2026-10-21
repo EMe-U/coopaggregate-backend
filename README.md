@@ -206,8 +206,8 @@ ERD: see `docs/erd.png`.
 | POST | `/api/sales` | JWT | Records a sale from a closed lot. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
-| GET | `/api/lots/{id}/share-preview` | JWT | How a sold lot's money would be shared, per member. Saves nothing |
-| POST | `/api/lots/{id}/share` | JWT | Saves the shares and marks the lot `SHARED`. Only once per lot |
+| GET | `/api/lots/{id}/share-preview` | JWT | How a sold lot's money would be shared, per member. Saves nothing. `409` listing pending or disputed deliveries |
+| POST | `/api/lots/{id}/share` | JWT | Saves the shares and marks the lot `SHARED`. Only once per lot, and only when every delivery is confirmed |
 | GET | `/api/payments/balances?search=&status=` | JWT | Share, deductions, paid and balance per member with a shared lot, plus `totalOwedRwf` and `paidThisWeekRwf` |
 | POST | `/api/payments` | JWT | Pays a member. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page). Reversed payments are listed with `reversed: true` |
@@ -306,8 +306,7 @@ Every delivery is confirmed by the member with a one-time code sent by SMS.
   - If the record is right: `POST /api/deliveries/{id}/resolve-dispute` with a note puts it
     back to `CONFIRMED` (method `MANAGER_REVIEW`).
   - If it is wrong: correct or reverse it (see Reversals); that also closes the dispute.
-  - A lot cannot be shared while it has open disputes: `POST /api/lots/{id}/share` returns
-    `409` listing them.
+  - A lot cannot be shared while it has pending or disputed deliveries (see Sharing).
 - Deliveries recorded before confirmations existed are `CONFIRMED` with method
   `RECORDED_BEFORE_CONFIRMATION`, so they are not counted as waiting. The member never
   confirmed them. Each delivery also has `confirmationLabel`, the text to show, for example
@@ -549,6 +548,16 @@ saves it and sets the lot to `SHARED`.
 
 - Only a `SOLD` lot can be shared (otherwise `400`). A lot that is already `SHARED` returns
   `409`.
+- Only confirmed deliveries are shared. While the lot has `PENDING` or `DISPUTED`
+  deliveries (not reversed), both the preview and the share return `409` with the list:
+
+  ```json
+  {"message": "Lot A-2026-01 has deliveries that are not confirmed yet: RCT-7K2Q (PENDING). ...",
+   "deliveries": [{"id": 42, "receiptCode": "RCT-7K2Q", "memberId": 5, "memberName": "Uwimana Claudine",
+                   "memberNumber": "M-0005", "quantityKg": 120.50, "status": "PENDING"}]}
+  ```
+
+  Confirm, resolve, correct or reverse them first.
 - `shareRwf = memberKg / deliveredKg x saleAmountRwf`, rounded to whole RWF. The rounding
   remainder goes to the member with the most kg, so the shares add up to exactly the sale
   amount. Shares use delivered kg, so lost kg are carried by everyone in proportion.
