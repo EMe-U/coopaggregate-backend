@@ -51,9 +51,6 @@ class MemberControllerTest {
     private MemberService memberService;
 
     @MockitoBean
-    private MemberPinService memberPinService;
-
-    @MockitoBean
     private AuthService authService;
 
     private String bearerToken;
@@ -108,8 +105,7 @@ class MemberControllerTest {
     void createReturns201WithMember() throws Exception {
         when(memberService.create(any(MemberRequest.class))).thenReturn(new MemberResponse(
                 1L, "M-0001", "Uwimana Claudine", "+250788123456", null, null,
-                LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"),
-                false, false));
+                LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z")));
 
         mockMvc.perform(post("/api/members")
                         .header(HttpHeaders.AUTHORIZATION, bearerToken)

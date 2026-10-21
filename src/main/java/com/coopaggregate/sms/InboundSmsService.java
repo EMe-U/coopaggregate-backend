@@ -62,7 +62,7 @@ public class InboundSmsService {
             return Result.CONFIRMED;
         }
 
-        // "2" also works on a confirmed delivery: the member may say a PIN confirmation was not theirs.
+        // "2" also works on a confirmed delivery: the member may say a confirmation was not theirs.
         if (delivery.getConfirmationStatus() == ConfirmationStatus.DISPUTED) {
             return Result.IGNORED;
         }

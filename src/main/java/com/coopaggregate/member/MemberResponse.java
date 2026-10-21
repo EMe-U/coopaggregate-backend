@@ -13,9 +13,7 @@ public record MemberResponse(
         LocalDate joinDate,
         MemberStatus status,
         String preferredLanguage,
-        Instant createdAt,
-        boolean hasPin,
-        boolean pinLocked) {
+        Instant createdAt) {
 
     public static MemberResponse from(Member member) {
         return new MemberResponse(
@@ -28,8 +26,6 @@ public record MemberResponse(
                 member.getJoinDate(),
                 member.getStatus(),
                 member.getPreferredLanguage(),
-                member.getCreatedAt(),
-                member.hasPin(),
-                member.isPinLocked());
+                member.getCreatedAt());
     }
 }

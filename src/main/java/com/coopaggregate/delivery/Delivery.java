@@ -67,8 +67,6 @@ public class Delivery {
 
     private String resolutionNote;
 
-    private boolean pinMismatch;
-
     // The delivery this one replaces, when it was recorded as a correction.
     @ManyToOne(fetch = FetchType.LAZY)
     private Delivery corrects;
@@ -194,14 +192,6 @@ public class Delivery {
 
     public String getResolutionNote() {
         return resolutionNote;
-    }
-
-    public boolean isPinMismatch() {
-        return pinMismatch;
-    }
-
-    public void setPinMismatch(boolean pinMismatch) {
-        this.pinMismatch = pinMismatch;
     }
 
     public void confirm(ConfirmationMethod method, Instant now) {

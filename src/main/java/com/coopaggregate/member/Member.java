@@ -37,14 +37,6 @@ public class Member {
 
     private String preferredLanguage = "rw";
 
-    private String pinHash;
-
-    private Instant pinSetAt;
-
-    private int pinFailedAttempts;
-
-    private Instant pinLockedAt;
-
     @CreationTimestamp
     @Column(updatable = false)
     private Instant createdAt;
@@ -115,50 +107,6 @@ public class Member {
 
     public void setPreferredLanguage(String preferredLanguage) {
         this.preferredLanguage = preferredLanguage;
-    }
-
-    public boolean hasPin() {
-        return pinHash != null;
-    }
-
-    public boolean isPinLocked() {
-        return pinLockedAt != null;
-    }
-
-    public String getPinHash() {
-        return pinHash;
-    }
-
-    public Instant getPinSetAt() {
-        return pinSetAt;
-    }
-
-    public int getPinFailedAttempts() {
-        return pinFailedAttempts;
-    }
-
-    public Instant getPinLockedAt() {
-        return pinLockedAt;
-    }
-
-    /** Sets a new PIN hash and clears any earlier failed attempts and lock. */
-    public void changePin(String newPinHash, Instant now) {
-        this.pinHash = newPinHash;
-        this.pinSetAt = now;
-        this.pinFailedAttempts = 0;
-        this.pinLockedAt = null;
-    }
-
-    public void recordPinSuccess() {
-        this.pinFailedAttempts = 0;
-    }
-
-    /** Counts a wrong PIN and locks the PIN once maxAttempts wrong PINs in a row were entered. */
-    public void recordPinFailure(int maxAttempts, Instant now) {
-        this.pinFailedAttempts++;
-        if (pinFailedAttempts >= maxAttempts) {
-            this.pinLockedAt = now;
-        }
     }
 
     public Instant getCreatedAt() {
