@@ -5,7 +5,7 @@ public enum ConfirmationMethod {
     PIN("Confirmed by member with PIN"),
     OTP("Confirmed by member with the SMS code"),
     SMS("Confirmed by member by SMS reply"),
-    MANAGER_REVIEW("Checked by the manager after a dispute"),
+    MANAGER_REVIEW("Checked by the manager"),
     // Deliveries from before confirmations existed. The member never confirmed them.
     RECORDED_BEFORE_CONFIRMATION("Recorded before confirmation existed");
 

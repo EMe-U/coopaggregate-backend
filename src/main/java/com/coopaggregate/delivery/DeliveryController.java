@@ -109,6 +109,13 @@ public class DeliveryController {
                 deliveryService.resendCode(id, authService.currentManager(jwt.getSubject())));
     }
 
+    @PostMapping("/{id}/review")
+    @Operation(summary = "Confirm a pending delivery after the manager checked it. Only while SMS are turned off, "
+            + "because then no code can reach the member")
+    public DeliveryResponse review(@PathVariable Long id, @Valid @RequestBody ManagerReviewRequest request) {
+        return deliveryService.toResponse(deliveryService.reviewPending(id, request.note()));
+    }
+
     @PostMapping("/{id}/dispute")
     @Operation(summary = "Record that the member says a delivery is wrong. Disputed deliveries block sharing their lot")
     public DeliveryResponse dispute(@PathVariable Long id, @Valid @RequestBody DisputeRequest request) {
@@ -118,7 +125,7 @@ public class DeliveryController {
     @PostMapping("/{id}/resolve-dispute")
     @Operation(summary = "Close a dispute after checking that the delivery is correct. A wrong delivery is fixed with "
             + "correct or reverse instead")
-    public DeliveryResponse resolveDispute(@PathVariable Long id, @Valid @RequestBody ResolveDisputeRequest request) {
+    public DeliveryResponse resolveDispute(@PathVariable Long id, @Valid @RequestBody ManagerReviewRequest request) {
         return deliveryService.toResponse(deliveryService.resolveDispute(id, request.note()));
     }
 }

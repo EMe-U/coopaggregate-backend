@@ -780,6 +780,50 @@ class DeliveryServiceTest {
         assertThrows(IllegalStateException.class, () -> service.resendCode(42L, manager));
     }
 
+    // --- Manager review while SMS are off ---
+
+    @Test
+    void withSmsOffTheManagerConfirmsAPendingDelivery() {
+        Delivery delivery = givenDeliveryWithCode();
+        setting.setSmsEnabled(false);
+
+        service.reviewPending(42L, "  Weighed again with the member  ");
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+        assertEquals(ConfirmationMethod.MANAGER_REVIEW, delivery.getConfirmationMethod());
+        assertEquals("Weighed again with the member", delivery.getResolutionNote());
+    }
+
+    @Test
+    void withSmsOnTheMemberMustConfirm() {
+        Delivery delivery = givenDeliveryWithCode();
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.reviewPending(42L, "Checked"));
+
+        assertTrue(e.getMessage().startsWith("SMS are turned on"));
+        assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void disputedDeliveryIsNotClosedByThePendingReview() {
+        Delivery delivery = givenDeliveryWithCode();
+        setting.setSmsEnabled(false);
+        delivery.dispute(DisputeReason.WRONG_KG, null, Instant.now());
+
+        assertThrows(IllegalStateException.class, () -> service.reviewPending(42L, "Checked"));
+        assertEquals(ConfirmationStatus.DISPUTED, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void reversedDeliveryCannotBeReviewed() {
+        Delivery delivery = givenDeliveryWithCode();
+        setting.setSmsEnabled(false);
+        delivery.markReversed(reversalEntry("Gone"));
+
+        assertThrows(IllegalStateException.class, () -> service.reviewPending(42L, "Checked"));
+    }
+
     // --- Disputes ---
 
     @Test

@@ -256,7 +256,7 @@ public class Delivery {
     }
 
     /** The manager checked the delivery and found it correct. */
-    public void resolveDispute(String note, Instant now) {
+    public void confirmByManagerReview(String note, Instant now) {
         this.resolutionNote = note;
         confirm(ConfirmationMethod.MANAGER_REVIEW, now);
     }

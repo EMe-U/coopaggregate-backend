@@ -286,7 +286,31 @@ public class DeliveryService {
         if (delivery.getConfirmationStatus() != ConfirmationStatus.DISPUTED) {
             throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is not disputed.");
         }
-        delivery.resolveDispute(note.trim(), Instant.now());
+        delivery.confirmByManagerReview(note.trim(), Instant.now());
+        return delivery;
+    }
+
+    /**
+     * With SMS turned off no code can reach the member, so the manager confirms a pending delivery after checking
+     * it. While SMS are on, the member confirms with the code instead.
+     */
+    @Transactional
+    public Delivery reviewPending(Long deliveryId, String note) {
+        Delivery delivery = deliveryRepository.findForUpdateById(deliveryId)
+                .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
+        if (delivery.isReversed()) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has been reversed.");
+        }
+        if (delivery.getConfirmationStatus() != ConfirmationStatus.PENDING) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is "
+                    + delivery.getConfirmationStatus() + ". Only a pending delivery can be reviewed; a disputed one "
+                    + "is closed with resolve-dispute.");
+        }
+        if (settingRepository.findById(1L).map(setting -> setting.isSmsEnabled()).orElse(false)) {
+            throw new IllegalStateException("SMS are turned on, so the member confirms with the code from the SMS. "
+                    + "Send a new code if it did not arrive.");
+        }
+        delivery.confirmByManagerReview(note.trim(), Instant.now());
         return delivery;
     }
 
