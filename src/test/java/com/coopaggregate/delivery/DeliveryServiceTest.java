@@ -7,8 +7,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -20,21 +23,27 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.aopalliance.intercept.MethodInterceptor;
+import org.hibernate.LazyInitializationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.audit.AuditAction;
 import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
+import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
@@ -43,6 +52,7 @@ import com.coopaggregate.ledger.LedgerEntry;
 import com.coopaggregate.ledger.LedgerEntryRepository;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
+import com.coopaggregate.ledger.ReverseRequest;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotQuantities;
@@ -503,8 +513,9 @@ class DeliveryServiceTest {
         when(lotRepository.findFirstByGradeAndStatus(normal, LotStatus.OPEN)).thenReturn(Optional.of(lotB));
         when(ledgerService.reverse(77L, "Wrong member and grade", manager)).thenReturn(reversalEntry("Wrong"));
 
-        Delivery corrected = service.correct(42L,
+        service.correct(42L,
                 new CorrectDeliveryRequest("Wrong member and grade", 6L, 2L, new BigDecimal("95.50")), manager);
+        Delivery corrected = lastSaved();
 
         assertTrue(original.isReversed());
         assertEquals(bosco, corrected.getMember());
@@ -528,8 +539,9 @@ class DeliveryServiceTest {
                 new BigDecimal("150.00"), new BigDecimal("80.00"), null, null, null)));
         when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
 
-        Delivery corrected = service.correct(42L,
+        service.correct(42L,
                 new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
+        Delivery corrected = lastSaved();
 
         assertEquals(new BigDecimal("90.00"), corrected.getQuantityKg());
     }
@@ -698,8 +710,9 @@ class DeliveryServiceTest {
         original.confirm(ConfirmationMethod.OTP, Instant.now());
         when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
 
-        Delivery corrected = service.correct(42L,
+        service.correct(42L,
                 new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
+        Delivery corrected = lastSaved();
 
         assertEquals(ConfirmationStatus.PENDING, corrected.getConfirmationStatus());
         verify(eventPublisher).publishEvent(new DeliveryRecordedEvent(corrected.getId()));
@@ -712,7 +725,7 @@ class DeliveryServiceTest {
         Delivery delivery = givenDeliveryWithCode();
         String oldCode = confirmationCodes.issue(delivery, Instant.now());
 
-        DeliveryResponse response = service.toResponse(service.resendCode(42L, manager));
+        DeliveryResponse response = service.resendCode(42L, manager);
 
         assertEquals(null, delivery.getConfirmationCodeHash());
         assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, oldCode));
@@ -805,8 +818,8 @@ class DeliveryServiceTest {
         service.resendCode(42L, manager);
         service.resendCode(42L, manager);
 
-        DeliveryResponse response = service.toResponse(
-                service.reviewPending(42L, "Member has no phone signal; weighed again together", manager));
+        DeliveryResponse response = service.reviewPending(42L,
+                "Member has no phone signal; weighed again together", manager);
 
         assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
         assertEquals(ConfirmationMethod.MANAGER_REVIEW, response.confirmationMethod());
@@ -836,8 +849,7 @@ class DeliveryServiceTest {
         Delivery delivery = givenDeliveryWithCode();
         ReflectionTestUtils.setField(delivery, "createdAt", Instant.now().minus(Duration.ofHours(49)));
 
-        DeliveryResponse response = service.toResponse(
-                service.reviewPending(42L, "Member confirmed in person at the store", manager));
+        DeliveryResponse response = service.reviewPending(42L, "Member confirmed in person at the store", manager);
 
         assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
         assertEquals("Checked by the manager", response.confirmationLabel());
@@ -984,8 +996,9 @@ class DeliveryServiceTest {
         delivery.dispute(DisputeReason.WRONG_KG, "Was 90 kg", Instant.now());
         when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
 
-        Delivery corrected = service.correct(42L,
+        service.correct(42L,
                 new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
+        Delivery corrected = lastSaved();
 
         assertEquals("Corrected by " + corrected.getReceiptCode() + ": Weight", delivery.getResolutionNote());
     }
@@ -1016,10 +1029,18 @@ class DeliveryServiceTest {
         givenStoredDelivery("100.00");
         when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
 
-        Delivery corrected = service.correct(42L,
+        service.correct(42L,
                 new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
+        Delivery corrected = lastSaved();
 
         verify(eventPublisher).publishEvent(new DeliveryRecordedEvent(corrected.getId()));
+    }
+
+    // The delivery the service saved last, for example the new delivery of a correction.
+    private Delivery lastSaved() {
+        ArgumentCaptor<Delivery> saved = ArgumentCaptor.forClass(Delivery.class);
+        verify(deliveryRepository, atLeastOnce()).save(saved.capture());
+        return saved.getValue();
     }
 
     private Delivery givenDeliveryWithCode() {
@@ -1050,6 +1071,115 @@ class DeliveryServiceTest {
 
     private RecordedDelivery record(String quantityKg) {
         return service.record(new DeliveryRequest(CLIENT_UUID, 5L, 1L, new BigDecimal(quantityKg), null), manager);
+    }
+
+    // --- Responses are built inside the transaction ---
+    // Open-in-view is off, so a lazy lot or grade can only load while a @Transactional method runs. These tests
+    // drive the real controller through a proxy that opens a "session" only for @Transactional calls, with a lot
+    // that fails like a Hibernate proxy outside one. Building the response after the service returned (the 500
+    // seen on confirm and resend-code) fails here the same way.
+
+    @Test
+    void lazyLotReallyFailsOutsideATransaction() {
+        Delivery delivery = givenLazyDelivery();
+
+        assertThrows(LazyInitializationException.class, () -> DeliveryResponse.from(delivery));
+    }
+
+    @Test
+    void confirmBuildsItsResponseInsideTheTransaction() {
+        Delivery delivery = givenLazyDelivery();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+
+        DeliveryResponse response = controller().confirm(42L, new ConfirmCodeRequest(code));
+
+        assertEquals("Big", response.gradeName());
+        assertEquals(ConfirmationStatus.CONFIRMED, response.confirmationStatus());
+    }
+
+    @Test
+    void resendBuildsItsResponseInsideTheTransaction() {
+        givenLazyDelivery();
+
+        assertEquals("Big", controller().resendCode(42L, jwt()).gradeName());
+    }
+
+    @Test
+    void reviewBuildsItsResponseInsideTheTransaction() {
+        givenLazyDelivery();
+        setting.setSmsEnabled(false);
+
+        assertEquals("Big", controller().review(42L, new ManagerReviewRequest("Checked"), jwt()).gradeName());
+    }
+
+    @Test
+    void disputeAndResolveBuildTheirResponsesInsideTheTransaction() {
+        givenLazyDelivery();
+        DeliveryController controller = controller();
+
+        assertEquals("Big", controller.dispute(42L, new DisputeRequest(DisputeReason.WRONG_KG, null)).gradeName());
+        assertEquals("Big", controller.resolveDispute(42L, new ManagerReviewRequest("Checked")).gradeName());
+    }
+
+    @Test
+    void correctBuildsItsResponseInsideTheTransaction() {
+        Delivery delivery = givenLazyDelivery();
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
+        when(lotRepository.findFirstByGradeAndStatus(grade, LotStatus.OPEN))
+                .thenReturn(Optional.of(delivery.getLot()));
+
+        assertEquals("Big", controller().correct(42L,
+                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), jwt()).gradeName());
+    }
+
+    @Test
+    void reverseBuildsItsResponseInsideTheTransaction() {
+        givenLazyDelivery();
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Gone"));
+
+        assertEquals("Big", controller().reverse(42L, new ReverseRequest("Gone"), jwt()).gradeName());
+    }
+
+    private final AtomicBoolean inTransaction = new AtomicBoolean(false);
+
+    // A stored delivery whose lot behaves like an uninitialised Hibernate proxy outside a transaction.
+    private Delivery givenLazyDelivery() {
+        Delivery delivery = givenDeliveryWithCode();
+        Lot lazyLot = spy(delivery.getLot());
+        doAnswer(invocation -> {
+            if (!inTransaction.get()) {
+                throw new LazyInitializationException("Could not initialize proxy [Lot#3] - no session");
+            }
+            return invocation.callRealMethod();
+        }).when(lazyLot).getGrade();
+        delivery.setLot(lazyLot);
+        return delivery;
+    }
+
+    // The real controller on top of the service, with @Transactional methods marking the session as open.
+    private DeliveryController controller() {
+        ProxyFactory factory = new ProxyFactory(service);
+        factory.setProxyTargetClass(true);
+        factory.addAdvice((MethodInterceptor) invocation -> {
+            boolean opens = invocation.getMethod().isAnnotationPresent(Transactional.class) && !inTransaction.get();
+            if (opens) {
+                inTransaction.set(true);
+            }
+            try {
+                return invocation.proceed();
+            } finally {
+                if (opens) {
+                    inTransaction.set(false);
+                }
+            }
+        });
+        AuthService authService = mock(AuthService.class);
+        when(authService.currentManager("manager@example.com")).thenReturn(manager);
+        return new DeliveryController((DeliveryService) factory.getProxy(), authService);
+    }
+
+    private static Jwt jwt() {
+        return Jwt.withTokenValue("token").header("alg", "HS256").subject("manager@example.com").build();
     }
 
     private Lot givenOpenLot() {

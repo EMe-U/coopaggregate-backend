@@ -152,12 +152,18 @@ public class DeliveryService {
         return markReversed(delivery, reason, manager);
     }
 
+    /** reverse for the API: the response is built before the transaction ends, while lazy data can still load. */
+    @Transactional
+    public DeliveryResponse reverseDelivery(Long deliveryId, String reason, Manager manager) {
+        return toResponse(reverse(deliveryId, reason, manager));
+    }
+
     /**
      * Replaces a wrong delivery: the original is reversed and a corrected delivery is saved in its place, with
      * a new receipt code, in the open lot of its grade, and linked to the original by corrects_id.
      */
     @Transactional
-    public Delivery correct(Long deliveryId, CorrectDeliveryRequest request, Manager manager) {
+    public DeliveryResponse correct(Long deliveryId, CorrectDeliveryRequest request, Manager manager) {
         // Same lock order as a new delivery and closing a lot: the grade first, then the lot.
         Grade grade = gradeRepository.findForUpdateById(request.gradeId())
                 .orElseThrow(() -> new BadRequestException("Grade " + request.gradeId() + " does not exist."));
@@ -189,7 +195,7 @@ public class DeliveryService {
                 saved.getDeductionAmount(),
                 "Delivery " + saved.getReceiptCode() + " corrects " + original.getReceiptCode(), manager);
         eventPublisher.publishEvent(new DeliveryRecordedEvent(saved.getId()));
-        return saved;
+        return toResponse(saved);
     }
 
     /**
@@ -197,7 +203,7 @@ public class DeliveryService {
      * try; after 3 the code no longer works and the manager must send a new one.
      */
     @Transactional(noRollbackFor = WrongCodeException.class)
-    public Delivery confirmWithCode(Long deliveryId, String code) {
+    public DeliveryResponse confirmWithCode(Long deliveryId, String code) {
         Delivery delivery = deliveryRepository.findForUpdateById(deliveryId)
                 .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
         if (delivery.isReversed()) {
@@ -218,7 +224,7 @@ public class DeliveryService {
 
         if (confirmationCodes.matches(delivery, code)) {
             delivery.confirm(ConfirmationMethod.OTP, Instant.now());
-            return delivery;
+            return toResponse(delivery);
         }
         delivery.recordWrongCode();
         int triesLeft = ConfirmationCodes.MAX_WRONG_TRIES - delivery.getConfirmationCodeFailedAttempts();
@@ -232,7 +238,7 @@ public class DeliveryService {
 
     /** Sends the member a new code for a PENDING delivery. The old code stops working; at most 3 per delivery. */
     @Transactional
-    public Delivery resendCode(Long deliveryId, Manager manager) {
+    public DeliveryResponse resendCode(Long deliveryId, Manager manager) {
         Delivery delivery = deliveryRepository.findForUpdateById(deliveryId)
                 .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
         if (delivery.isReversed()) {
@@ -256,12 +262,12 @@ public class DeliveryService {
                 "Delivery " + delivery.getReceiptCode()));
         eventPublisher.publishEvent(new ConfirmationCodeResentEvent(delivery.getId(),
                 delivery.getConfirmationCodeResends()));
-        return delivery;
+        return toResponse(delivery);
     }
 
     /** Records a member's complaint about a delivery, made in person or by SMS. */
     @Transactional
-    public Delivery dispute(Long deliveryId, DisputeReason reason, String note) {
+    public DeliveryResponse dispute(Long deliveryId, DisputeReason reason, String note) {
         Delivery delivery = findDelivery(deliveryId);
         if (delivery.isReversed()) {
             throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has been reversed.");
@@ -270,7 +276,7 @@ public class DeliveryService {
             throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is already disputed.");
         }
         delivery.dispute(reason, note == null || note.isBlank() ? null : note.trim(), Instant.now());
-        return delivery;
+        return toResponse(delivery);
     }
 
     /**
@@ -278,7 +284,7 @@ public class DeliveryService {
      * with correct or reverse instead, which also closes the dispute.
      */
     @Transactional
-    public Delivery resolveDispute(Long deliveryId, String note) {
+    public DeliveryResponse resolveDispute(Long deliveryId, String note) {
         Delivery delivery = findDelivery(deliveryId);
         if (delivery.isReversed()) {
             throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has been reversed.");
@@ -287,7 +293,7 @@ public class DeliveryService {
             throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is not disputed.");
         }
         delivery.confirmByManagerReview(note.trim(), Instant.now());
-        return delivery;
+        return toResponse(delivery);
     }
 
     /**
@@ -297,7 +303,7 @@ public class DeliveryService {
      * delivery afterwards by SMS.
      */
     @Transactional
-    public Delivery reviewPending(Long deliveryId, String note, Manager manager) {
+    public DeliveryResponse reviewPending(Long deliveryId, String note, Manager manager) {
         Delivery delivery = deliveryRepository.findForUpdateById(deliveryId)
                 .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
         if (delivery.isReversed()) {
@@ -320,10 +326,12 @@ public class DeliveryService {
         delivery.confirmByManagerReview(note.trim(), Instant.now());
         auditLogRepository.save(AuditLog.of(AuditAction.DELIVERY_REVIEWED, delivery.getMember(), manager,
                 "Delivery " + delivery.getReceiptCode() + ": " + note.trim()));
-        return delivery;
+        return toResponse(delivery);
     }
 
-    public DeliveryResponse toResponse(Delivery delivery) {
+    // Reads the delivery's member, lot and grade, which may be lazy. Only call it inside a transaction, and
+    // return the response instead of the entity: open-in-view is off, so nothing loads once the method returns.
+    DeliveryResponse toResponse(Delivery delivery) {
         Long correctedById = deliveryRepository.findByCorrectsIdIn(List.of(delivery.getId())).stream()
                 .findFirst()
                 .map(Delivery::getId)

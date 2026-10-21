@@ -223,9 +223,7 @@ class DeliveryControllerTest {
 
     @Test
     void confirmedDeliveryResponseNeverContainsTheCode() throws Exception {
-        Delivery delivery = new Delivery();
-        when(deliveryService.confirmWithCode(100L, "482193")).thenReturn(delivery);
-        when(deliveryService.toResponse(delivery)).thenReturn(response());
+        when(deliveryService.confirmWithCode(100L, "482193")).thenReturn(response());
 
         String body = confirm("{\"code\": \"482193\"}")
                 .andExpect(status().isOk())

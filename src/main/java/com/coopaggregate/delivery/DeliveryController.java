@@ -79,9 +79,7 @@ public class DeliveryController {
             + "counted. Not possible once its lot has sales")
     public DeliveryResponse reverse(@PathVariable Long id, @Valid @RequestBody ReverseRequest request,
                                     @AuthenticationPrincipal Jwt jwt) {
-        Delivery delivery = deliveryService.reverse(id, request.reason(),
-                authService.currentManager(jwt.getSubject()));
-        return deliveryService.toResponse(delivery);
+        return deliveryService.reverseDelivery(id, request.reason(), authService.currentManager(jwt.getSubject()));
     }
 
     @PostMapping("/{id}/correct")
@@ -90,23 +88,21 @@ public class DeliveryController {
             + "with a new receipt code in the open lot of its grade. Not possible once the original's lot has sales")
     public DeliveryResponse correct(@PathVariable Long id, @Valid @RequestBody CorrectDeliveryRequest request,
                                     @AuthenticationPrincipal Jwt jwt) {
-        return DeliveryResponse.from(
-                deliveryService.correct(id, request, authService.currentManager(jwt.getSubject())));
+        return deliveryService.correct(id, request, authService.currentManager(jwt.getSubject()));
     }
 
     @PostMapping("/{id}/confirm")
     @Operation(summary = "Confirm a pending delivery with the 6-digit code the member got by SMS. The code expires "
             + "after 10 minutes and stops working after 3 wrong tries")
     public DeliveryResponse confirm(@PathVariable Long id, @Valid @RequestBody ConfirmCodeRequest request) {
-        return deliveryService.toResponse(deliveryService.confirmWithCode(id, request.code()));
+        return deliveryService.confirmWithCode(id, request.code());
     }
 
     @PostMapping("/{id}/resend-code")
     @Operation(summary = "Send the member a new code by SMS. The old code stops working. At most 3 times per "
             + "delivery, and not when SMS are turned off")
     public DeliveryResponse resendCode(@PathVariable Long id, @AuthenticationPrincipal Jwt jwt) {
-        return deliveryService.toResponse(
-                deliveryService.resendCode(id, authService.currentManager(jwt.getSubject())));
+        return deliveryService.resendCode(id, authService.currentManager(jwt.getSubject()));
     }
 
     @PostMapping("/{id}/review")
@@ -114,20 +110,19 @@ public class DeliveryController {
             + "3 new codes were already sent, or the delivery has been pending for more than 48 hours")
     public DeliveryResponse review(@PathVariable Long id, @Valid @RequestBody ManagerReviewRequest request,
                                    @AuthenticationPrincipal Jwt jwt) {
-        return deliveryService.toResponse(
-                deliveryService.reviewPending(id, request.note(), authService.currentManager(jwt.getSubject())));
+        return deliveryService.reviewPending(id, request.note(), authService.currentManager(jwt.getSubject()));
     }
 
     @PostMapping("/{id}/dispute")
     @Operation(summary = "Record that the member says a delivery is wrong. Disputed deliveries block sharing their lot")
     public DeliveryResponse dispute(@PathVariable Long id, @Valid @RequestBody DisputeRequest request) {
-        return deliveryService.toResponse(deliveryService.dispute(id, request.reason(), request.note()));
+        return deliveryService.dispute(id, request.reason(), request.note());
     }
 
     @PostMapping("/{id}/resolve-dispute")
     @Operation(summary = "Close a dispute after checking that the delivery is correct. A wrong delivery is fixed with "
             + "correct or reverse instead")
     public DeliveryResponse resolveDispute(@PathVariable Long id, @Valid @RequestBody ManagerReviewRequest request) {
-        return deliveryService.toResponse(deliveryService.resolveDispute(id, request.note()));
+        return deliveryService.resolveDispute(id, request.note());
     }
 }
