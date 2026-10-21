@@ -20,6 +20,9 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.audit.AuditAction;
+import com.coopaggregate.audit.AuditLog;
+import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.ShortCodes;
@@ -61,13 +64,15 @@ public class DeliveryService {
     private final SaleRepository saleRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final ConfirmationCodes confirmationCodes;
+    private final AuditLogRepository auditLogRepository;
     private final ApplicationEventPublisher eventPublisher;
 
     public DeliveryService(DeliveryRepository deliveryRepository, MemberRepository memberRepository,
                            GradeRepository gradeRepository, SettingRepository settingRepository,
                            LotService lotService, LedgerService ledgerService, LotRepository lotRepository,
                            SaleRepository saleRepository, LedgerEntryRepository ledgerEntryRepository,
-                           ConfirmationCodes confirmationCodes, ApplicationEventPublisher eventPublisher) {
+                           ConfirmationCodes confirmationCodes, AuditLogRepository auditLogRepository,
+                           ApplicationEventPublisher eventPublisher) {
         this.deliveryRepository = deliveryRepository;
         this.memberRepository = memberRepository;
         this.gradeRepository = gradeRepository;
@@ -78,6 +83,7 @@ public class DeliveryService {
         this.saleRepository = saleRepository;
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.confirmationCodes = confirmationCodes;
+        this.auditLogRepository = auditLogRepository;
         this.eventPublisher = eventPublisher;
     }
 
@@ -222,6 +228,35 @@ public class DeliveryService {
         }
         throw new WrongCodeException("Wrong code. " + triesLeft + " tr" + (triesLeft == 1 ? "y" : "ies")
                 + " left.");
+    }
+
+    /** Sends the member a new code for a PENDING delivery. The old code stops working; at most 3 per delivery. */
+    @Transactional
+    public Delivery resendCode(Long deliveryId, Manager manager) {
+        Delivery delivery = deliveryRepository.findForUpdateById(deliveryId)
+                .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
+        if (delivery.isReversed()) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has been reversed.");
+        }
+        if (delivery.getConfirmationStatus() != ConfirmationStatus.PENDING) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is "
+                    + delivery.getConfirmationStatus() + ". A code is only sent for a pending delivery.");
+        }
+        if (!settingRepository.findById(1L).map(setting -> setting.isSmsEnabled()).orElse(false)) {
+            throw new IllegalStateException("SMS are turned off, so no code can be sent. Turn SMS on in Settings, "
+                    + "or confirm the delivery with a manager review.");
+        }
+        if (delivery.getConfirmationCodeResends() >= ConfirmationCodes.MAX_RESENDS) {
+            throw new IllegalStateException("A new code was already sent " + ConfirmationCodes.MAX_RESENDS
+                    + " times for delivery " + delivery.getReceiptCode() + ".");
+        }
+
+        delivery.recordResend();
+        auditLogRepository.save(AuditLog.of(AuditAction.CONFIRMATION_CODE_RESENT, delivery.getMember(), manager,
+                "Delivery " + delivery.getReceiptCode()));
+        eventPublisher.publishEvent(new ConfirmationCodeResentEvent(delivery.getId(),
+                delivery.getConfirmationCodeResends()));
+        return delivery;
     }
 
     /** Records a member's complaint about a delivery, made in person or by SMS. */

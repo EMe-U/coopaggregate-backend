@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import com.coopaggregate.delivery.ConfirmationCodeResentEvent;
 import com.coopaggregate.delivery.DeliveryRecordedEvent;
 
 /**
@@ -32,6 +33,16 @@ public class DeliverySmsListener {
         } catch (RuntimeException e) {
             // The message is either still QUEUED (and retried later) or was never created; the delivery is safe.
             log.error("SMS for delivery {} could not be queued", event.deliveryId(), e);
+        }
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onCodeResent(ConfirmationCodeResentEvent event) {
+        try {
+            smsService.queueCodeMessage(event.deliveryId(), event.sendNumber()).ifPresent(smsService::trySend);
+        } catch (RuntimeException e) {
+            log.error("New code SMS for delivery {} could not be queued", event.deliveryId(), e);
         }
     }
 }

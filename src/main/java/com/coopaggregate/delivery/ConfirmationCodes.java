@@ -13,6 +13,7 @@ public class ConfirmationCodes {
 
     public static final Duration VALIDITY = Duration.ofMinutes(10);
     public static final int MAX_WRONG_TRIES = 3;
+    public static final int MAX_RESENDS = 3;
 
     private final SecureRandom random = new SecureRandom();
     private final PasswordEncoder passwordEncoder;

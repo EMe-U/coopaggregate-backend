@@ -101,6 +101,14 @@ public class DeliveryController {
         return deliveryService.toResponse(deliveryService.confirmWithCode(id, request.code()));
     }
 
+    @PostMapping("/{id}/resend-code")
+    @Operation(summary = "Send the member a new code by SMS. The old code stops working. At most 3 times per "
+            + "delivery, and not when SMS are turned off")
+    public DeliveryResponse resendCode(@PathVariable Long id, @AuthenticationPrincipal Jwt jwt) {
+        return deliveryService.toResponse(
+                deliveryService.resendCode(id, authService.currentManager(jwt.getSubject())));
+    }
+
     @PostMapping("/{id}/dispute")
     @Operation(summary = "Record that the member says a delivery is wrong. Disputed deliveries block sharing their lot")
     public DeliveryResponse dispute(@PathVariable Long id, @Valid @RequestBody DisputeRequest request) {

@@ -17,6 +17,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import com.coopaggregate.delivery.ConfirmationCodeResentEvent;
 import com.coopaggregate.delivery.DeliveryRecordedEvent;
 
 class DeliverySmsListenerTest {
@@ -53,6 +54,23 @@ class DeliverySmsListenerTest {
         when(smsService.queueCodeMessage(42L, 0)).thenThrow(new IllegalStateException("database is busy"));
 
         listener.onDeliveryRecorded(new DeliveryRecordedEvent(42L));
+    }
+
+    @Test
+    void resentCodeIsQueuedWithItsSendNumberAndSent() {
+        when(smsService.queueCodeMessage(42L, 2)).thenReturn(Optional.of(8L));
+
+        listener.onCodeResent(new ConfirmationCodeResentEvent(42L, 2));
+
+        verify(smsService).trySend(8L);
+    }
+
+    @Test
+    void resentCodeIsOnlySentAfterCommitAndOnAnotherThread() throws Exception {
+        Method method = DeliverySmsListener.class.getMethod("onCodeResent", ConfirmationCodeResentEvent.class);
+
+        assertEquals(TransactionPhase.AFTER_COMMIT, method.getAnnotation(TransactionalEventListener.class).phase());
+        assertNotNull(method.getAnnotation(Async.class));
     }
 
     @Test

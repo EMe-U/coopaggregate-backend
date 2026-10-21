@@ -32,6 +32,9 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.audit.AuditAction;
+import com.coopaggregate.audit.AuditLog;
+import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
@@ -71,6 +74,7 @@ class DeliveryServiceTest {
     private ApplicationEventPublisher eventPublisher;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(4);
     private ConfirmationCodes confirmationCodes;
+    private AuditLogRepository auditLogRepository;
     private SaleRepository saleRepository;
     private LedgerEntryRepository ledgerEntryRepository;
     private Setting setting;
@@ -117,9 +121,10 @@ class DeliveryServiceTest {
         when(memberRepository.findForUpdateById(5L)).thenReturn(Optional.of(member));
         eventPublisher = mock(ApplicationEventPublisher.class);
         confirmationCodes = new ConfirmationCodes(encoder);
+        auditLogRepository = mock(AuditLogRepository.class);
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
                 new LotService(lotRepository, gradeRepository), ledgerService, lotRepository, saleRepository,
-                ledgerEntryRepository, confirmationCodes, eventPublisher);
+                ledgerEntryRepository, confirmationCodes, auditLogRepository, eventPublisher);
     }
 
     @ParameterizedTest
@@ -698,6 +703,81 @@ class DeliveryServiceTest {
 
         assertEquals(ConfirmationStatus.PENDING, corrected.getConfirmationStatus());
         verify(eventPublisher).publishEvent(new DeliveryRecordedEvent(corrected.getId()));
+    }
+
+    // --- Sending a new code ---
+
+    @Test
+    void resendKillsTheOldCodeAndSendsANewOne() {
+        Delivery delivery = givenDeliveryWithCode();
+        String oldCode = confirmationCodes.issue(delivery, Instant.now());
+
+        DeliveryResponse response = service.toResponse(service.resendCode(42L, manager));
+
+        assertEquals(null, delivery.getConfirmationCodeHash());
+        assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, oldCode));
+        assertEquals(2, response.codeResendsLeft());
+        verify(eventPublisher).publishEvent(new ConfirmationCodeResentEvent(42L, 1));
+        ArgumentCaptor<AuditLog> audit = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogRepository).save(audit.capture());
+        assertEquals(AuditAction.CONFIRMATION_CODE_RESENT, audit.getValue().getAction());
+        assertEquals("Delivery RCT-7K2Q", audit.getValue().getDetails());
+    }
+
+    @Test
+    void newCodeHasItsOwnThreeTries() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+        for (int i = 0; i < 3; i++) {
+            assertThrows(WrongCodeException.class, () -> service.confirmWithCode(42L, otherCode(code)));
+        }
+
+        service.resendCode(42L, manager);
+        String newCode = confirmationCodes.issue(delivery, Instant.now());
+        service.confirmWithCode(42L, newCode);
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void aCodeCanBeSentAgainAtMostThreeTimes() {
+        givenDeliveryWithCode();
+        service.resendCode(42L, manager);
+        service.resendCode(42L, manager);
+        service.resendCode(42L, manager);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.resendCode(42L, manager));
+
+        assertEquals("A new code was already sent 3 times for delivery RCT-7K2Q.", e.getMessage());
+        verify(eventPublisher).publishEvent(new ConfirmationCodeResentEvent(42L, 3));
+        verify(eventPublisher, never()).publishEvent(new ConfirmationCodeResentEvent(42L, 4));
+    }
+
+    @Test
+    void noCodeIsSentWhenSmsAreTurnedOff() {
+        givenDeliveryWithCode();
+        setting.setSmsEnabled(false);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.resendCode(42L, manager));
+
+        assertTrue(e.getMessage().startsWith("SMS are turned off, so no code can be sent."));
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void noNewCodeForAConfirmedDelivery() {
+        Delivery delivery = givenDeliveryWithCode();
+        delivery.confirm(ConfirmationMethod.SMS, Instant.now());
+
+        assertThrows(IllegalStateException.class, () -> service.resendCode(42L, manager));
+    }
+
+    @Test
+    void noNewCodeForAReversedDelivery() {
+        Delivery delivery = givenDeliveryWithCode();
+        delivery.markReversed(reversalEntry("Gone"));
+
+        assertThrows(IllegalStateException.class, () -> service.resendCode(42L, manager));
     }
 
     // --- Disputes ---

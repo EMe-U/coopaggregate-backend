@@ -242,6 +242,12 @@ public class Delivery {
         this.confirmationCodeFailedAttempts++;
     }
 
+    /** The old code stops working at once; the new one only exists once its SMS is sent. */
+    public void recordResend() {
+        this.confirmationCodeResends++;
+        clearCode();
+    }
+
     public void dispute(DisputeReason reason, String note, Instant now) {
         this.confirmationStatus = ConfirmationStatus.DISPUTED;
         this.disputeReason = reason;
