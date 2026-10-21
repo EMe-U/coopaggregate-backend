@@ -826,8 +826,44 @@ class DeliveryServiceTest {
                 () -> service.reviewPending(42L, "Checked", manager));
 
         assertEquals("SMS are turned on, so the member confirms with the code from the SMS. Send a new code if it "
-                + "did not arrive (1 left).", e.getMessage());
+                + "did not arrive (1 left), or review the delivery once it has been pending for 48 hours.",
+                e.getMessage());
         assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void deliveryPendingForMoreThan48HoursCanBeReviewed() {
+        Delivery delivery = givenDeliveryWithCode();
+        ReflectionTestUtils.setField(delivery, "createdAt", Instant.now().minus(Duration.ofHours(49)));
+
+        DeliveryResponse response = service.toResponse(
+                service.reviewPending(42L, "Member confirmed in person at the store", manager));
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+        assertEquals("Checked by the manager", response.confirmationLabel());
+        ArgumentCaptor<AuditLog> audit = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogRepository).save(audit.capture());
+        assertEquals(AuditAction.DELIVERY_REVIEWED, audit.getValue().getAction());
+        assertEquals("Delivery RCT-7K2Q: Member confirmed in person at the store", audit.getValue().getDetails());
+    }
+
+    @Test
+    void deliveryPendingForLessThan48HoursCannotBeReviewedWhileCodesAreLeft() {
+        Delivery delivery = givenDeliveryWithCode();
+        ReflectionTestUtils.setField(delivery, "createdAt", Instant.now().minus(Duration.ofHours(47)));
+
+        assertThrows(IllegalStateException.class, () -> service.reviewPending(42L, "Checked", manager));
+        assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void overdueButDisputedDeliveryIsNotClosedByTheReview() {
+        Delivery delivery = givenDeliveryWithCode();
+        ReflectionTestUtils.setField(delivery, "createdAt", Instant.now().minus(Duration.ofHours(72)));
+        delivery.dispute(DisputeReason.WRONG_KG, null, Instant.now());
+
+        assertThrows(IllegalStateException.class, () -> service.reviewPending(42L, "Checked", manager));
+        assertEquals(ConfirmationStatus.DISPUTED, delivery.getConfirmationStatus());
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.coopaggregate.delivery;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -22,6 +23,9 @@ import jakarta.persistence.ManyToOne;
 
 @Entity
 public class Delivery {
+
+    /** A delivery still PENDING this long after it reached the server is overdue (dashboard, manager review). */
+    public static final Duration PENDING_TOO_LONG = Duration.ofHours(48);
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

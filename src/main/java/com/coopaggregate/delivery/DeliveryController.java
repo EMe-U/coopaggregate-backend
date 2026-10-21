@@ -110,8 +110,8 @@ public class DeliveryController {
     }
 
     @PostMapping("/{id}/review")
-    @Operation(summary = "Confirm a pending delivery after the manager checked it. Only when no code can reach the "
-            + "member: SMS are turned off, or all 3 new codes were already sent")
+    @Operation(summary = "Confirm a pending delivery after the manager checked it. Only when SMS are turned off, all "
+            + "3 new codes were already sent, or the delivery has been pending for more than 48 hours")
     public DeliveryResponse review(@PathVariable Long id, @Valid @RequestBody ManagerReviewRequest request,
                                    @AuthenticationPrincipal Jwt jwt) {
         return deliveryService.toResponse(

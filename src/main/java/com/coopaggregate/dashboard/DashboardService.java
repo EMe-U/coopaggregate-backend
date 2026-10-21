@@ -2,7 +2,6 @@ package com.coopaggregate.dashboard;
 
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.TemporalAdjusters;
@@ -18,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.delivery.ConfirmationStatus;
+import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.delivery.GradeDeliveredKg;
 import com.coopaggregate.grade.Grade;
@@ -38,7 +38,6 @@ import com.coopaggregate.payment.PaymentService;
 public class DashboardService {
 
     private static final int WEEKS = 4;
-    private static final Duration PENDING_TOO_LONG = Duration.ofHours(48);
 
     private final MemberService memberService;
     private final LotService lotService;
@@ -93,7 +92,7 @@ public class DashboardService {
                 deliveryRepository.countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus.DISPUTED),
                 // Counted from when the server saved the delivery, so a late offline sync is not overdue at once.
                 deliveryRepository.countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(
-                        ConfirmationStatus.PENDING, Instant.now().minus(PENDING_TOO_LONG)));
+                        ConfirmationStatus.PENDING, Instant.now().minus(Delivery.PENDING_TOO_LONG)));
     }
 
     private List<DashboardResponse.OpenLot> openLots() {

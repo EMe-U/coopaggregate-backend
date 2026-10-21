@@ -220,7 +220,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/deliveries/{id}/correct` | JWT | Body `{"reason", "memberId", "gradeId", "quantityKg"}`. Replaces a wrong delivery, returns the corrected one with `201` |
 | POST | `/api/deliveries/{id}/confirm` | JWT | Body `{"code"}`. Confirms a pending delivery with the 6-digit code from the member's SMS |
 | POST | `/api/deliveries/{id}/resend-code` | JWT | Sends the member a new code; the old one stops working. At most 3 times per delivery |
-| POST | `/api/deliveries/{id}/review` | JWT | Body `{"note"}`. Confirms a pending delivery after the manager checked it. Only while SMS are off, or once all 3 new codes were sent |
+| POST | `/api/deliveries/{id}/review` | JWT | Body `{"note"}`. Confirms a pending delivery after the manager checked it. Only while SMS are off, once all 3 new codes were sent, or after 48 hours pending |
 | POST | `/api/deliveries/{id}/dispute` | JWT | Body `{"reason", "note"}`. Records that the member says the delivery is wrong |
 | POST | `/api/deliveries/{id}/resolve-dispute` | JWT | Body `{"note"}`. Closes a dispute after checking the delivery is correct |
 | POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
@@ -296,8 +296,10 @@ Every delivery is confirmed by the member with a one-time code sent by SMS.
   `CONFIRMED` with method `MANAGER_REVIEW` ("Checked by the manager") and is written to the
   change history. This is only allowed for a `PENDING` delivery when:
   - SMS are turned off (then no code is ever sent, so deliveries stay `PENDING` until
-    reviewed), or
-  - SMS are on but all 3 new codes were already sent.
+    reviewed),
+  - SMS are on but all 3 new codes were already sent, or
+  - it has been `PENDING` for more than 48 hours since it reached the server (`syncedAt`),
+    the same deliveries the dashboard shows as overdue.
 
   In every other case it returns `409`. The member can still dispute a reviewed delivery
   by replying `2 RCT-…`.

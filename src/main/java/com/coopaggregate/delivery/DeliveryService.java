@@ -291,9 +291,10 @@ public class DeliveryService {
     }
 
     /**
-     * The manager confirms a pending delivery after checking it, when no code can reach the member: SMS are turned
-     * off, or all 3 new codes were already sent and the delivery is still pending. In every other case the member
-     * confirms with the code. The member can still dispute the delivery afterwards by SMS.
+     * The manager confirms a pending delivery after checking it, when the member cannot or did not confirm it: SMS
+     * are turned off, all 3 new codes were already sent, or it has been pending for more than 48 hours since it
+     * reached the server. In every other case the member confirms with the code. The member can still dispute the
+     * delivery afterwards by SMS.
      */
     @Transactional
     public Delivery reviewPending(Long deliveryId, String note, Manager manager) {
@@ -309,9 +310,12 @@ public class DeliveryService {
         }
         boolean smsEnabled = settingRepository.findById(1L).map(setting -> setting.isSmsEnabled()).orElse(false);
         int resendsLeft = ConfirmationCodes.MAX_RESENDS - delivery.getConfirmationCodeResends();
-        if (smsEnabled && resendsLeft > 0) {
+        boolean overdue = delivery.getCreatedAt() != null
+                && delivery.getCreatedAt().isBefore(Instant.now().minus(Delivery.PENDING_TOO_LONG));
+        if (smsEnabled && resendsLeft > 0 && !overdue) {
             throw new IllegalStateException("SMS are turned on, so the member confirms with the code from the SMS. "
-                    + "Send a new code if it did not arrive (" + resendsLeft + " left).");
+                    + "Send a new code if it did not arrive (" + resendsLeft + " left), or review the delivery once "
+                    + "it has been pending for 48 hours.");
         }
         delivery.confirmByManagerReview(note.trim(), Instant.now());
         auditLogRepository.save(AuditLog.of(AuditAction.DELIVERY_REVIEWED, delivery.getMember(), manager,
