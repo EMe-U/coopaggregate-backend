@@ -89,6 +89,7 @@ cd coopaggregate-backend
 | `AT_API_KEY` | With Africa's Talking | Africa's Talking API key |
 | `AT_SENDER_ID` | No | Sender name shown on members' phones, if your account has one |
 | `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
+| `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
 | `PORT` | No | HTTP port. Default: `8080` |
 
 The manager is the only user who logs in. On startup, if the `manager` table is empty,
@@ -325,9 +326,10 @@ was confirmed, disputed or reversed, or a newer code was asked for) is `CANCELLE
 of sent. No SMS are sent when SMS are turned off in the settings.
 
 `SMS_PROVIDER=log` (default) sends nothing. The messages are in `sms_log`, but the codes
-are masked there, so a delivery cannot be confirmed with a code in this mode: use the
-Africa's Talking sandbox and its simulator to see the codes, or turn SMS off and use the
-manager review. `SMS_PROVIDER=africastalking` sends them with Africa's Talking
+are masked there. To test codes locally, set `SMS_LOG_SHOW_CODES=true`: the log provider
+then prints each SMS, real code included, in the console (`sms_log` stays masked). This is
+**for development only**: with any other provider the app refuses to start while it is
+`true`. Without it, use the Africa's Talking sandbox and its simulator to see the codes. `SMS_PROVIDER=africastalking` sends them with Africa's Talking
 (`AT_USERNAME=sandbox` uses their sandbox and simulator).
 
 **Replies:** in the Africa's Talking dashboard, set the SMS callback URL to
@@ -632,6 +634,9 @@ Environment variables to set in Render:
 | `SMS_PROVIDER` | `africastalking` to send real SMS, otherwise leave it unset |
 | `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
 | `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
+
+Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app
+refuses to start if it is `true` with `SMS_PROVIDER=africastalking`.
 
 Do not set `PORT`; Render sets it. `JAVA_TOOL_OPTIONS` keeps the JVM within the
 512 MB memory limit of the free plan.
