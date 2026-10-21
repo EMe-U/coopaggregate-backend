@@ -122,6 +122,7 @@ class SmsServiceTest {
         Instant before = Instant.now();
 
         service.trySend(7L);
+        Instant after = Instant.now();
 
         String code = sentCode();
         assertEquals(SmsStatus.SENT, sms.getStatus());
@@ -129,8 +130,10 @@ class SmsServiceTest {
         assertFalse(sms.getMessage().contains(code));
         assertNotEquals(code, delivery.getConfirmationCodeHash());
         assertTrue(encoder.matches(code, delivery.getConfirmationCodeHash()));
-        Duration validity = Duration.between(before, delivery.getConfirmationCodeExpiresAt());
-        assertTrue(validity.compareTo(Duration.ofMinutes(10)) <= 0 && validity.compareTo(Duration.ofMinutes(9)) > 0);
+        // Valid for 10 minutes from the moment the code was made, somewhere between before and after.
+        Instant expiresAt = delivery.getConfirmationCodeExpiresAt();
+        assertFalse(expiresAt.isBefore(before.plus(Duration.ofMinutes(10))));
+        assertFalse(expiresAt.isAfter(after.plus(Duration.ofMinutes(10))));
     }
 
     @Test
