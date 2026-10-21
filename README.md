@@ -191,7 +191,6 @@ ERD: see `docs/erd.png`.
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
-| POST | `/api/members/{id}/pin` | JWT | Body `{"pin"}`. Sets or resets the member's 4-digit PIN; a reset unlocks it |
 | GET | `/api/grades?includeInactive=false` | JWT | Grades `{id, code, name, nameRw, active, floorPricePerKg, description, sizeInfo, packaging}`, sorted by code. Only active ones unless `includeInactive=true`. `floorPricePerKg` is `null` when not set |
 | PUT | `/api/grades/{id}` | JWT | Body `{"name", "nameRw", "active", "floorPricePerKg", "description", "sizeInfo", "packaging"}`. Edits a grade. Grades A, B and C are fixed: they cannot be created or deleted |
 | GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold and remaining kg |
@@ -218,7 +217,9 @@ ERD: see `docs/erd.png`.
 | GET | `/api/deliveries/{id}` | JWT | One delivery, also when it was reversed |
 | POST | `/api/deliveries/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a delivery recorded by mistake |
 | POST | `/api/deliveries/{id}/correct` | JWT | Body `{"reason", "memberId", "gradeId", "quantityKg"}`. Replaces a wrong delivery, returns the corrected one with `201` |
-| POST | `/api/deliveries/{id}/confirm` | JWT | Body `{"pin"}`. Confirms a pending delivery with the member's PIN |
+| POST | `/api/deliveries/{id}/confirm` | JWT | Body `{"code"}`. Confirms a pending delivery with the 6-digit code from the member's SMS |
+| POST | `/api/deliveries/{id}/resend-code` | JWT | Sends the member a new code; the old one stops working. At most 3 times per delivery |
+| POST | `/api/deliveries/{id}/review` | JWT | Body `{"note"}`. Confirms a pending delivery after the manager checked it. Only while SMS are turned off |
 | POST | `/api/deliveries/{id}/dispute` | JWT | Body `{"reason", "note"}`. Records that the member says the delivery is wrong |
 | POST | `/api/deliveries/{id}/resolve-dispute` | JWT | Body `{"note"}`. Closes a dispute after checking the delivery is correct |
 | POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
@@ -245,10 +246,10 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
 - `cooperativeEmail` and `location` are optional. `minOrderKg` (default 100) must be more than 0.
 - `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
   duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
-- Every change to the settings or a grade, every password change and every member PIN
-  set or reset is written to the change history (`GET /api/settings/history`) with the
-  manager and the time, for example `smsEnabled: true -> false`. Passwords and PINs are
-  never written to it.
+- Every change to the settings or a grade, every password change and every new code sent
+  for a delivery is written to the change history (`GET /api/settings/history`) with the
+  manager and the time, for example `smsEnabled: true -> false`. Passwords and codes are
+  never written to it. Rows from the old member PIN (`PIN_SET`, `PIN_RESET`) stay there.
 
 ### Errors
 
@@ -272,23 +273,26 @@ chain and `GET /api/ledger/verify` reports the first broken entry. Mistakes are 
 with a REVERSAL entry that cancels the original. A reversal cannot be reversed, and an
 entry can only be reversed once.
 
-### Member PIN and delivery confirmation
+### Delivery confirmation
 
-Each member can have a 4-digit PIN to confirm their deliveries.
+Every delivery is confirmed by the member with a one-time code sent by SMS.
 
-- **PIN:** `POST /api/members/{id}/pin` sets or resets it. Exactly 4 digits; 4 equal digits
-  or digits in a row (`1234`, `4321`, ...) are refused. Only a BCrypt hash is stored and the
-  PIN is never returned or logged. Member responses show `hasPin` and `pinLocked`. Every set
-  and reset is written to `audit_log`.
-- **Confirming:** `POST /api/deliveries` accepts an optional `confirmationPin`, typed by the
-  member on the manager's device. This also works offline: the PIN travels with the
-  delivery when it syncs.
-  - Right PIN: the delivery is `CONFIRMED` (method `PIN`).
-  - No PIN, or the member has none: `PENDING`.
-  - Wrong PIN: the delivery is **still saved** (`PENDING`, `pinMismatch: true`) and the
-    attempt is counted. 3 wrong PINs in a row lock the PIN until the manager resets it.
-- `POST /api/deliveries/{id}/confirm` confirms a `PENDING` delivery later with the PIN
-  (wrong PIN `400` with the attempts left, locked PIN `409`).
+- When a delivery is saved (online, or when an offline one syncs) it is `PENDING`, and
+  the member gets one SMS with the delivery and a 6-digit code (see SMS). If the delivery
+  is right, the member gives the code to the manager.
+- `POST /api/deliveries/{id}/confirm` with `{"code"}` makes it `CONFIRMED` (method `OTP`).
+  - The code is random (`SecureRandom`), and only a BCrypt hash is stored. It is never
+    returned, logged or saved in `sms_log`, where it shows as `******`.
+  - It expires 10 minutes after it is sent (`409`).
+  - A wrong code is `400` with the tries left. After 3 wrong tries the code stops working,
+    even the right one (`409`); the manager must send a new one.
+- `POST /api/deliveries/{id}/resend-code` sends a new code and the old one stops working at
+  once. At most 3 times per delivery (`409` after that); each delivery response shows
+  `codeResendsLeft`. Every resend is written to the change history.
+- A correction is a new delivery, so it also starts `PENDING` and gets its own code.
+- **SMS turned off:** no code can be sent, so deliveries stay `PENDING` until the manager
+  checks them and confirms with `POST /api/deliveries/{id}/review` and a note (method
+  `MANAGER_REVIEW`). This only works while SMS are off; with SMS on the member confirms.
 - **Disputes:** `POST /api/deliveries/{id}/dispute` records a member's complaint
   (`WRONG_KG`, `WRONG_GRADE`, `NOT_MY_DELIVERY` or `OTHER`, with an optional note).
   - If the record is right: `POST /api/deliveries/{id}/resolve-dispute` with a note puts it
@@ -299,31 +303,38 @@ Each member can have a 4-digit PIN to confirm their deliveries.
 - Deliveries recorded before confirmations existed are `CONFIRMED` with method
   `RECORDED_BEFORE_CONFIRMATION`, so they are not counted as waiting. The member never
   confirmed them. Each delivery also has `confirmationLabel`, the text to show, for example
-  "Recorded before confirmation existed" or "Confirmed by member with PIN".
+  "Recorded before confirmation existed" or "Confirmed by member with the SMS code".
+- The permanent member PIN was removed. Deliveries already confirmed with it keep method
+  `PIN` ("Confirmed by member with PIN").
 
 ### SMS
 
 After a delivery is saved, the member gets one SMS in their language (`rw` or `en`):
 
-- Confirmed: "CoopAggregate: you confirmed RCT-7K2Q, 300 kg Big, 19/10. If this was not
-  you, reply 2 RCT-7K2Q."
-- Pending: "CoopAggregate: RCT-7K2Q, 300 kg Big, 19/10. Reply 1 RCT-7K2Q if correct,
-  2 RCT-7K2Q if wrong."
+"CoopAggregate: RCT-7K2Q, 300 kg Big, 21/10. If correct, give the manager code 482193.
+If wrong, don't give the code, reply 2 RCT-7K2Q."
+
+The Kinyarwanda text still needs a check by a native speaker.
 
 The SMS is sent in the background after the delivery is committed, so a failed SMS never
-fails or slows a delivery. Every message is saved in `sms_log` (`QUEUED`, `SENT` or
-`FAILED`) and failed ones are retried every 5 minutes, up to 5 attempts. No SMS are sent
-when SMS are turned off in the settings.
+fails or slows a delivery. Every message is saved in `sms_log` (`QUEUED`, `SENT`, `FAILED`
+or `CANCELLED`) with the code replaced by `******`. Failed ones are retried every 5 minutes,
+up to 5 attempts. Because only the code's hash is kept, each attempt sends a **new** code;
+the member never got the earlier one. A code message that is no longer needed (the delivery
+was confirmed, disputed or reversed, or a newer code was asked for) is `CANCELLED` instead
+of sent. No SMS are sent when SMS are turned off in the settings.
 
-`SMS_PROVIDER=log` (default) sends nothing; read the messages in `sms_log`.
-`SMS_PROVIDER=africastalking` sends them with Africa's Talking (`AT_USERNAME=sandbox` uses
-their sandbox and simulator).
+`SMS_PROVIDER=log` (default) sends nothing. The messages are in `sms_log`, but the codes
+are masked there, so a delivery cannot be confirmed with a code in this mode: use the
+Africa's Talking sandbox and its simulator to see the codes, or turn SMS off and use the
+manager review. `SMS_PROVIDER=africastalking` sends them with Africa's Talking
+(`AT_USERNAME=sandbox` uses their sandbox and simulator).
 
 **Replies:** in the Africa's Talking dashboard, set the SMS callback URL to
 `https://<api-host>/api/sms/inbound?token=<SMS_INBOUND_SECRET>`. The secret can also be sent
 in the `X-Sms-Secret` header; without the right secret the webhook answers `403`.
 
-- `1 RCT-7K2Q` confirms a pending delivery (method `SMS`).
+- `1 RCT-7K2Q` still confirms a pending delivery (method `SMS`).
 - `2 RCT-7K2Q <note>` disputes it (reason `OTHER`, with the note), also when it was already
   confirmed ("this was not me").
 - A reply only counts when it comes from the phone of the member who owns that delivery;

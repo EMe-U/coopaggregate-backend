@@ -49,7 +49,7 @@ public class SettingController {
 
     @GetMapping("/history")
     @Operation(summary = "Change history, newest first (max 100 per page): settings, grades, password changes and "
-            + "member PINs")
+            + "new delivery codes")
     public PageResponse<AuditEntryResponse> history(@RequestParam(defaultValue = "0") int page,
                                                     @RequestParam(defaultValue = "20") int size) {
         return auditService.history(page, size);
