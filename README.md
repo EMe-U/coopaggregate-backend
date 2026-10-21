@@ -220,7 +220,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/deliveries/{id}/correct` | JWT | Body `{"reason", "memberId", "gradeId", "quantityKg"}`. Replaces a wrong delivery, returns the corrected one with `201` |
 | POST | `/api/deliveries/{id}/confirm` | JWT | Body `{"code"}`. Confirms a pending delivery with the 6-digit code from the member's SMS |
 | POST | `/api/deliveries/{id}/resend-code` | JWT | Sends the member a new code; the old one stops working. At most 3 times per delivery |
-| POST | `/api/deliveries/{id}/review` | JWT | Body `{"note"}`. Confirms a pending delivery after the manager checked it. Only while SMS are turned off |
+| POST | `/api/deliveries/{id}/review` | JWT | Body `{"note"}`. Confirms a pending delivery after the manager checked it. Only while SMS are off, or once all 3 new codes were sent |
 | POST | `/api/deliveries/{id}/dispute` | JWT | Body `{"reason", "note"}`. Records that the member says the delivery is wrong |
 | POST | `/api/deliveries/{id}/resolve-dispute` | JWT | Body `{"note"}`. Closes a dispute after checking the delivery is correct |
 | POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
@@ -247,8 +247,8 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
 - `cooperativeEmail` and `location` are optional. `minOrderKg` (default 100) must be more than 0.
 - `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
   duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
-- Every change to the settings or a grade, every password change and every new code sent
-  for a delivery is written to the change history (`GET /api/settings/history`) with the
+- Every change to the settings or a grade, every password change, every new code sent for
+  a delivery and every manager review of a delivery is written to the change history (`GET /api/settings/history`) with the
   manager and the time, for example `smsEnabled: true -> false`. Passwords and codes are
   never written to it. Rows from the old member PIN (`PIN_SET`, `PIN_RESET`) stay there.
 
@@ -291,9 +291,16 @@ Every delivery is confirmed by the member with a one-time code sent by SMS.
   once. At most 3 times per delivery (`409` after that); each delivery response shows
   `codeResendsLeft`. Every resend is written to the change history.
 - A correction is a new delivery, so it also starts `PENDING` and gets its own code.
-- **SMS turned off:** no code can be sent, so deliveries stay `PENDING` until the manager
-  checks them and confirms with `POST /api/deliveries/{id}/review` and a note (method
-  `MANAGER_REVIEW`). This only works while SMS are off; with SMS on the member confirms.
+- **Manager review:** when no code can reach the member, the manager checks the delivery
+  and confirms it with `POST /api/deliveries/{id}/review` and a note (required). It becomes
+  `CONFIRMED` with method `MANAGER_REVIEW` ("Checked by the manager") and is written to the
+  change history. This is only allowed for a `PENDING` delivery when:
+  - SMS are turned off (then no code is ever sent, so deliveries stay `PENDING` until
+    reviewed), or
+  - SMS are on but all 3 new codes were already sent.
+
+  In every other case it returns `409`. The member can still dispute a reviewed delivery
+  by replying `2 RCT-…`.
 - **Disputes:** `POST /api/deliveries/{id}/dispute` records a member's complaint
   (`WRONG_KG`, `WRONG_GRADE`, `NOT_MY_DELIVERY` or `OTHER`, with an optional note).
   - If the record is right: `POST /api/deliveries/{id}/resolve-dispute` with a note puts it

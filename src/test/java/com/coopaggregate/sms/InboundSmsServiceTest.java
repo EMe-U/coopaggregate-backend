@@ -77,6 +77,15 @@ class InboundSmsServiceTest {
     }
 
     @Test
+    void replyTwoStillDisputesADeliveryTheManagerReviewed() {
+        delivery.confirmByManagerReview("Weighed again", Instant.now());
+
+        assertEquals(InboundSmsService.Result.DISPUTED, service.handle(OWNER_PHONE, "2 RCT-7K2Q not 300 kg"));
+        assertEquals(ConfirmationStatus.DISPUTED, delivery.getConfirmationStatus());
+        assertEquals("not 300 kg", delivery.getDisputeNote());
+    }
+
+    @Test
     void replyFromAnotherPhoneIsIgnored() {
         assertEquals(InboundSmsService.Result.IGNORED, service.handle("+250722000111", "2 RCT-7K2Q not mine"));
 

@@ -291,11 +291,12 @@ public class DeliveryService {
     }
 
     /**
-     * With SMS turned off no code can reach the member, so the manager confirms a pending delivery after checking
-     * it. While SMS are on, the member confirms with the code instead.
+     * The manager confirms a pending delivery after checking it, when no code can reach the member: SMS are turned
+     * off, or all 3 new codes were already sent and the delivery is still pending. In every other case the member
+     * confirms with the code. The member can still dispute the delivery afterwards by SMS.
      */
     @Transactional
-    public Delivery reviewPending(Long deliveryId, String note) {
+    public Delivery reviewPending(Long deliveryId, String note, Manager manager) {
         Delivery delivery = deliveryRepository.findForUpdateById(deliveryId)
                 .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
         if (delivery.isReversed()) {
@@ -306,11 +307,15 @@ public class DeliveryService {
                     + delivery.getConfirmationStatus() + ". Only a pending delivery can be reviewed; a disputed one "
                     + "is closed with resolve-dispute.");
         }
-        if (settingRepository.findById(1L).map(setting -> setting.isSmsEnabled()).orElse(false)) {
+        boolean smsEnabled = settingRepository.findById(1L).map(setting -> setting.isSmsEnabled()).orElse(false);
+        int resendsLeft = ConfirmationCodes.MAX_RESENDS - delivery.getConfirmationCodeResends();
+        if (smsEnabled && resendsLeft > 0) {
             throw new IllegalStateException("SMS are turned on, so the member confirms with the code from the SMS. "
-                    + "Send a new code if it did not arrive.");
+                    + "Send a new code if it did not arrive (" + resendsLeft + " left).");
         }
         delivery.confirmByManagerReview(note.trim(), Instant.now());
+        auditLogRepository.save(AuditLog.of(AuditAction.DELIVERY_REVIEWED, delivery.getMember(), manager,
+                "Delivery " + delivery.getReceiptCode() + ": " + note.trim()));
         return delivery;
     }
 

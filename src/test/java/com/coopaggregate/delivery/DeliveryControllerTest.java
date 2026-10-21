@@ -247,6 +247,15 @@ class DeliveryControllerTest {
         }
     }
 
+    @Test
+    void reviewNeedsANote() throws Exception {
+        mockMvc.perform(post("/api/deliveries/100/review").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"note\": \" \"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("note: is required: say how the delivery was checked"));
+        verifyNoInteractions(deliveryService);
+    }
+
     private ResultActions confirm(String body) throws Exception {
         return mockMvc.perform(post("/api/deliveries/100/confirm").header(HttpHeaders.AUTHORIZATION, bearerToken)
                 .contentType(MediaType.APPLICATION_JSON).content(body));

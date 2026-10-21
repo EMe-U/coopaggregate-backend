@@ -110,10 +110,12 @@ public class DeliveryController {
     }
 
     @PostMapping("/{id}/review")
-    @Operation(summary = "Confirm a pending delivery after the manager checked it. Only while SMS are turned off, "
-            + "because then no code can reach the member")
-    public DeliveryResponse review(@PathVariable Long id, @Valid @RequestBody ManagerReviewRequest request) {
-        return deliveryService.toResponse(deliveryService.reviewPending(id, request.note()));
+    @Operation(summary = "Confirm a pending delivery after the manager checked it. Only when no code can reach the "
+            + "member: SMS are turned off, or all 3 new codes were already sent")
+    public DeliveryResponse review(@PathVariable Long id, @Valid @RequestBody ManagerReviewRequest request,
+                                   @AuthenticationPrincipal Jwt jwt) {
+        return deliveryService.toResponse(
+                deliveryService.reviewPending(id, request.note(), authService.currentManager(jwt.getSubject())));
     }
 
     @PostMapping("/{id}/dispute")
