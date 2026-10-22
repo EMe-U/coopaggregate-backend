@@ -182,7 +182,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
 | POST | `/api/auth/change-password` | JWT | Body `{"currentPassword", "newPassword"}`. Returns `204` (see Authentication) |
-| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg}` |
+| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, requireIdentityVerification, cooperativeName}` |
 | PUT | `/api/settings` | JWT | Saves the settings (see Settings and change history) |
 | GET | `/api/settings/history?page=0&size=20` | JWT | Change history, newest first (max 100 per page) |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
@@ -208,6 +208,14 @@ ERD: see `docs/erd.png`.
 | GET | `/api/lots/{id}/losses` | JWT | Losses of a lot, newest first |
 | GET | `/api/buyers?search=` | JWT | Buyers sorted by name. `search` matches name or phone |
 | POST | `/api/buyers` | JWT | Adds a buyer, returns `201` |
+| GET | `/api/public/grades` | None | Active grades `{code, name, nameRw, description, sizeInfo, packaging}`. No prices (see Public side for buyers) |
+| GET | `/api/public/info` | None | `{cooperativeName, location, cooperativeEmail, minOrderKg}` |
+| POST | `/api/public/requests` | None | A buyer's purchase request. Returns `201` `{code, status}`. Limited per IP address and phone number |
+| GET | `/api/public/requests/{code}?phone=` | None | `{code, status, message}`. `404` if the code or the phone is wrong |
+| GET | `/api/buyer-requests?status=&search=&page=0&size=15` | JWT | Buyers' requests, newest first (15 per page, max 100) |
+| GET | `/api/buyer-requests/{id}` | JWT | One request with the buyer's contact details |
+| PATCH | `/api/buyer-requests/{id}/status` | JWT | Body `{"status", "publicMessage"}` (message optional). Changes the status; kept in the change history |
+| POST | `/api/buyer-requests/{id}/buyer` | JWT | Turns the request into a buyer record, or links it to the buyer with the same phone |
 | POST | `/api/sales` | JWT | Records a sale from a closed lot. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
@@ -250,6 +258,8 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
 
 - `smsEnabled` (default `true`) turns the member SMS on or off.
 - `cooperativeEmail` and `location` are optional. `minOrderKg` (default 100) must be more than 0.
+- `cooperativeName` (default "Koperative Intagamburuzwa") is shown on the public pages. Optional
+  in the request; left out or empty keeps the current name.
 - `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
   duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
 - `requireIdentityVerification` (default `false`): when on, members can only be registered
@@ -572,6 +582,56 @@ Body for `POST /api/buyers`: `{"name", "phone", "type"}`. `name` and `phone` are
 `type` is optional free text (at most 30 characters), for example `Trader`. The phone
 number follows the same rules as for members and is stored as `+2507XXXXXXXX`. A phone
 number that already belongs to a buyer returns `409`.
+
+### Public side for buyers
+
+Buyers do not log in. Only `/api/public/**` (plus login, health, the SMS webhook and Swagger) is
+open; everything else needs the manager's token. CORS allows only the frontend (`FRONTEND_URL`).
+
+- `GET /api/public/grades` shows the active grades with `code`, `name`, `nameRw`, `description`,
+  `sizeInfo` and `packaging`. It never shows prices, ids or stock.
+- `GET /api/public/info` shows `cooperativeName`, `location`, `cooperativeEmail` and
+  `minOrderKg`. Nothing about members, stock, prices or the ledger.
+- `POST /api/public/requests` sends a purchase request:
+
+  ```json
+  {"name": "Kalisa Traders", "phone": "0788123456", "email": "kalisa@example.com",
+   "gradeCode": "A", "quantityKg": 250, "note": "Pick up on Friday", "website": ""}
+  ```
+
+  `name`, `phone`, `gradeCode` and `quantityKg` are required. The phone is a Rwandan mobile
+  number (`07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`, stored as `+2507XXXXXXXX`).
+  `quantityKg` must be at least `minOrderKg` (otherwise `400` "The smallest order is 100 kg.") and the
+  grade must be an active one. Sizes are limited (name 150, email 150, note 1000 characters).
+  It returns `201` `{code, status}` with a code like `BR-2026-7K2Q`: random, unique, and made
+  without letters and digits that look alike (no 0, O, 1, I or L). The request starts as `PENDING`.
+- `GET /api/public/requests/{code}?phone=0788123456` returns `{code, status, message}`:
+  the status (`PENDING`, `ACCEPTED` or `REJECTED`) and the manager's public message. The phone must be
+  the one used for the request. A wrong phone, a missing phone and an unknown code all return the
+  same `404` `{"message": "Request not found."}`, so a code cannot be tested without its phone.
+- **Protection:** at most 10 requests per hour per IP address and 3 per day per phone number
+  (`429` with a `Retry-After` header); at most 30 lookups per 10 minutes per IP address. The counters
+  are kept in memory and reset when the app restarts. `website` is a **honeypot**: hide it on the
+  page, and a bot that fills it in gets a normal answer with a code that belongs to no request;
+  nothing is saved. Names, phone numbers, emails and IP addresses are never written to the logs.
+  The server reads the real client address from `X-Forwarded-For` behind Render's proxy
+  (`server.forward-headers-strategy=native`).
+- A public request does not create a buyer record, so strangers cannot fill the buyer list. The
+  contact details stay on the request until the manager converts it.
+
+**Manager (JWT):**
+- `GET /api/buyer-requests` lists requests newest first, 15 per page. `status` filters by
+  status; `search` matches the request code, the buyer's name or phone (`0788123456` finds
+  `+250788123456`).
+- `GET /api/buyer-requests/{id}` shows one request with the buyer's contact details and note.
+- `PATCH /api/buyer-requests/{id}/status` with `{"status", "publicMessage"}` changes the status. The
+  public message (at most 500 characters) is what the buyer reads; leaving it out keeps the earlier
+  one. The same status without a new message returns `409`. Every change goes to the change
+  history (`GET /api/settings/history`) as `BR-2026-7K2Q: PENDING -> ACCEPTED`, without the
+  message text or any personal data.
+- `POST /api/buyer-requests/{id}/buyer` turns the request into a buyer record, or links it to the
+  buyer who already has that phone number (`409` if it already has a buyer). Then record the sale
+  for that buyer with `POST /api/sales/orders`; sales are not linked to the request automatically.
 
 ### Sales
 
