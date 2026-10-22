@@ -44,6 +44,19 @@ public class BuyerRequest {
 
     private String managerNote;
 
+    // Set when the buyer sent the request from the public page. The buyer record only exists once the manager
+    // converts the request.
+    private String requesterName;
+
+    private String requesterPhone;
+
+    private String requesterEmail;
+
+    // What the buyer may read when they look up the request. managerNote is private.
+    private String publicMessage;
+
+    private Instant updatedAt;
+
     @CreationTimestamp
     @Column(updatable = false)
     private Instant createdAt;
@@ -114,6 +127,46 @@ public class BuyerRequest {
 
     public void setManagerNote(String managerNote) {
         this.managerNote = managerNote;
+    }
+
+    public String getRequesterName() {
+        return requesterName;
+    }
+
+    public void setRequesterName(String requesterName) {
+        this.requesterName = requesterName;
+    }
+
+    public String getRequesterPhone() {
+        return requesterPhone;
+    }
+
+    public void setRequesterPhone(String requesterPhone) {
+        this.requesterPhone = requesterPhone;
+    }
+
+    public String getRequesterEmail() {
+        return requesterEmail;
+    }
+
+    public void setRequesterEmail(String requesterEmail) {
+        this.requesterEmail = requesterEmail;
+    }
+
+    public String getPublicMessage() {
+        return publicMessage;
+    }
+
+    public void setPublicMessage(String publicMessage) {
+        this.publicMessage = publicMessage;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(Instant updatedAt) {
+        this.updatedAt = updatedAt;
     }
 
     public Instant getCreatedAt() {
