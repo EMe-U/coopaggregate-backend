@@ -25,6 +25,9 @@ public class MockIdentityVerifier implements IdentityVerifier {
         if (allowed) {
             log.warn("MOCK_VERIFICATION_ALLOWED is on: anyone can be 'verified' without a real check. "
                     + "Local development only.");
+        } else {
+            log.info("Test verification is switched off. Set MOCK_VERIFICATION_ALLOWED=true to use it in local "
+                    + "development.");
         }
     }
 
@@ -46,11 +49,11 @@ public class MockIdentityVerifier implements IdentityVerifier {
         return "MOCK";
     }
 
-    // 503, like a provider that is not configured: the feature is switched off, not the request wrong.
+    // 503, like a provider that is not configured: the feature is switched off, not the request wrong. The
+    // message goes to the manager, so how to switch it on is only in the startup log and the README.
     private void checkAllowed() {
         if (!allowed) {
-            throw IdentityProviderException.notConfigured("Test verification is switched off. "
-                    + "Set MOCK_VERIFICATION_ALLOWED=true for local development, or use MOSIP.");
+            throw IdentityProviderException.notConfigured("Test verification is switched off.");
         }
     }
 }

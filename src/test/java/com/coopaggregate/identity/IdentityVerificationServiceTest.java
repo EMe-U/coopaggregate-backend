@@ -192,7 +192,7 @@ class IdentityVerificationServiceTest {
         IdentityProviderException e = assertThrows(IdentityProviderException.class, () -> service.start(manager));
 
         assertTrue(e.isNotConfigured());
-        assertTrue(e.getMessage().startsWith("Test verification is switched off."));
+        assertEquals("Test verification is switched off.", e.getMessage());
         assertTrue(stored.isEmpty());
     }
 
@@ -205,9 +205,19 @@ class IdentityVerificationServiceTest {
         IdentityProviderException e = assertThrows(IdentityProviderException.class,
                 () -> service.complete("any-code", state, manager));
 
-        assertTrue(e.getMessage().startsWith("Test verification is switched off."));
+        assertEquals("Test verification is switched off.", e.getMessage());
         assertFalse(stored.get(IdentityVerificationService.sha256(state)).isVerified());
         assertEquals(AuditAction.IDENTITY_VERIFICATION_FAILED, lastAudit().getAction());
+    }
+
+    @Test
+    void startupLogTellsHowToSwitchTestVerificationOnButTheMessageDoesNot(CapturedOutput output) {
+        new MockIdentityVerifier(false);
+
+        assertTrue(output.getAll().contains("Set MOCK_VERIFICATION_ALLOWED=true"));
+        IdentityProviderException e = assertThrows(IdentityProviderException.class,
+                () -> new MockIdentityVerifier(false).complete("code", "nonce"));
+        assertFalse(e.getMessage().contains("MOCK_VERIFICATION_ALLOWED"));
     }
 
     @Test
