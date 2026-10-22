@@ -19,6 +19,7 @@ public record MemberRequest(
                 message = "must be a Rwandan mobile number: 07XXXXXXXX, 2507XXXXXXXX or +2507XXXXXXXX")
         String phone,
 
+        // Optional: leave it out or empty. When given, it must be 16 digits and unique.
         @Pattern(regexp = "^(\\d{16})?$", message = "must be 16 digits")
         String nationalId,
 

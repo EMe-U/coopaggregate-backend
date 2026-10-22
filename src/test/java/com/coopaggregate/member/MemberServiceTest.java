@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -240,6 +241,40 @@ class MemberServiceTest {
         assertEquals(0, pageable.getValue().getPageNumber());
         assertEquals(100, pageable.getValue().getPageSize());
         assertEquals("fullName: ASC,id: ASC", pageable.getValue().getSort().toString());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void listLeavesOutTheNationalId() {
+        Member member = new Member();
+        member.setFullName("Uwimana Claudine");
+        member.setNationalId("1199880012345678");
+        when(repository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(member)));
+
+        MemberListItem item = service.list(null, null, 0, 20).content().get(0);
+
+        assertEquals("Uwimana Claudine", item.fullName());
+        assertTrue(Arrays.stream(MemberListItem.class.getRecordComponents())
+                .noneMatch(component -> component.getName().equals("nationalId")));
+    }
+
+    @Test
+    void singleMemberStillShowsTheNationalId() {
+        Member member = new Member();
+        member.setNationalId("1199880012345678");
+        when(repository.findById(5L)).thenReturn(Optional.of(member));
+
+        assertEquals("1199880012345678", service.get(5L).nationalId());
+    }
+
+    @Test
+    void memberCanBeRegisteredWithoutANationalId() {
+        MemberResponse response = service.create(new MemberRequest("Habimana Eric", "0722123456", null, null,
+                null, null, null));
+
+        assertNull(response.nationalId());
+        verify(repository, never()).findByNationalId(any());
     }
 
     @Test

@@ -187,9 +187,9 @@ ERD: see `docs/erd.png`.
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
 | GET | `/api/ledger/verify` | JWT | Recomputes every hash. Returns `{valid, checkedEntries, firstBrokenEntryId}` |
 | POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Reverses the entry through its business action (see Reversals) and returns the REVERSAL entry |
-| GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional |
+| GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional. Without `nationalId` |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
-| GET | `/api/members/{id}` | JWT | One member |
+| GET | `/api/members/{id}` | JWT | One member, including `nationalId` |
 | POST | `/api/members/verify/start` | JWT | Starts an identity verification: `{provider, authorizationUrl, state, expiresAt}` |
 | POST | `/api/members/verify/callback` | JWT | Body `{"code", "state"}`. Completes it: `{verificationId, verified, method, useBefore}`, or `409` if the person is already a member |
 | POST | `/api/members` | JWT | Registers a member and returns it with `201`. Optional `verificationId` from the verification |
@@ -398,7 +398,7 @@ Request body for `POST` and `PUT`:
 |-------|-------|
 | `fullName` | Required, at most 150 characters |
 | `phone` | Required. A Rwandan mobile number (072, 073, 078 or 079) written as `07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`. Always stored and returned as `+2507XXXXXXXX` |
-| `nationalId` | Optional, 16 digits |
+| `nationalId` | Optional: leave it out or empty. When given, 16 digits and unique. Only returned for one member, never in the list |
 | `address` | Optional, at most 255 characters |
 | `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
@@ -406,6 +406,9 @@ Request body for `POST` and `PUT`:
 
 - The member code is generated on create as `M-` and 4 digits (`M-0001`, `M-0002`, ...):
   the highest existing number plus one. It never changes.
+- The national ID is left out of `GET /api/members`; it is only shown when one member is
+  returned (`GET /api/members/{id}`, and the responses of create, update, activate and
+  deactivate). `search` still matches it.
 - Phone numbers and national IDs must be unique. A duplicate returns `409`, for example
   `{"message": "Phone number +250788123456 is already used by member M-0003."}`.
 - `search` matches part of the name, member code, phone number or national ID, ignoring
