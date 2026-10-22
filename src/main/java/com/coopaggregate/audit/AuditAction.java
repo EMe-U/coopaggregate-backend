@@ -8,5 +8,9 @@ public enum AuditAction {
     GRADE_UPDATED,
     PASSWORD_CHANGED,
     CONFIRMATION_CODE_RESENT,
-    DELIVERY_REVIEWED
+    DELIVERY_REVIEWED,
+    // Results of identity verification at registration. The details never hold personal data or tokens.
+    IDENTITY_VERIFIED,
+    IDENTITY_DUPLICATE,
+    IDENTITY_VERIFICATION_FAILED
 }
