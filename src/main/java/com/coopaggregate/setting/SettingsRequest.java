@@ -32,5 +32,9 @@ public record SettingsRequest(
                 @Size(max = 150, message = "must be at most 150 characters") String> committeeEmails,
 
         // Optional: when it is left out the current value is kept.
-        Boolean requireIdentityVerification) {
+        Boolean requireIdentityVerification,
+
+        // Optional: left out or empty keeps the current name. Shown on the public pages.
+        @Size(max = 150, message = "must be at most 150 characters")
+        String cooperativeName) {
 }

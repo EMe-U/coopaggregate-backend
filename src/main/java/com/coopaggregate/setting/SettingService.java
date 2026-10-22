@@ -43,7 +43,12 @@ public class SettingService {
                 ? request.requireIdentityVerification()
                 : setting.isRequireIdentityVerification();
 
+        String cooperativeName = blankToNull(request.cooperativeName()) != null
+                ? blankToNull(request.cooperativeName())
+                : setting.getCooperativeName();
+
         ChangeList changes = new ChangeList()
+                .add("cooperativeName", setting.getCooperativeName(), cooperativeName)
                 .add("smsEnabled", setting.isSmsEnabled(), request.smsEnabled())
                 .add("cooperativeEmail", setting.getCooperativeEmail(), cooperativeEmail)
                 .add("location", setting.getLocation(), location)
@@ -58,6 +63,7 @@ public class SettingService {
         setting.setMinOrderKg(request.minOrderKg());
         setting.setCommitteeEmailList(committeeEmails);
         setting.setRequireIdentityVerification(requireIdentityVerification);
+        setting.setCooperativeName(cooperativeName);
 
         if (!changes.isEmpty()) {
             auditLogRepository.save(AuditLog.of(AuditAction.SETTINGS_UPDATED, null, manager, changes.toString()));

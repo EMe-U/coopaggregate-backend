@@ -27,6 +27,8 @@ public class Setting {
 
     private String location;
 
+    private String cooperativeName = "Koperative Intagamburuzwa";
+
     private BigDecimal minOrderKg = new BigDecimal("100");
 
     // When true, a member can only be registered with a completed identity verification.
@@ -85,6 +87,14 @@ public class Setting {
 
     public void setMinOrderKg(BigDecimal minOrderKg) {
         this.minOrderKg = minOrderKg;
+    }
+
+    public String getCooperativeName() {
+        return cooperativeName;
+    }
+
+    public void setCooperativeName(String cooperativeName) {
+        this.cooperativeName = cooperativeName;
     }
 
     public boolean isRequireIdentityVerification() {
