@@ -12,5 +12,8 @@ public enum AuditAction {
     // Results of identity verification at registration. The details never hold personal data or tokens.
     IDENTITY_VERIFIED,
     IDENTITY_DUPLICATE,
-    IDENTITY_VERIFICATION_FAILED
+    IDENTITY_VERIFICATION_FAILED,
+    // Changes the manager makes to buyers' purchase requests. The details hold the request code, not personal data.
+    BUYER_REQUEST_STATUS_CHANGED,
+    BUYER_REQUEST_CONVERTED
 }

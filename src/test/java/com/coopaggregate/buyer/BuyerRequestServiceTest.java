@@ -20,6 +20,7 @@ import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
@@ -32,6 +33,8 @@ import jakarta.persistence.EntityNotFoundException;
 class BuyerRequestServiceTest {
 
     private BuyerRequestRepository requestRepository;
+    private BuyerRepository buyerRepository;
+    private AuditLogRepository auditLogRepository;
     private GradeRepository gradeRepository;
     private Setting setting;
     private Grade big;
@@ -49,7 +52,10 @@ class BuyerRequestServiceTest {
         big.setName("Big");
         when(gradeRepository.findByCodeAndActiveTrue("A")).thenReturn(Optional.of(big));
         when(requestRepository.save(any(BuyerRequest.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        service = new BuyerRequestService(requestRepository, gradeRepository, settingRepository);
+        buyerRepository = mock(BuyerRepository.class);
+        auditLogRepository = mock(AuditLogRepository.class);
+        service = new BuyerRequestService(requestRepository, gradeRepository, settingRepository, buyerRepository,
+                auditLogRepository);
     }
 
     @Test
