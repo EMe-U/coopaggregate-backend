@@ -20,6 +20,7 @@ import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.manager.Manager;
+import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 
 /**
@@ -102,6 +103,33 @@ public class IdentityVerificationService {
         record(AuditAction.IDENTITY_VERIFIED, manager,
                 "Provider " + verifier.name() + ", method " + identity.method());
         return new VerifyResultResponse(verification.getId(), true, identity.method(), now.plus(USE_WITHIN));
+    }
+
+    /**
+     * Marks a newly registered member as verified with a completed verification. A verification gives one member
+     * only, must be used within 30 minutes, and is refused if the person became a member in the meantime.
+     */
+    @Transactional
+    public void attach(Long verificationId, Member member) {
+        IdentityVerification verification = verificationRepository.findForUpdateById(verificationId)
+                .orElseThrow(() -> new BadRequestException("Verification " + verificationId + " does not exist."));
+        if (!verification.isVerified()) {
+            throw new BadRequestException("Verification " + verificationId + " did not verify anyone.");
+        }
+        if (verification.getMember() != null) {
+            throw new IllegalStateException("Verification " + verificationId
+                    + " was already used to register a member.");
+        }
+        if (Instant.now().isAfter(verification.getVerifiedAt().plus(USE_WITHIN))) {
+            throw new BadRequestException("Verification " + verificationId
+                    + " is more than 30 minutes old. Verify the person again.");
+        }
+        if (memberRepository.existsByIdentityToken(verification.getIdentityToken())) {
+            throw new DuplicateIdentityException();
+        }
+        member.markIdentityVerified(verification.getVerificationMethod(), verification.getVerifiedAt(),
+                verification.getIdentityToken());
+        verification.setMember(member);
     }
 
     // No member is linked yet and the details hold no personal data: only the provider and the method.

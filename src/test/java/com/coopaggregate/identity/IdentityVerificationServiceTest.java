@@ -35,6 +35,7 @@ import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.manager.Manager;
+import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 
 @ExtendWith(OutputCaptureExtension.class)
@@ -59,6 +60,8 @@ class IdentityVerificationServiceTest {
         });
         when(verificationRepository.findForUpdateByStateHash(anyString()))
                 .thenAnswer(invocation -> Optional.ofNullable(stored.get(invocation.<String>getArgument(0))));
+        when(verificationRepository.findForUpdateById(9L))
+                .thenAnswer(invocation -> stored.values().stream().findFirst());
         memberRepository = mock(MemberRepository.class);
         auditLogRepository = mock(AuditLogRepository.class);
         verifier = new MockIdentityVerifier();
@@ -188,6 +191,65 @@ class IdentityVerificationServiceTest {
         assertEquals(mock.complete("code-1", "n").subject(), mock.complete("code-1", "n").subject());
         assertNotEquals(mock.complete("code-1", "n").subject(), mock.complete("code-2", "n").subject());
         assertEquals("VerifiedIdentity[subject=****, method=MOCK]", mock.complete("code-1", "n").toString());
+    }
+
+    // --- Registering the member with the verification ---
+
+    @Test
+    void attachMarksTheNewMemberVerified() {
+        IdentityVerification verification = completedVerification();
+        Member member = new Member();
+
+        service.attach(9L, member);
+
+        assertTrue(member.isIdentityVerified());
+        assertEquals(VerificationMethod.MOCK, member.getVerificationMethod());
+        assertEquals(verification.getVerifiedAt(), member.getVerifiedAt());
+        assertEquals(verification.getIdentityToken(), member.getIdentityToken());
+        assertEquals(member, verification.getMember());
+    }
+
+    @Test
+    void verificationRegistersOnlyOneMember() {
+        completedVerification();
+        service.attach(9L, new Member());
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.attach(9L, new Member()));
+
+        assertEquals("Verification 9 was already used to register a member.", e.getMessage());
+    }
+
+    @Test
+    void verificationThatDidNotVerifyAnyoneCannotBeAttached() {
+        service.start(manager);
+
+        assertThrows(BadRequestException.class, () -> service.attach(9L, new Member()));
+    }
+
+    @Test
+    void oldVerificationCannotBeAttached() {
+        IdentityVerification verification = completedVerification();
+        ReflectionTestUtils.setField(verification, "verifiedAt", Instant.now().minus(Duration.ofMinutes(31)));
+
+        BadRequestException e = assertThrows(BadRequestException.class, () -> service.attach(9L, new Member()));
+
+        assertEquals("Verification 9 is more than 30 minutes old. Verify the person again.", e.getMessage());
+    }
+
+    @Test
+    void personWhoBecameAMemberInTheMeantimeIsRefused() {
+        completedVerification();
+        when(memberRepository.existsByIdentityToken(anyString())).thenReturn(true);
+        Member member = new Member();
+
+        assertThrows(DuplicateIdentityException.class, () -> service.attach(9L, member));
+        assertFalse(member.isIdentityVerified());
+    }
+
+    private IdentityVerification completedVerification() {
+        String state = service.start(manager).state();
+        service.complete("any-code", state, manager);
+        return stored.get(IdentityVerificationService.sha256(state));
     }
 
     private AuditLog lastAudit() {

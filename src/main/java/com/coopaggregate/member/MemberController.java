@@ -58,7 +58,8 @@ public class MemberController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Register a member. The member code (M-0001, ...) is generated")
+    @Operation(summary = "Register a member. The member code (M-0001, ...) is generated. Send verificationId "
+            + "from the identity verification; it is required when the requireIdentityVerification setting is on")
     public MemberResponse create(@Valid @RequestBody MemberRequest request) {
         return memberService.create(request);
     }

@@ -39,18 +39,25 @@ public class SettingService {
                 .distinct()
                 .toList();
 
+        boolean requireIdentityVerification = request.requireIdentityVerification() != null
+                ? request.requireIdentityVerification()
+                : setting.isRequireIdentityVerification();
+
         ChangeList changes = new ChangeList()
                 .add("smsEnabled", setting.isSmsEnabled(), request.smsEnabled())
                 .add("cooperativeEmail", setting.getCooperativeEmail(), cooperativeEmail)
                 .add("location", setting.getLocation(), location)
                 .add("minOrderKg", setting.getMinOrderKg(), request.minOrderKg())
-                .add("committeeEmails", setting.getCommitteeEmailList(), committeeEmails);
+                .add("committeeEmails", setting.getCommitteeEmailList(), committeeEmails)
+                .add("requireIdentityVerification", setting.isRequireIdentityVerification(),
+                        requireIdentityVerification);
 
         setting.setSmsEnabled(request.smsEnabled());
         setting.setCooperativeEmail(cooperativeEmail);
         setting.setLocation(location);
         setting.setMinOrderKg(request.minOrderKg());
         setting.setCommitteeEmailList(committeeEmails);
+        setting.setRequireIdentityVerification(requireIdentityVerification);
 
         if (!changes.isEmpty()) {
             auditLogRepository.save(AuditLog.of(AuditAction.SETTINGS_UPDATED, null, manager, changes.toString()));

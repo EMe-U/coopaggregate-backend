@@ -10,10 +10,12 @@ public record SettingsResponse(
         String location,
         BigDecimal minOrderKg,
         List<String> committeeEmails,
-        Long deductionPerKg) {
+        Long deductionPerKg,
+        boolean requireIdentityVerification) {
 
     public static SettingsResponse from(Setting setting) {
         return new SettingsResponse(setting.isSmsEnabled(), setting.getCooperativeEmail(), setting.getLocation(),
-                setting.getMinOrderKg(), setting.getCommitteeEmailList(), setting.getDeductionPerKg());
+                setting.getMinOrderKg(), setting.getCommitteeEmailList(), setting.getDeductionPerKg(),
+                setting.isRequireIdentityVerification());
     }
 }

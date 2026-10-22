@@ -49,9 +49,30 @@ class SettingServiceTest {
     }
 
     @Test
+    void identityVerificationRequirementIsSavedAndRecorded() {
+        SettingsResponse saved = service.update(new SettingsRequest(true, null, null, new BigDecimal("100"),
+                List.of(), true), manager);
+
+        assertEquals(true, saved.requireIdentityVerification());
+        ArgumentCaptor<AuditLog> entry = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogRepository).save(entry.capture());
+        assertEquals("requireIdentityVerification: false -> true", entry.getValue().getDetails());
+    }
+
+    @Test
+    void identityVerificationRequirementIsKeptWhenLeftOut() {
+        service.update(new SettingsRequest(true, null, null, new BigDecimal("100"), List.of(), true), manager);
+
+        SettingsResponse saved = service.update(new SettingsRequest(false, null, null, new BigDecimal("100"),
+                List.of(), null), manager);
+
+        assertEquals(true, saved.requireIdentityVerification());
+    }
+
+    @Test
     void savedSettingsAreReturned() {
         SettingsResponse saved = service.update(new SettingsRequest(false, "info@intagamburuzwa.rw",
-                "Busogo, Musanze", new BigDecimal("250"), List.of("chair@example.com", "treasurer@example.com")),
+                "Busogo, Musanze", new BigDecimal("250"), List.of("chair@example.com", "treasurer@example.com"), null),
                 manager);
 
         assertEquals(false, saved.smsEnabled());
@@ -64,7 +85,7 @@ class SettingServiceTest {
     @Test
     void changeHistoryListsOnlyTheFieldsThatChanged() {
         service.update(new SettingsRequest(false, null, "Busogo", new BigDecimal("100.00"),
-                List.of("chair@example.com")), manager);
+                List.of("chair@example.com"), null), manager);
 
         ArgumentCaptor<AuditLog> entry = ArgumentCaptor.forClass(AuditLog.class);
         verify(auditLogRepository).save(entry.capture());
@@ -76,7 +97,7 @@ class SettingServiceTest {
 
     @Test
     void savingWithoutChangesWritesNoHistory() {
-        service.update(new SettingsRequest(true, " ", "", new BigDecimal("100"), List.of()), manager);
+        service.update(new SettingsRequest(true, " ", "", new BigDecimal("100"), List.of(), null), manager);
 
         verify(auditLogRepository, never()).save(any());
     }
@@ -84,7 +105,7 @@ class SettingServiceTest {
     @Test
     void committeeEmailsAreTrimmedLowercasedAndDeduplicated() {
         SettingsResponse saved = service.update(new SettingsRequest(true, null, null, new BigDecimal("100"),
-                List.of(" Chair@Example.com ", "chair@example.com", "TREASURER@example.com")), manager);
+                List.of(" Chair@Example.com ", "chair@example.com", "TREASURER@example.com"), null), manager);
 
         assertEquals(List.of("chair@example.com", "treasurer@example.com"), saved.committeeEmails());
     }
@@ -94,7 +115,7 @@ class SettingServiceTest {
         setting.setCommitteeEmailList(List.of("chair@example.com"));
 
         SettingsResponse saved = service.update(new SettingsRequest(true, null, null, new BigDecimal("100"),
-                List.of()), manager);
+                List.of(), null), manager);
 
         assertEquals(List.of(), saved.committeeEmails());
         assertNull(saved.cooperativeEmail());

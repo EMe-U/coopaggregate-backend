@@ -6,10 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -25,6 +30,11 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.common.KigaliTime;
+import com.coopaggregate.error.BadRequestException;
+import com.coopaggregate.identity.IdentityVerificationService;
+import com.coopaggregate.identity.VerificationMethod;
+import com.coopaggregate.setting.Setting;
+import com.coopaggregate.setting.SettingRepository;
 
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.CriteriaBuilder;
@@ -35,22 +45,67 @@ import jakarta.persistence.criteria.Root;
 class MemberServiceTest {
 
     private MemberRepository repository;
+    private SettingRepository settingRepository;
+    private Setting setting;
+    private IdentityVerificationService identityVerificationService;
     private MemberService service;
 
     @BeforeEach
     void setUp() {
         repository = mock(MemberRepository.class);
-        service = new MemberService(repository);
+        settingRepository = mock(SettingRepository.class);
+        setting = new Setting();
+        when(settingRepository.findById(1L)).thenReturn(Optional.of(setting));
+        identityVerificationService = mock(IdentityVerificationService.class);
+        service = new MemberService(repository, settingRepository, identityVerificationService);
         when(repository.save(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(repository.highestMemberNumber()).thenReturn(7);
         when(repository.findByPhone(any())).thenReturn(Optional.empty());
         when(repository.findByNationalId(any())).thenReturn(Optional.empty());
     }
 
+    // --- Identity verification ---
+
+    @Test
+    void memberCanBeRegisteredWithoutVerificationWhileTheSettingIsOff() {
+        MemberResponse response = service.create(request("0788123456", null));
+
+        assertFalse(response.verified());
+        verify(identityVerificationService, never()).attach(any(), any());
+    }
+
+    @Test
+    void registrationWithoutVerificationIsRefusedWhenTheSettingIsOn() {
+        setting.setRequireIdentityVerification(true);
+
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> service.create(request("0788123456", null)));
+
+        assertTrue(e.getMessage().startsWith("Identity verification is required."));
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void verifiedRegistrationMarksTheMemberVerified() {
+        setting.setRequireIdentityVerification(true);
+        doAnswer(invocation -> {
+            invocation.<Member>getArgument(1).markIdentityVerified(VerificationMethod.MOCK,
+                    Instant.parse("2026-10-22T08:00:00Z"), "mock-token");
+            return null;
+        }).when(identityVerificationService).attach(eq(9L), any(Member.class));
+
+        MemberResponse response = service.create(new MemberRequest("Uwimana Claudine", "0788123456", null, null,
+                null, null, 9L));
+
+        assertTrue(response.verified());
+        assertEquals(VerificationMethod.MOCK, response.verificationMethod());
+        assertEquals(Instant.parse("2026-10-22T08:00:00Z"), response.verifiedAt());
+    }
+
     @Test
     void createGeneratesMemberCodeAndSavesDetails() {
         MemberResponse response = service.create(new MemberRequest(
-                "  Uwimana Claudine ", "0788123456", "1199880012345678", "Busogo", LocalDate.of(2024, 3, 1), "en"));
+                "  Uwimana Claudine ", "0788123456", "1199880012345678", "Busogo", LocalDate.of(2024, 3, 1), "en", null));
 
         assertEquals("M-0008", response.memberCode());
         assertEquals("Uwimana Claudine", response.fullName());
@@ -79,7 +134,7 @@ class MemberServiceTest {
 
     @Test
     void createUsesDefaultsForOptionalFields() {
-        MemberResponse response = service.create(new MemberRequest("Habimana Eric", "0722123456", " ", "", null, null));
+        MemberResponse response = service.create(new MemberRequest("Habimana Eric", "0722123456", " ", "", null, null, null));
 
         assertNull(response.nationalId());
         assertNull(response.address());
@@ -227,7 +282,7 @@ class MemberServiceTest {
     }
 
     private static MemberRequest request(String phone, String nationalId) {
-        return new MemberRequest("Uwimana Claudine", phone, nationalId, null, null, null);
+        return new MemberRequest("Uwimana Claudine", phone, nationalId, null, null, null, null);
     }
 
     private static Member existingMember(Long id, String memberCode) {
