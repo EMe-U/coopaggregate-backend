@@ -91,6 +91,7 @@ cd coopaggregate-backend
 | `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
 | `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
 | `MOSIP_ENABLED` | No | `true` verifies identities with MOSIP eSignet; `false` (default) uses the mock (see Identity verification) |
+| `MOCK_VERIFICATION_ALLOWED` | No | **Local development only.** `true` lets the mock verifier work; `false` (default) switches test verification off with `503` (see Identity verification). Never set it on Render |
 | `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY` | With `MOSIP_ENABLED=true` | eSignet client details. The app does not start if one is missing |
 | `PORT` | No | HTTP port. Default: `8080` |
 
@@ -450,9 +451,17 @@ The provider is behind an interface, so the real one (MOSIP eSignet) can be plug
 - **Change history:** every result is written to it without personal data:
   `IDENTITY_VERIFIED` ("Provider MOCK, method MOCK"), `IDENTITY_DUPLICATE` and
   `IDENTITY_VERIFICATION_FAILED`.
-- **Mock (`MOSIP_ENABLED=false`, default):** `authorizationUrl` is `null`; call the callback
-  straight away with any code. The same code always gives the same person, so sending a code
-  that was already used for a member shows the duplicate rule. Development only.
+- **Mock (`MOSIP_ENABLED=false`, default):** test verification, so it must not look like a real
+  check. It is **switched off by default**: with `MOCK_VERIFICATION_ALLOWED=false` both
+  `/verify/start` and `/verify/callback` return `503` ("Test verification is switched off")
+  and nothing is saved or verified. Set `MOCK_VERIFICATION_ALLOWED=true` **only in local
+  development, never on Render**, and put it in your own local environment, not in a committed
+  file. Then `authorizationUrl` is `null`; call the callback straight away with any code. The
+  same code always gives the same person, so sending a code that was already used for a member
+  shows the duplicate rule.
+- **Labels:** member responses always return `verificationMethod` (`MOCK`, `OTP` or `FACE`), so
+  the frontend can show a test verification as "Test verification" and not as a real one.
+- **MOSIP** (`MOSIP_ENABLED=true`) does not depend on `MOCK_VERIFICATION_ALLOWED`.
 - **MOSIP eSignet (`MOSIP_ENABLED=true`):** needs `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`,
   `MOSIP_REDIRECT_URI` and `MOSIP_PRIVATE_KEY` as environment variables (never in code or
   Git); the app refuses to start if one is missing. `MosipIdentityVerifier` is a skeleton of
@@ -711,7 +720,8 @@ Environment variables to set in Render:
 | `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
 
 Set the `MOSIP_*` variables only once the eSignet details are confirmed; leave
-`MOSIP_ENABLED` unset until then.
+`MOSIP_ENABLED` unset until then. Never set `MOCK_VERIFICATION_ALLOWED=true` on Render: it would
+let anyone be "verified" without a real check. Left unset, test verification stays off.
 
 Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app
 refuses to start if it is `true` with `SMS_PROVIDER=africastalking`.

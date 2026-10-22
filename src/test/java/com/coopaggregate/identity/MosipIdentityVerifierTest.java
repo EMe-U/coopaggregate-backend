@@ -26,6 +26,38 @@ class MosipIdentityVerifierTest {
     }
 
     @Test
+    void mockIsSwitchedOffUnlessTheDevelopmentSettingIsOn() {
+        runner.run(context -> {
+            IdentityVerifier mock = context.getBean(IdentityVerifier.class);
+            assertThrows(IdentityProviderException.class, () -> mock.authorizationUrl("state", "nonce"));
+            assertThrows(IdentityProviderException.class, () -> mock.complete("code", "nonce"));
+        });
+        runner.withPropertyValues("app.identity.mock-allowed=true").run(context -> {
+            IdentityVerifier mock = context.getBean(IdentityVerifier.class);
+            assertEquals(VerificationMethod.MOCK, mock.complete("code", "nonce").method());
+        });
+    }
+
+    @Test
+    void realMosipIsNotAffectedByTheMockSetting() {
+        for (String allowed : new String[] {"true", "false"}) {
+            runner.withPropertyValues("app.identity.mosip.enabled=true",
+                            "app.identity.mock-allowed=" + allowed,
+                            "app.identity.mosip.base-url=https://esignet.example",
+                            "app.identity.mosip.client-id=coop-client",
+                            "app.identity.mosip.redirect-uri=https://app.example/verify",
+                            "app.identity.mosip.private-key=" + KEY,
+                            "app.identity.mosip.authorization-endpoint=https://esignet.example/authorize",
+                            "app.identity.mosip.scope=openid")
+                    .run(context -> {
+                        IdentityVerifier verifier = context.getBean(IdentityVerifier.class);
+                        assertEquals("MOSIP", verifier.name());
+                        assertTrue(verifier.authorizationUrl("s", "n").startsWith("https://esignet.example/authorize?"));
+                    });
+        }
+    }
+
+    @Test
     void appRefusesToStartWhenMosipIsOnButSettingsAreMissing() {
         runner.withPropertyValues("app.identity.mosip.enabled=true", "app.identity.mosip.private-key=" + KEY)
                 .run(context -> {

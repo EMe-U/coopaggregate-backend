@@ -64,7 +64,7 @@ class IdentityVerificationServiceTest {
                 .thenAnswer(invocation -> stored.values().stream().findFirst());
         memberRepository = mock(MemberRepository.class);
         auditLogRepository = mock(AuditLogRepository.class);
-        verifier = new MockIdentityVerifier();
+        verifier = new MockIdentityVerifier(true);
         manager = manager(1L);
         service = new IdentityVerificationService(verificationRepository, memberRepository, auditLogRepository,
                 verifier);
@@ -185,8 +185,34 @@ class IdentityVerificationServiceTest {
     }
 
     @Test
+    void switchedOffMockRefusesToStartAndSavesNothing() {
+        service = new IdentityVerificationService(verificationRepository, memberRepository, auditLogRepository,
+                new MockIdentityVerifier(false));
+
+        IdentityProviderException e = assertThrows(IdentityProviderException.class, () -> service.start(manager));
+
+        assertTrue(e.isNotConfigured());
+        assertTrue(e.getMessage().startsWith("Test verification is switched off."));
+        assertTrue(stored.isEmpty());
+    }
+
+    @Test
+    void switchedOffMockRefusesTheCallbackAndNobodyIsVerified() {
+        String state = service.start(manager).state();
+        service = new IdentityVerificationService(verificationRepository, memberRepository, auditLogRepository,
+                new MockIdentityVerifier(false));
+
+        IdentityProviderException e = assertThrows(IdentityProviderException.class,
+                () -> service.complete("any-code", state, manager));
+
+        assertTrue(e.getMessage().startsWith("Test verification is switched off."));
+        assertFalse(stored.get(IdentityVerificationService.sha256(state)).isVerified());
+        assertEquals(AuditAction.IDENTITY_VERIFICATION_FAILED, lastAudit().getAction());
+    }
+
+    @Test
     void mockGivesTheSamePersonForTheSameCode() {
-        MockIdentityVerifier mock = new MockIdentityVerifier();
+        MockIdentityVerifier mock = new MockIdentityVerifier(true);
 
         assertEquals(mock.complete("code-1", "n").subject(), mock.complete("code-1", "n").subject());
         assertNotEquals(mock.complete("code-1", "n").subject(), mock.complete("code-2", "n").subject());

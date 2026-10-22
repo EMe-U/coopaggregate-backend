@@ -87,6 +87,20 @@ class IdentityControllerTest {
     }
 
     @Test
+    void switchedOffTestVerificationIs503OnStartAndCallback() throws Exception {
+        IdentityProviderException off = IdentityProviderException.notConfigured("Test verification is switched off.");
+        when(verificationService.start(any())).thenThrow(off);
+        when(verificationService.complete(any(), any(), any())).thenThrow(off);
+
+        mockMvc.perform(post("/api/members/verify/start").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message").value("Test verification is switched off."));
+        callback("{\"code\": \"abc\", \"state\": \"xyz\"}")
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message").value("Test verification is switched off."));
+    }
+
+    @Test
     void verificationNeedsALoggedInManager() throws Exception {
         mockMvc.perform(post("/api/members/verify/start")).andExpect(status().isUnauthorized());
     }
