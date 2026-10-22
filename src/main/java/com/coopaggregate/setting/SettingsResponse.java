@@ -12,11 +12,13 @@ public record SettingsResponse(
         List<String> committeeEmails,
         Long deductionPerKg,
         boolean requireIdentityVerification,
-        String cooperativeName) {
+        String cooperativeName,
+        String cooperativePhone) {
 
     public static SettingsResponse from(Setting setting) {
         return new SettingsResponse(setting.isSmsEnabled(), setting.getCooperativeEmail(), setting.getLocation(),
                 setting.getMinOrderKg(), setting.getCommitteeEmailList(), setting.getDeductionPerKg(),
-                setting.isRequireIdentityVerification(), setting.getCooperativeName());
+                setting.isRequireIdentityVerification(), setting.getCooperativeName(),
+                setting.getCooperativePhone());
     }
 }

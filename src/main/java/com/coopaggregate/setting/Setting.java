@@ -29,6 +29,9 @@ public class Setting {
 
     private String cooperativeName = "Koperative Intagamburuzwa";
 
+    // +2507XXXXXXXX, or null when not set.
+    private String cooperativePhone;
+
     private BigDecimal minOrderKg = new BigDecimal("100");
 
     // When true, a member can only be registered with a completed identity verification.
@@ -95,6 +98,14 @@ public class Setting {
 
     public void setCooperativeName(String cooperativeName) {
         this.cooperativeName = cooperativeName;
+    }
+
+    public String getCooperativePhone() {
+        return cooperativePhone;
+    }
+
+    public void setCooperativePhone(String cooperativePhone) {
+        this.cooperativePhone = cooperativePhone;
     }
 
     public boolean isRequireIdentityVerification() {

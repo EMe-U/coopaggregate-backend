@@ -51,11 +51,12 @@ class PublicServiceTest {
         Setting setting = new Setting();
         setting.setLocation("Busogo, Musanze");
         setting.setCooperativeEmail("info@intagamburuzwa.rw");
+        setting.setCooperativePhone("+250788123456");
         setting.setMinOrderKg(new BigDecimal("250"));
         when(settingRepository.findById(1L)).thenReturn(Optional.of(setting));
 
         assertEquals(new PublicInfoResponse("Koperative Intagamburuzwa", "Busogo, Musanze", "info@intagamburuzwa.rw",
-                new BigDecimal("250")), service.info());
+                new BigDecimal("250"), "+250788123456"), service.info());
     }
 
     @Test

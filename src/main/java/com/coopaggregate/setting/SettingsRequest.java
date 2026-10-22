@@ -7,8 +7,11 @@ import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
+
+import com.coopaggregate.common.RwandanPhoneNumber;
 
 public record SettingsRequest(
         @NotNull(message = "is required")
@@ -36,5 +39,9 @@ public record SettingsRequest(
 
         // Optional: left out or empty keeps the current name. Shown on the public pages.
         @Size(max = 150, message = "must be at most 150 characters")
-        String cooperativeName) {
+        String cooperativeName,
+        // Optional: a Rwandan mobile number, or empty for none. Stored as +2507XXXXXXXX and shown on the public pages.
+        @Pattern(regexp = "^$|" + RwandanPhoneNumber.PATTERN,
+                message = "must be a Rwandan mobile number: 07XXXXXXXX, 2507XXXXXXXX or +2507XXXXXXXX")
+        String cooperativePhone) {
 }

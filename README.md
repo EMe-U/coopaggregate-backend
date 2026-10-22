@@ -182,7 +182,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
 | POST | `/api/auth/change-password` | JWT | Body `{"currentPassword", "newPassword"}`. Returns `204` (see Authentication) |
-| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, requireIdentityVerification, cooperativeName}` |
+| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, requireIdentityVerification, cooperativeName, cooperativePhone}` |
 | PUT | `/api/settings` | JWT | Saves the settings (see Settings and change history) |
 | GET | `/api/settings/history?page=0&size=20` | JWT | Change history, newest first (max 100 per page) |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
@@ -209,7 +209,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/buyers?search=` | JWT | Buyers sorted by name. `search` matches name or phone |
 | POST | `/api/buyers` | JWT | Adds a buyer, returns `201` |
 | GET | `/api/public/grades` | None | Active grades `{code, name, nameRw, description, sizeInfo, packaging}`. No prices (see Public side for buyers) |
-| GET | `/api/public/info` | None | `{cooperativeName, location, cooperativeEmail, minOrderKg}` |
+| GET | `/api/public/info` | None | `{cooperativeName, location, cooperativeEmail, minOrderKg, cooperativePhone}` |
 | POST | `/api/public/requests` | None | A buyer's purchase request. Returns `201` `{code, status}`. Limited per IP address and phone number |
 | GET | `/api/public/requests/{code}?phone=` | None | `{code, status, message}`. `404` if the code or the phone is wrong |
 | GET | `/api/buyer-requests?status=&search=&page=0&size=15` | JWT | Buyers' requests, newest first (15 per page, max 100) |
@@ -257,7 +257,8 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
 ### Settings and change history
 
 - `smsEnabled` (default `true`) turns the member SMS on or off.
-- `cooperativeEmail` and `location` are optional. `minOrderKg` (default 100) must be more than 0.
+- `cooperativeEmail`, `cooperativePhone` and `location` are optional. The phone is a Rwandan mobile number
+  (`07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`), stored as `+2507XXXXXXXX`; empty clears it. `minOrderKg` (default 100) must be more than 0.
 - `cooperativeName` (default "Koperative Intagamburuzwa") is shown on the public pages. Optional
   in the request; left out or empty keeps the current name.
 - `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
@@ -590,7 +591,7 @@ open; everything else needs the manager's token. CORS allows only the frontend (
 
 - `GET /api/public/grades` shows the active grades with `code`, `name`, `nameRw`, `description`,
   `sizeInfo` and `packaging`. It never shows prices, ids or stock.
-- `GET /api/public/info` shows `cooperativeName`, `location`, `cooperativeEmail` and
+- `GET /api/public/info` shows `cooperativeName`, `location`, `cooperativeEmail`, `cooperativePhone` and
   `minOrderKg`. Nothing about members, stock, prices or the ledger.
 - `POST /api/public/requests` sends a purchase request:
 

@@ -68,21 +68,22 @@ class PublicControllerTest {
     @Test
     void infoIsShownWithoutLoggingIn() throws Exception {
         when(publicService.info()).thenReturn(new PublicInfoResponse("Koperative Intagamburuzwa", "Busogo, Musanze",
-                "info@intagamburuzwa.rw", new BigDecimal("100")));
+                "info@intagamburuzwa.rw", new BigDecimal("100"), "+250788123456"));
 
         mockMvc.perform(get("/api/public/info"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.cooperativeName").value("Koperative Intagamburuzwa"))
                 .andExpect(jsonPath("$.location").value("Busogo, Musanze"))
                 .andExpect(jsonPath("$.cooperativeEmail").value("info@intagamburuzwa.rw"))
-                .andExpect(jsonPath("$.minOrderKg").value(100));
+                .andExpect(jsonPath("$.minOrderKg").value(100))
+                .andExpect(jsonPath("$.cooperativePhone").value("+250788123456"));
     }
 
     @Test
     void responsesHaveNoFieldBeyondTheAgreedOnes() {
         assertEquals(List.of("code", "name", "nameRw", "description", "sizeInfo", "packaging"),
                 Arrays.stream(PublicGradeResponse.class.getRecordComponents()).map(c -> c.getName()).toList());
-        assertEquals(List.of("cooperativeName", "location", "cooperativeEmail", "minOrderKg"),
+        assertEquals(List.of("cooperativeName", "location", "cooperativeEmail", "minOrderKg", "cooperativePhone"),
                 Arrays.stream(PublicInfoResponse.class.getRecordComponents()).map(c -> c.getName()).toList());
     }
 

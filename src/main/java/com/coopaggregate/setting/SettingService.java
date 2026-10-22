@@ -10,6 +10,7 @@ import com.coopaggregate.audit.AuditAction;
 import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.audit.ChangeList;
+import com.coopaggregate.common.RwandanPhoneNumber;
 import com.coopaggregate.manager.Manager;
 
 @Service
@@ -47,10 +48,15 @@ public class SettingService {
                 ? blankToNull(request.cooperativeName())
                 : setting.getCooperativeName();
 
+        String cooperativePhone = blankToNull(request.cooperativePhone()) == null
+                ? null
+                : RwandanPhoneNumber.normalize(blankToNull(request.cooperativePhone()));
+
         ChangeList changes = new ChangeList()
                 .add("cooperativeName", setting.getCooperativeName(), cooperativeName)
                 .add("smsEnabled", setting.isSmsEnabled(), request.smsEnabled())
                 .add("cooperativeEmail", setting.getCooperativeEmail(), cooperativeEmail)
+                .add("cooperativePhone", setting.getCooperativePhone(), cooperativePhone)
                 .add("location", setting.getLocation(), location)
                 .add("minOrderKg", setting.getMinOrderKg(), request.minOrderKg())
                 .add("committeeEmails", setting.getCommitteeEmailList(), committeeEmails)
@@ -64,6 +70,7 @@ public class SettingService {
         setting.setCommitteeEmailList(committeeEmails);
         setting.setRequireIdentityVerification(requireIdentityVerification);
         setting.setCooperativeName(cooperativeName);
+        setting.setCooperativePhone(cooperativePhone);
 
         if (!changes.isEmpty()) {
             auditLogRepository.save(AuditLog.of(AuditAction.SETTINGS_UPDATED, null, manager, changes.toString()));

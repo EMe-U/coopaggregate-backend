@@ -9,10 +9,11 @@ public record PublicInfoResponse(
         String cooperativeName,
         String location,
         String cooperativeEmail,
-        BigDecimal minOrderKg) {
+        BigDecimal minOrderKg,
+        String cooperativePhone) {
 
     public static PublicInfoResponse from(Setting setting) {
         return new PublicInfoResponse(setting.getCooperativeName(), setting.getLocation(),
-                setting.getCooperativeEmail(), setting.getMinOrderKg());
+                setting.getCooperativeEmail(), setting.getMinOrderKg(), setting.getCooperativePhone());
     }
 }
