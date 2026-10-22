@@ -9,7 +9,9 @@ public record LotQuantities(
         BigDecimal lostKg,
         BigDecimal soldKg,
         Long saleAmountRwf,
-        Long memberCount) {
+        Long memberCount,
+        // Part of deliveredKg that members have not confirmed yet. Still counted as physical stock.
+        BigDecimal pendingConfirmationKg) {
 
     public LotQuantities {
         deliveredKg = deliveredKg == null ? BigDecimal.ZERO : deliveredKg;
@@ -17,10 +19,17 @@ public record LotQuantities(
         soldKg = soldKg == null ? BigDecimal.ZERO : soldKg;
         saleAmountRwf = saleAmountRwf == null ? 0L : saleAmountRwf;
         memberCount = memberCount == null ? 0L : memberCount;
+        pendingConfirmationKg = pendingConfirmationKg == null ? BigDecimal.ZERO : pendingConfirmationKg;
+    }
+
+    /** Totals with no pending deliveries. */
+    public LotQuantities(Long lotId, BigDecimal deliveredKg, BigDecimal lostKg, BigDecimal soldKg,
+                         Long saleAmountRwf, Long memberCount) {
+        this(lotId, deliveredKg, lostKg, soldKg, saleAmountRwf, memberCount, null);
     }
 
     public static LotQuantities empty(Long lotId) {
-        return new LotQuantities(lotId, null, null, null, null, null);
+        return new LotQuantities(lotId, null, null, null, null, null, null);
     }
 
     public BigDecimal remainingKg() {

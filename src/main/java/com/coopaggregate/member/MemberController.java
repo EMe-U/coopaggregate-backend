@@ -80,4 +80,5 @@ public class MemberController {
     public MemberResponse activate(@PathVariable Long id) {
         return memberService.setActive(id, true);
     }
+
 }

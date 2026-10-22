@@ -13,6 +13,7 @@ public record LotDetailResponse(
         BigDecimal lostKg,
         BigDecimal soldKg,
         BigDecimal remainingKg,
+        BigDecimal pendingConfirmationKg,
         Long saleAmountRwf,
         Long memberCount,
         LocalDate createdAt,
@@ -21,7 +22,8 @@ public record LotDetailResponse(
 
     public static LotDetailResponse from(LotResponse lot, List<LotMemberResponse> members) {
         return new LotDetailResponse(lot.id(), lot.code(), lot.gradeName(), lot.status(), lot.deliveredKg(),
-                lot.lostKg(), lot.soldKg(), lot.remainingKg(), lot.saleAmountRwf(), lot.memberCount(),
+                lot.lostKg(), lot.soldKg(), lot.remainingKg(), lot.pendingConfirmationKg(), lot.saleAmountRwf(),
+                lot.memberCount(),
                 lot.createdAt(), lot.closedAt(), members);
     }
 }

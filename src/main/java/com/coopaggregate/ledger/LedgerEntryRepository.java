@@ -26,4 +26,7 @@ public interface LedgerEntryRepository extends JpaRepository<LedgerEntry, Long>,
 
     @Query("SELECT COUNT(e) FROM LedgerEntry e WHERE e.entryDate >= :from AND e.entryDate < :to")
     long countBetween(Instant from, Instant to);
+
+    Optional<LedgerEntry> findFirstByEntryTypeAndRelatedEntityTypeAndRelatedEntityId(
+            LedgerEntryType entryType, String relatedEntityType, Long relatedEntityId);
 }

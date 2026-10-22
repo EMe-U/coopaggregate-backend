@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,6 +20,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.delivery.ConfirmationStatus;
+import com.coopaggregate.delivery.Delivery;
+import com.coopaggregate.delivery.DeliveryRepository;
+import com.coopaggregate.delivery.DisputeReason;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.ledger.LedgerEntryType;
@@ -36,6 +41,7 @@ class SharingServiceTest {
 
     private LotShareRepository lotShareRepository;
     private LedgerService ledgerService;
+    private DeliveryRepository deliveryRepository;
     private Lot lot;
     private Manager manager;
     private SharingService service;
@@ -78,7 +84,9 @@ class SharingServiceTest {
         });
 
         manager = new Manager();
-        service = new SharingService(lotShareRepository, lotRepository, lotService, memberRepository, ledgerService);
+        deliveryRepository = mock(DeliveryRepository.class);
+        service = new SharingService(lotShareRepository, lotRepository, lotService, memberRepository, ledgerService,
+                deliveryRepository);
     }
 
     @Test
@@ -148,6 +156,54 @@ class SharingServiceTest {
         lot.setStatus(LotStatus.OPEN);
 
         assertThrows(BadRequestException.class, () -> service.preview(3L));
+    }
+
+    @Test
+    void lotWithPendingOrDisputedDeliveriesCannotBeShared() {
+        Delivery disputed = delivery("RCT-9MNP", "80.00");
+        disputed.dispute(DisputeReason.WRONG_KG, null, Instant.now());
+        when(deliveryRepository.findByLotIdAndConfirmationStatusInAndReversedAtIsNullOrderById(3L,
+                List.of(ConfirmationStatus.PENDING, ConfirmationStatus.DISPUTED)))
+                .thenReturn(List.of(delivery("RCT-7K2Q", "120.50"), disputed));
+
+        UnconfirmedDeliveriesException e = assertThrows(UnconfirmedDeliveriesException.class,
+                () -> service.share(3L, manager));
+
+        assertEquals("Lot A-2026-01 has deliveries that are not confirmed yet: RCT-7K2Q (PENDING), "
+                + "RCT-9MNP (DISPUTED). Confirm, resolve, correct or reverse them before sharing.", e.getMessage());
+        assertEquals(List.of(
+                new UnconfirmedDelivery(42L, "RCT-7K2Q", 5L, "Uwimana Claudine", "M-0005", new BigDecimal("120.50"),
+                        ConfirmationStatus.PENDING),
+                new UnconfirmedDelivery(42L, "RCT-9MNP", 5L, "Uwimana Claudine", "M-0005", new BigDecimal("80.00"),
+                        ConfirmationStatus.DISPUTED)), e.getDeliveries());
+        verify(lotShareRepository, never()).save(any());
+        verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
+        assertEquals(LotStatus.SOLD, lot.getStatus());
+    }
+
+    @Test
+    void previewIsAlsoRefusedWhileDeliveriesArePending() {
+        when(deliveryRepository.findByLotIdAndConfirmationStatusInAndReversedAtIsNullOrderById(3L,
+                List.of(ConfirmationStatus.PENDING, ConfirmationStatus.DISPUTED)))
+                .thenReturn(List.of(delivery("RCT-7K2Q", "120.50")));
+
+        UnconfirmedDeliveriesException e = assertThrows(UnconfirmedDeliveriesException.class,
+                () -> service.preview(3L));
+
+        assertEquals(1, e.getDeliveries().size());
+    }
+
+    private static Delivery delivery(String receiptCode, String quantityKg) {
+        Member member = new Member();
+        ReflectionTestUtils.setField(member, "id", 5L);
+        member.setFullName("Uwimana Claudine");
+        member.setMemberCode("M-0005");
+        Delivery delivery = new Delivery();
+        ReflectionTestUtils.setField(delivery, "id", 42L);
+        delivery.setMember(member);
+        delivery.setReceiptCode(receiptCode);
+        delivery.setQuantityKg(new BigDecimal(quantityKg));
+        return delivery;
     }
 
     @Test

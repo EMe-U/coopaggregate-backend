@@ -111,7 +111,8 @@ class LotServiceTest {
     void lotDetailHasComputedQuantitiesAndMembers() {
         givenLot(lot(3L, "A-2026-01", "A", "Big", LotStatus.CLOSED));
         when(lotRepository.findQuantities(anyCollection())).thenReturn(List.of(new LotQuantities(3L,
-                new BigDecimal("1000.00"), new BigDecimal("25.50"), new BigDecimal("400.00"), 120000L, 2L)));
+                new BigDecimal("1000.00"), new BigDecimal("25.50"), new BigDecimal("400.00"), 120000L, 2L,
+                new BigDecimal("150.00"))));
         List<LotMemberResponse> members = List.of(
                 new LotMemberResponse(5L, "Uwimana Claudine", "M-0005", new BigDecimal("600.00")),
                 new LotMemberResponse(6L, "Habimana Eric", "M-0006", new BigDecimal("400.00")));
@@ -119,7 +120,10 @@ class LotServiceTest {
 
         LotDetailResponse detail = service.get(3L);
 
+        // Pending kg are shown next to the totals but stay in them: they are still physical stock.
+        assertEquals(new BigDecimal("1000.00"), detail.deliveredKg());
         assertEquals(new BigDecimal("574.50"), detail.remainingKg());
+        assertEquals(new BigDecimal("150.00"), detail.pendingConfirmationKg());
         assertEquals(120000L, detail.saleAmountRwf());
         assertEquals(2L, detail.memberCount());
         assertEquals(members, detail.members());
@@ -141,6 +145,7 @@ class LotServiceTest {
         when(lotRepository.totalDeliveredKg()).thenReturn(new BigDecimal("4000.00"));
         when(lotRepository.totalSoldKg()).thenReturn(new BigDecimal("3300.00"));
         when(lotRepository.totalLostKg()).thenReturn(new BigDecimal("150.00"));
+        when(lotRepository.totalPendingConfirmationKg()).thenReturn(new BigDecimal("120.50"));
         when(lotRepository.deliveredKgBetween(any(), any())).thenReturn(new BigDecimal("200.00"));
         when(lotRepository.deliveryCountBetween(any(), any())).thenReturn(3L);
 
@@ -150,6 +155,7 @@ class LotServiceTest {
         assertEquals(new BigDecimal("4000.00"), stock.totalDeliveredKg());
         assertEquals(new BigDecimal("3300.00"), stock.totalSoldKg());
         assertEquals(new BigDecimal("150.00"), stock.totalLostKg());
+        assertEquals(new BigDecimal("120.50"), stock.pendingConfirmationKg());
         assertEquals(new BigDecimal("200.00"), stock.addedTodayKg());
         assertEquals(3L, stock.deliveriesToday());
         assertEquals(1, stock.openLots());

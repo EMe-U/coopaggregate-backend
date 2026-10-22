@@ -84,6 +84,12 @@ cd coopaggregate-backend
 | `MANAGER_NAME` | First start | Name of the manager account |
 | `MANAGER_EMAIL` | First start | Login email of the manager account |
 | `MANAGER_PASSWORD` | First start | Login password of the manager account |
+| `SMS_PROVIDER` | No | `log` (default: SMS are only saved in `sms_log`) or `africastalking` |
+| `AT_USERNAME` | With Africa's Talking | Africa's Talking username; `sandbox` for their sandbox |
+| `AT_API_KEY` | With Africa's Talking | Africa's Talking API key |
+| `AT_SENDER_ID` | No | Sender name shown on members' phones, if your account has one |
+| `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
+| `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
 | `PORT` | No | HTTP port. Default: `8080` |
 
 The manager is the only user who logs in. On startup, if the `manager` table is empty,
@@ -172,9 +178,13 @@ ERD: see `docs/erd.png`.
 | GET | `/api/health` | None | Returns `{"status":"OK"}` |
 | POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
+| POST | `/api/auth/change-password` | JWT | Body `{"currentPassword", "newPassword"}`. Returns `204` (see Authentication) |
+| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg}` |
+| PUT | `/api/settings` | JWT | Saves the settings (see Settings and change history) |
+| GET | `/api/settings/history?page=0&size=20` | JWT | Change history, newest first (max 100 per page) |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
 | GET | `/api/ledger/verify` | JWT | Recomputes every hash. Returns `{valid, checkedEntries, firstBrokenEntryId}` |
-| POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Adds a REVERSAL entry and returns it |
+| POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Reverses the entry through its business action (see Reversals) and returns the REVERSAL entry |
 | GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member |
@@ -182,10 +192,11 @@ ERD: see `docs/erd.png`.
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
-| GET | `/api/grades` | JWT | Active grades `{id, code, name, floorPricePerKg}`, sorted by code. `floorPricePerKg` is `null` when not set |
-| GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold and remaining kg |
+| GET | `/api/grades?includeInactive=false` | JWT | Grades `{id, code, name, nameRw, active, floorPricePerKg, description, sizeInfo, packaging}`, sorted by code. Only active ones unless `includeInactive=true`. `floorPricePerKg` is `null` when not set |
+| PUT | `/api/grades/{id}` | JWT | Body `{"name", "nameRw", "active", "floorPricePerKg", "description", "sizeInfo", "packaging"}`. Edits a grade. Grades A, B and C are fixed: they cannot be created or deleted |
+| GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold, remaining and pending-confirmation kg |
 | GET | `/api/lots/{id}` | JWT | One lot, with the kilograms each member delivered |
-| GET | `/api/lots/stock` | JWT | Stock balance: remaining, delivered, sold and lost kg, today's deliveries, lot counts and remaining kg per grade |
+| GET | `/api/lots/stock` | JWT | Stock balance: remaining, delivered, sold, lost and pending-confirmation kg, today's deliveries, lot counts and remaining kg per grade |
 | GET | `/api/lots/open?gradeId=` | JWT | Open lot of the grade `{id, code, gradeName, totalKg}`. `204` if none is open yet, `404` if the grade does not exist |
 | PATCH | `/api/lots/{id}/close` | JWT | Closes an open lot. The next delivery of that grade starts a new lot |
 | POST | `/api/lots/{id}/losses` | JWT | Records a loss on an open or closed lot, returns `201` |
@@ -195,15 +206,25 @@ ERD: see `docs/erd.png`.
 | POST | `/api/sales` | JWT | Records a sale from a closed lot. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
-| GET | `/api/lots/{id}/share-preview` | JWT | How a sold lot's money would be shared, per member. Saves nothing |
-| POST | `/api/lots/{id}/share` | JWT | Saves the shares and marks the lot `SHARED`. Only once per lot |
+| GET | `/api/lots/{id}/share-preview` | JWT | How a sold lot's money would be shared, per member. Saves nothing. `409` listing pending or disputed deliveries |
+| POST | `/api/lots/{id}/share` | JWT | Saves the shares and marks the lot `SHARED`. Only once per lot, and only when every delivery is confirmed |
 | GET | `/api/payments/balances?search=&status=` | JWT | Share, deductions, paid and balance per member with a shared lot, plus `totalOwedRwf` and `paidThisWeekRwf` |
 | POST | `/api/payments` | JWT | Pays a member. `201` when new, `200` when the same `clientUuid` was already recorded |
-| GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page) |
+| GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page). Reversed payments are listed with `reversed: true` |
+| POST | `/api/payments/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a payment; the member is owed the amount again |
 | GET | `/api/members/{id}/statement` | JWT | A member's shares, deductions, payments, amount owed and lots waiting for sharing |
 | POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
-| GET | `/api/deliveries?memberId=&lotId=&from=&to=&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional |
-| GET | `/api/deliveries/{id}` | JWT | One delivery |
+| GET | `/api/deliveries?memberId=&lotId=&from=&to=&includeReversed=false&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional. Reversed deliveries only with `includeReversed=true` |
+| GET | `/api/deliveries/{id}` | JWT | One delivery, also when it was reversed |
+| POST | `/api/deliveries/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a delivery recorded by mistake |
+| POST | `/api/deliveries/{id}/correct` | JWT | Body `{"reason", "memberId", "gradeId", "quantityKg"}`. Replaces a wrong delivery, returns the corrected one with `201` |
+| POST | `/api/deliveries/{id}/confirm` | JWT | Body `{"code"}`. Confirms a pending delivery with the 6-digit code from the member's SMS |
+| POST | `/api/deliveries/{id}/resend-code` | JWT | Sends the member a new code; the old one stops working. At most 3 times per delivery |
+| POST | `/api/deliveries/{id}/review` | JWT | Body `{"note"}`. Confirms a pending delivery after the manager checked it. Only while SMS are off, once all 3 new codes were sent, or after 48 hours pending |
+| POST | `/api/deliveries/{id}/dispute` | JWT | Body `{"reason", "note"}`. Records that the member says the delivery is wrong |
+| POST | `/api/deliveries/{id}/resolve-dispute` | JWT | Body `{"note"}`. Closes a dispute after checking the delivery is correct |
+| POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
+| GET | `/api/dashboard` | JWT | Numbers for the home screen, including disputed deliveries and confirmations pending for more than 48 hours |
 
 More endpoints coming soon.
 
@@ -216,6 +237,20 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
   `{"message": "Invalid email or password"}`.
 - After 5 failed attempts for the same email, logins for that email are refused with
   `429` for 5 minutes. The counter is kept in memory and resets when the app restarts.
+- `POST /api/auth/change-password` needs the current password. The new one must have
+  8 to 72 characters and be different from the current one, otherwise `400` with a
+  clear message. Tokens already given out stay valid until they expire.
+
+### Settings and change history
+
+- `smsEnabled` (default `true`) turns the member SMS on or off.
+- `cooperativeEmail` and `location` are optional. `minOrderKg` (default 100) must be more than 0.
+- `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
+  duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
+- Every change to the settings or a grade, every password change, every new code sent for
+  a delivery and every manager review of a delivery is written to the change history (`GET /api/settings/history`) with the
+  manager and the time, for example `smsEnabled: true -> false`. Passwords and codes are
+  never written to it. Rows from the old member PIN (`PIN_SET`, `PIN_RESET`) stay there.
 
 ### Errors
 
@@ -238,6 +273,104 @@ of its own data plus the previous entry's hash, so changing any past entry break
 chain and `GET /api/ledger/verify` reports the first broken entry. Mistakes are fixed
 with a REVERSAL entry that cancels the original. A reversal cannot be reversed, and an
 entry can only be reversed once.
+
+### Delivery confirmation
+
+Every delivery is confirmed by the member with a one-time code sent by SMS.
+
+- When a delivery is saved (online, or when an offline one syncs) it is `PENDING`, and
+  the member gets one SMS with the delivery and a 6-digit code (see SMS). If the delivery
+  is right, the member gives the code to the manager.
+- `POST /api/deliveries/{id}/confirm` with `{"code"}` makes it `CONFIRMED` (method `OTP`).
+  - The code is random (`SecureRandom`), and only a BCrypt hash is stored. It is never
+    returned, logged or saved in `sms_log`, where it shows as `******`.
+  - It expires 10 minutes after it is sent (`409`).
+  - A wrong code is `400` with the tries left. After 3 wrong tries the code stops working,
+    even the right one (`409`); the manager must send a new one.
+- `POST /api/deliveries/{id}/resend-code` sends a new code and the old one stops working at
+  once. At most 3 times per delivery (`409` after that); each delivery response shows
+  `codeResendsLeft`. Every resend is written to the change history.
+- A correction is a new delivery, so it also starts `PENDING` and gets its own code.
+- **Manager review:** when no code can reach the member, the manager checks the delivery
+  and confirms it with `POST /api/deliveries/{id}/review` and a note (required). It becomes
+  `CONFIRMED` with method `MANAGER_REVIEW` ("Checked by the manager") and is written to the
+  change history. This is only allowed for a `PENDING` delivery when:
+  - SMS are turned off (then no code is ever sent, so deliveries stay `PENDING` until
+    reviewed),
+  - SMS are on but all 3 new codes were already sent, or
+  - it has been `PENDING` for more than 48 hours since it reached the server (`syncedAt`),
+    the same deliveries the dashboard shows as overdue.
+
+  In every other case it returns `409`. The member can still dispute a reviewed delivery
+  by replying `2 RCT-…`.
+- **Disputes:** `POST /api/deliveries/{id}/dispute` records a member's complaint
+  (`WRONG_KG`, `WRONG_GRADE`, `NOT_MY_DELIVERY` or `OTHER`, with an optional note).
+  - If the record is right: `POST /api/deliveries/{id}/resolve-dispute` with a note puts it
+    back to `CONFIRMED` (method `MANAGER_REVIEW`).
+  - If it is wrong: correct or reverse it (see Reversals); that also closes the dispute.
+  - A lot cannot be shared while it has pending or disputed deliveries (see Sharing).
+- Deliveries recorded before confirmations existed are `CONFIRMED` with method
+  `RECORDED_BEFORE_CONFIRMATION`, so they are not counted as waiting. The member never
+  confirmed them. Each delivery also has `confirmationLabel`, the text to show, for example
+  "Recorded before confirmation existed" or "Confirmed by member with the SMS code".
+- The permanent member PIN was removed. Deliveries already confirmed with it keep method
+  `PIN` ("Confirmed by member with PIN").
+
+### SMS
+
+After a delivery is saved, the member gets one SMS in their language (`rw` or `en`):
+
+"CoopAggregate: RCT-7K2Q, 300 kg Big, 21/10. If correct, give the manager code 482193.
+If wrong, don't give the code, reply 2 RCT-7K2Q."
+
+The Kinyarwanda text still needs a check by a native speaker.
+
+The SMS is sent in the background after the delivery is committed, so a failed SMS never
+fails or slows a delivery. Every message is saved in `sms_log` (`QUEUED`, `SENT`, `FAILED`
+or `CANCELLED`) with the code replaced by `******`. Failed ones are retried every 5 minutes,
+up to 5 attempts. Because only the code's hash is kept, each attempt sends a **new** code;
+the member never got the earlier one. A code message that is no longer needed (the delivery
+was confirmed, disputed or reversed, or a newer code was asked for) is `CANCELLED` instead
+of sent. No SMS are sent when SMS are turned off in the settings.
+
+`SMS_PROVIDER=log` (default) sends nothing. The messages are in `sms_log`, but the codes
+are masked there. To test codes locally, set `SMS_LOG_SHOW_CODES=true`: the log provider
+then prints each SMS, real code included, in the console (`sms_log` stays masked). This is
+**for development only**: with any other provider the app refuses to start while it is
+`true`. Without it, use the Africa's Talking sandbox and its simulator to see the codes. `SMS_PROVIDER=africastalking` sends them with Africa's Talking
+(`AT_USERNAME=sandbox` uses their sandbox and simulator).
+
+**Replies:** in the Africa's Talking dashboard, set the SMS callback URL to
+`https://<api-host>/api/sms/inbound?token=<SMS_INBOUND_SECRET>`. The secret can also be sent
+in the `X-Sms-Secret` header; without the right secret the webhook answers `403`.
+
+- `1 RCT-7K2Q` still confirms a pending delivery (method `SMS`).
+- `2 RCT-7K2Q <note>` disputes it (reason `OTHER`, with the note), also when it was already
+  confirmed ("this was not me").
+- A reply only counts when it comes from the phone of the member who owns that delivery;
+  everything else is ignored.
+
+### Reversals
+
+A reversal changes the business data and the ledger together, in one transaction, so
+the totals and the ledger always agree. The reversed delivery or payment stays in its
+table for the history (`reversed: true`, `reversalReason`) but is no longer counted
+anywhere: lot kilograms, stock, the dashboard, sharing, member statements and balances.
+
+- **Delivery:** `POST /api/deliveries/{id}/reverse`. Only while the delivery's lot has no
+  sales, because sold potatoes and shared money already depend on the lot's kilograms
+  (otherwise `409`). Also `409` when the delivery is already reversed, or when the lot's
+  recorded losses would leave it with less than 0 kg.
+- **Correction:** `POST /api/deliveries/{id}/correct` reverses the delivery and saves the
+  corrected one in the same transaction: new receipt code, the open lot of its grade, the
+  same `deliveredAt`, its own `DELIVERY` ledger entry. The two are linked by `correctsId`
+  (on the new delivery) and `correctedById` (on the original). Same rules as a reversal.
+- **Payment:** `POST /api/payments/{id}/reverse`. The member's balance goes back up.
+- **Ledger:** `POST /api/ledger/{id}/reverse` does the same as the endpoints above for
+  `DELIVERY` and `PAYMENT` entries. `SHARE`, `SALE` and `LOSS` entries cannot be reversed
+  (`409`): a share has already divided the money, a sale cannot be undone once its lot is
+  shared, and a loss cannot be undone once its lot has sales. Sales and losses cannot be
+  reversed at all yet, because they have no place to record a reversal.
 
 ### Members
 
@@ -297,10 +430,10 @@ Request body for `POST /api/deliveries`:
 | `memberId` | Required. The member must exist and be active, otherwise `400` |
 | `gradeId` | Required. The grade must exist, otherwise `400` |
 | `quantityKg` | Required. More than 0, at most 5000, at most 2 decimals |
-| `deliveredAt` | Optional. Defaults to the time the server receives the delivery |
+| `deliveredAt` | Optional. When the delivery happened, for example the time on the device when it was recorded offline. At most 5 minutes in the future and at most 7 days in the past, otherwise `400`. Defaults to the time the server receives the delivery |
 
-- The response contains the receipt code, member, grade, lot, quantity, deduction and
-  delivery time.
+- The response contains the receipt code, member, grade, lot, quantity, deduction,
+  `deliveredAt` (when the delivery happened) and `syncedAt` (when the server saved it).
 - **Deduction:** `quantityKg` x `deduction_per_kg` from the `setting` table (5 RWF),
   rounded half up to whole RWF. For example 12.25 kg gives 61 RWF.
 - **Lot:** the delivery goes to the open lot of its grade. If the grade has no open lot, a
@@ -318,7 +451,34 @@ Request body for `POST /api/deliveries`:
   The member is linked through the delivery, not written into the reason, because ledger
   entries can never change.
 - `from` and `to` filter by delivery day in Kigali time (`yyyy-MM-dd`, both inclusive).
-- Deliveries cannot be edited or deleted. A mistake is corrected with a ledger reversal.
+- Deliveries cannot be edited or deleted. A mistake is fixed by reversing or correcting
+  the delivery (see Reversals).
+
+#### Offline sync
+
+The app records deliveries offline and sends them later, possibly hours later. The server
+follows these rules:
+
+- **Delivery time:** `deliveredAt` from the device is kept as the delivery time.
+  `syncedAt` shows when the server saved it. A time more than 5 minutes in the future (a
+  device clock that is wrong) or more than 7 days in the past returns `400`.
+- **Sending again is safe:** the same `clientUuid` always returns the delivery that was
+  saved the first time, with `200`. It is saved once and adds one ledger entry, however
+  often it is sent. This check comes first, so a re-sent delivery still gets `200` after the
+  7-day window, after its member was deactivated, or after its lot was closed.
+- **Lot at sync time:** the lot is chosen when the delivery reaches the server: the open
+  lot of its grade at that moment. If the lot that was open when the delivery was recorded
+  has been closed in the meantime, the delivery goes to a new lot, because a closed lot
+  may already be on sale and its kilograms must not change.
+- **Errors that will not go away on retry** return a `4xx` status with a message, never
+  `500`, so the app can show the message and stop retrying:
+  - `400`: invalid body (missing fields, malformed `clientUuid`, quantity out of range,
+    `deliveredAt` without a time zone or outside the time window), unknown member or
+    grade, inactive member.
+  - `409`: the request clashes with data already saved.
+
+  `401` means the login has expired; the app should ask the manager to log in again and
+  then retry. Network errors and `5xx` can be retried later with the same `clientUuid`.
 
 ### Lots and losses
 
@@ -328,13 +488,19 @@ A lot moves through `OPEN` -> `CLOSED` -> `SOLD` (`SHARED` comes with payment sh
   `remainingKg = deliveredKg - lostKg - soldKg`. `saleAmountRwf` is the sum of the lot's
   sales and `memberCount` the number of members who delivered to it. `createdAt` and
   `closedAt` are the dates the lot was opened and closed.
+- `pendingConfirmationKg` is the part of `deliveredKg` from deliveries that are still
+  `PENDING` (not reversed). It is shown next to the totals and does **not** change them:
+  the potatoes are physically in the store either way. A lot with pending kg cannot be
+  shared yet (see Sharing).
 - **Close:** only an `OPEN` lot can be closed (otherwise `409`). Closing waits for any
   delivery of the same grade that is being recorded, so no delivery ends up in a lot
   after it closed.
 - **Stock:** `GET /api/lots/stock` returns `totalRemainingKg` (open and closed lots) and
   `byGrade` (remaining kg per grade), `totalDeliveredKg`, `totalSoldKg` and `totalLostKg`
   (all lots, so delivered - lost - sold = remaining), `addedTodayKg` and `deliveriesToday`
-  (deliveries whose time falls on today in Kigali), and `openLots` / `closedLots`.
+  (deliveries whose time falls on today in Kigali), `openLots` / `closedLots`, and
+  `pendingConfirmationKg` (all `PENDING`, not reversed deliveries; already included in the
+  totals).
 - **Losses:** body `{"quantityKg", "reason", "recordedAt", "notes"}`. `reason` is `ROT`,
   `DRYING`, `DAMAGE`, `THEFT` or `OTHER`; `recordedAt` (a date) and `notes` are optional. Allowed on
   open and closed lots (otherwise `409`). `quantityKg` must be more than 0 and at most the
@@ -390,6 +556,16 @@ saves it and sets the lot to `SHARED`.
 
 - Only a `SOLD` lot can be shared (otherwise `400`). A lot that is already `SHARED` returns
   `409`.
+- Only confirmed deliveries are shared. While the lot has `PENDING` or `DISPUTED`
+  deliveries (not reversed), both the preview and the share return `409` with the list:
+
+  ```json
+  {"message": "Lot A-2026-01 has deliveries that are not confirmed yet: RCT-7K2Q (PENDING). ...",
+   "deliveries": [{"id": 42, "receiptCode": "RCT-7K2Q", "memberId": 5, "memberName": "Uwimana Claudine",
+                   "memberNumber": "M-0005", "quantityKg": 120.50, "status": "PENDING"}]}
+  ```
+
+  Confirm, resolve, correct or reverse them first.
 - `shareRwf = memberKg / deliveredKg x saleAmountRwf`, rounded to whole RWF. The rounding
   remainder goes to the member with the most kg, so the shares add up to exactly the sale
   amount. Shares use delivered kg, so lost kg are carried by everyone in proportion.
@@ -479,6 +655,12 @@ Environment variables to set in Render:
 | `MANAGER_EMAIL` | Login email of the manager account |
 | `MANAGER_PASSWORD` | Login password of the manager account |
 | `JAVA_TOOL_OPTIONS` | `-XX:MaxRAMPercentage=75 -XX:+UseSerialGC` |
+| `SMS_PROVIDER` | `africastalking` to send real SMS, otherwise leave it unset |
+| `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
+| `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
+
+Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app
+refuses to start if it is `true` with `SMS_PROVIDER=africastalking`.
 
 Do not set `PORT`; Render sets it. `JAVA_TOOL_OPTIONS` keeps the JVM within the
 512 MB memory limit of the free plan.

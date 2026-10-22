@@ -7,6 +7,10 @@ import com.coopaggregate.grade.Grade;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.member.Member;
 
+/**
+ * deliveredAt is when the delivery happened (the device time for offline deliveries); syncedAt is when the
+ * server saved it. correctsId and correctedById link a corrected delivery and the one it replaced.
+ */
 public record DeliveryResponse(
         Long id,
         String receiptCode,
@@ -19,9 +23,28 @@ public record DeliveryResponse(
         String lotCode,
         BigDecimal quantityKg,
         Long deductionRwf,
-        Instant deliveredAt) {
+        Instant deliveredAt,
+        Instant syncedAt,
+        boolean reversed,
+        String reversalReason,
+        Long correctsId,
+        Long correctedById,
+        ConfirmationStatus confirmationStatus,
+        ConfirmationMethod confirmationMethod,
+        String confirmationLabel,
+        int codeResendsLeft,
+        Instant confirmedAt,
+        DisputeReason disputeReason,
+        String disputeNote,
+        Instant disputedAt,
+        String resolutionNote) {
 
     public static DeliveryResponse from(Delivery delivery) {
+        return from(delivery, null);
+    }
+
+    /** correctedById is the delivery that replaced this one, if it was corrected. */
+    public static DeliveryResponse from(Delivery delivery, Long correctedById) {
         Member member = delivery.getMember();
         Lot lot = delivery.getLot();
         Grade grade = lot.getGrade();
@@ -37,6 +60,20 @@ public record DeliveryResponse(
                 lot.getLotCode(),
                 delivery.getQuantityKg(),
                 delivery.getDeductionAmount(),
-                delivery.getDeliveredAt());
+                delivery.getDeliveredAt(),
+                delivery.getCreatedAt(),
+                delivery.isReversed(),
+                delivery.getReversalReason(),
+                delivery.getCorrects() == null ? null : delivery.getCorrects().getId(),
+                correctedById,
+                delivery.getConfirmationStatus(),
+                delivery.getConfirmationMethod(),
+                delivery.getConfirmationMethod() == null ? null : delivery.getConfirmationMethod().label(),
+                ConfirmationCodes.MAX_RESENDS - delivery.getConfirmationCodeResends(),
+                delivery.getConfirmedAt(),
+                delivery.getDisputeReason(),
+                delivery.getDisputeNote(),
+                delivery.getDisputedAt(),
+                delivery.getResolutionNote());
     }
 }

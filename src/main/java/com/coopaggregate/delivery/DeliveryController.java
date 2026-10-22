@@ -13,10 +13,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.common.PageResponse;
+import com.coopaggregate.ledger.ReverseRequest;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -48,9 +50,11 @@ public class DeliveryController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @Parameter(description = "Last day, inclusive (yyyy-MM-dd, Kigali time)")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @Parameter(description = "Also list deliveries that were reversed (default false)")
+            @RequestParam(defaultValue = "false") boolean includeReversed,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return deliveryService.list(memberId, lotId, from, to, page, size);
+        return deliveryService.list(memberId, lotId, from, to, includeReversed, page, size);
     }
 
     @GetMapping("/{id}")
@@ -68,5 +72,57 @@ public class DeliveryController {
                                                    @AuthenticationPrincipal Jwt jwt) {
         RecordedDelivery result = deliveryService.record(request, authService.currentManager(jwt.getSubject()));
         return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK).body(result.delivery());
+    }
+
+    @PostMapping("/{id}/reverse")
+    @Operation(summary = "Cancel a delivery recorded by mistake. It stays visible as reversed but is no longer "
+            + "counted. Not possible once its lot has sales")
+    public DeliveryResponse reverse(@PathVariable Long id, @Valid @RequestBody ReverseRequest request,
+                                    @AuthenticationPrincipal Jwt jwt) {
+        return deliveryService.reverseDelivery(id, request.reason(), authService.currentManager(jwt.getSubject()));
+    }
+
+    @PostMapping("/{id}/correct")
+    @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Replace a wrong delivery: the original is reversed and the corrected delivery is saved "
+            + "with a new receipt code in the open lot of its grade. Not possible once the original's lot has sales")
+    public DeliveryResponse correct(@PathVariable Long id, @Valid @RequestBody CorrectDeliveryRequest request,
+                                    @AuthenticationPrincipal Jwt jwt) {
+        return deliveryService.correct(id, request, authService.currentManager(jwt.getSubject()));
+    }
+
+    @PostMapping("/{id}/confirm")
+    @Operation(summary = "Confirm a pending delivery with the 6-digit code the member got by SMS. The code expires "
+            + "after 10 minutes and stops working after 3 wrong tries")
+    public DeliveryResponse confirm(@PathVariable Long id, @Valid @RequestBody ConfirmCodeRequest request) {
+        return deliveryService.confirmWithCode(id, request.code());
+    }
+
+    @PostMapping("/{id}/resend-code")
+    @Operation(summary = "Send the member a new code by SMS. The old code stops working. At most 3 times per "
+            + "delivery, and not when SMS are turned off")
+    public DeliveryResponse resendCode(@PathVariable Long id, @AuthenticationPrincipal Jwt jwt) {
+        return deliveryService.resendCode(id, authService.currentManager(jwt.getSubject()));
+    }
+
+    @PostMapping("/{id}/review")
+    @Operation(summary = "Confirm a pending delivery after the manager checked it. Only when SMS are turned off, all "
+            + "3 new codes were already sent, or the delivery has been pending for more than 48 hours")
+    public DeliveryResponse review(@PathVariable Long id, @Valid @RequestBody ManagerReviewRequest request,
+                                   @AuthenticationPrincipal Jwt jwt) {
+        return deliveryService.reviewPending(id, request.note(), authService.currentManager(jwt.getSubject()));
+    }
+
+    @PostMapping("/{id}/dispute")
+    @Operation(summary = "Record that the member says a delivery is wrong. Disputed deliveries block sharing their lot")
+    public DeliveryResponse dispute(@PathVariable Long id, @Valid @RequestBody DisputeRequest request) {
+        return deliveryService.dispute(id, request.reason(), request.note());
+    }
+
+    @PostMapping("/{id}/resolve-dispute")
+    @Operation(summary = "Close a dispute after checking that the delivery is correct. A wrong delivery is fixed with "
+            + "correct or reverse instead")
+    public DeliveryResponse resolveDispute(@PathVariable Long id, @Valid @RequestBody ManagerReviewRequest request) {
+        return deliveryService.resolveDispute(id, request.note());
     }
 }

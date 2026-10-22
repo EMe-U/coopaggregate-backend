@@ -61,7 +61,7 @@ class StatementServiceTest {
         when(lotRepository.findQuantities(anyCollection())).thenReturn(List.of(
                 new LotQuantities(5L, new BigDecimal("1200.00"), null, null, null, null),
                 new LotQuantities(3L, new BigDecimal("10000.00"), null, new BigDecimal("10000.00"), 2_952_000L, 3L)));
-        when(paymentRepository.findByMemberIdOrderByPaymentDateDescIdDesc(1L)).thenReturn(List.of(
+        when(paymentRepository.findByMemberIdAndReversedAtIsNullOrderByPaymentDateDescIdDesc(1L)).thenReturn(List.of(
                 payment("PAY-0002", LocalDate.of(2026, 10, 12), 200_000L, PaymentMethod.MOMO, "MP2610120001"),
                 payment("PAY-0001", LocalDate.of(2026, 10, 10), 1_000_000L, PaymentMethod.CASH, null)));
 
@@ -89,7 +89,7 @@ class StatementServiceTest {
     void memberWithoutActivityHasEmptyStatement() {
         when(lotShareRepository.findByMemberId(1L)).thenReturn(List.of());
         when(lotShareRepository.findLotsOfMember(1L)).thenReturn(List.of());
-        when(paymentRepository.findByMemberIdOrderByPaymentDateDescIdDesc(1L)).thenReturn(List.of());
+        when(paymentRepository.findByMemberIdAndReversedAtIsNullOrderByPaymentDateDescIdDesc(1L)).thenReturn(List.of());
 
         StatementResponse statement = service.statement(1L);
 

@@ -33,6 +33,7 @@ public interface ProducePaymentRepository extends JpaRepository<ProducePayment, 
     @Query("""
             SELECT new com.coopaggregate.payment.MemberAmount(p.member.id, SUM(p.amount))
             FROM ProducePayment p
+            WHERE p.reversedAt IS NULL
             GROUP BY p.member.id
             """)
     List<MemberAmount> findPaymentsByMember();
@@ -43,18 +44,23 @@ public interface ProducePaymentRepository extends JpaRepository<ProducePayment, 
             + "FROM produce_payment", nativeQuery = true)
     int highestPaymentNumber();
 
-    List<ProducePayment> findByMemberIdOrderByPaymentDateDescIdDesc(Long memberId);
+    List<ProducePayment> findByMemberIdAndReversedAtIsNullOrderByPaymentDateDescIdDesc(Long memberId);
 
     @Query("SELECT COALESCE(SUM(ls.shareAmount - ls.deductionAmount), 0) FROM LotShare ls "
             + "WHERE ls.member.id = :memberId")
     long netSharesOf(Long memberId);
 
-    @Query("SELECT COALESCE(SUM(p.amount), 0) FROM ProducePayment p WHERE p.member.id = :memberId")
+    @Query("SELECT COALESCE(SUM(p.amount), 0) FROM ProducePayment p "
+            + "WHERE p.member.id = :memberId AND p.reversedAt IS NULL")
     long paidTo(Long memberId);
 
-    @Query("SELECT COALESCE(SUM(p.amount), 0) FROM ProducePayment p WHERE p.paymentDate BETWEEN :from AND :to")
+    @Query("SELECT COALESCE(SUM(p.amount), 0) FROM ProducePayment p "
+            + "WHERE p.paymentDate BETWEEN :from AND :to AND p.reversedAt IS NULL")
     long paidBetween(LocalDate from, LocalDate to);
 
     @EntityGraph(attributePaths = "member")
     List<ProducePayment> findByIdIn(Collection<Long> ids);
+
+    @Query("SELECT p.member.id FROM ProducePayment p WHERE p.id = :id")
+    Optional<Long> findMemberIdById(Long id);
 }

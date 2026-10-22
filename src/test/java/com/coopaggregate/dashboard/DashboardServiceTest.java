@@ -1,11 +1,15 @@
 package com.coopaggregate.dashboard;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -13,10 +17,12 @@ import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Sort;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.common.KigaliTime;
+import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.delivery.GradeDeliveredKg;
 import com.coopaggregate.grade.Grade;
@@ -66,7 +72,7 @@ class DashboardServiceTest {
 
         when(memberService.summary()).thenReturn(new MemberSummaryResponse(0, 0, 0, 0));
         when(lotService.stock()).thenReturn(new StockResponse(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, 0, 0, 0, List.of()));
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0, 0, 0, List.of()));
         when(paymentService.balances(null, null)).thenReturn(new BalancesResponse(0, 0, List.of()));
     }
 
@@ -74,7 +80,8 @@ class DashboardServiceTest {
     void valuesMatchMemberStockAndBalancePages() {
         when(memberService.summary()).thenReturn(new MemberSummaryResponse(12, 10, 2, 3));
         when(lotService.stock()).thenReturn(new StockResponse(new BigDecimal("550.00"), new BigDecimal("4000.00"),
-                new BigDecimal("3300.00"), new BigDecimal("150.00"), new BigDecimal("200.00"), 3, 1, 2,
+                new BigDecimal("3300.00"), new BigDecimal("150.00"), BigDecimal.ZERO, new BigDecimal("200.00"), 3,
+                1, 2,
                 List.of(new StockResponse.GradeStock("Big", new BigDecimal("250.00")),
                         new StockResponse.GradeStock("Normal", new BigDecimal("300.00")))));
         when(paymentService.balances(null, null)).thenReturn(new BalancesResponse(1_321_600L, 200_000L, List.of(
@@ -144,12 +151,55 @@ class DashboardServiceTest {
     }
 
     @Test
+    void weekWithSeveralGradesListsEachGradeWithItsKg() {
+        when(deliveryRepository.findKgByGradeBetween(start(2026, 10, 12), start(2026, 10, 19))).thenReturn(List.of(
+                new GradeDeliveredKg("Small", new BigDecimal("40.00")),
+                new GradeDeliveredKg("Big", new BigDecimal("1200.50")),
+                new GradeDeliveredKg("Normal", new BigDecimal("310.25"))));
+        when(deliveryRepository.findKgByGradeBetween(start(2026, 10, 5), start(2026, 10, 12))).thenReturn(List.of(
+                new GradeDeliveredKg("Normal", new BigDecimal("90.00"))));
+
+        List<DashboardResponse.WeekDeliveries> weeks = service.dashboard(WEDNESDAY).weeklyDeliveries();
+
+        assertEquals(grades("1200.50", "310.25", "40.00"), weeks.get(3).grades());
+        assertEquals(grades("0", "90.00", "0"), weeks.get(2).grades());
+        weeks.forEach(week -> assertEquals(List.of("Big", "Normal", "Small"),
+                week.grades().stream().map(DashboardResponse.GradeKg::gradeName).toList()));
+    }
+
+    @Test
     void mondayAndSundayBelongToTheSameWeek() {
         LocalDate monday = LocalDate.of(2026, 10, 12);
         LocalDate sunday = LocalDate.of(2026, 10, 18);
 
         assertEquals(monday, lastWeekStart(service.dashboard(monday)));
         assertEquals(monday, lastWeekStart(service.dashboard(sunday)));
+    }
+
+    @Test
+    void confirmationProblemsAreCounted() {
+        when(deliveryRepository.countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus.DISPUTED))
+                .thenReturn(2L);
+        when(deliveryRepository.countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(
+                eq(ConfirmationStatus.PENDING), any())).thenReturn(5L);
+
+        DashboardResponse dashboard = service.dashboard(WEDNESDAY);
+
+        assertEquals(2, dashboard.disputedDeliveries());
+        assertEquals(5, dashboard.pendingConfirmationsOver48h());
+    }
+
+    @Test
+    void pendingCountUsesDeliveriesSavedMoreThan48HoursAgo() {
+        Instant before = Instant.now();
+
+        service.dashboard(WEDNESDAY);
+
+        ArgumentCaptor<Instant> cutoff = ArgumentCaptor.forClass(Instant.class);
+        verify(deliveryRepository).countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(
+                eq(ConfirmationStatus.PENDING), cutoff.capture());
+        Duration age = Duration.between(cutoff.getValue(), before);
+        assertTrue(age.compareTo(Duration.ofHours(47)) > 0 && age.compareTo(Duration.ofHours(48)) <= 0, age.toString());
     }
 
     @Test

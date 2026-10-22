@@ -30,6 +30,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.config.SecurityConfig;
 
@@ -48,6 +49,9 @@ class MemberControllerTest {
 
     @MockitoBean
     private MemberService memberService;
+
+    @MockitoBean
+    private AuthService authService;
 
     private String bearerToken;
 

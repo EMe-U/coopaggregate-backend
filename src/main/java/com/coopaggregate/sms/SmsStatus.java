@@ -1,7 +1,9 @@
 package com.coopaggregate.sms;
 
 public enum SmsStatus {
-    PENDING,
+    QUEUED,
     SENT,
-    FAILED
+    FAILED,
+    // A code message that was no longer needed before it could be sent.
+    CANCELLED
 }

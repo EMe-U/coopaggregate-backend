@@ -4,6 +4,7 @@ import java.time.Instant;
 
 import org.hibernate.annotations.CreationTimestamp;
 
+import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.member.Member;
 
 import jakarta.persistence.Column;
@@ -26,12 +27,25 @@ public class SmsLog {
     @ManyToOne(fetch = FetchType.LAZY)
     private Member member;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    private Delivery delivery;
+
     private String phone;
 
+    // The text as sent, except that a one-time code is replaced by SmsMessages.CODE_MASK.
     private String message;
 
+    // 0 for a delivery's first message, 1 to 3 for codes the manager sent again.
+    private int sendNumber;
+
     @Enumerated(EnumType.STRING)
-    private SmsStatus status = SmsStatus.PENDING;
+    private SmsStatus status = SmsStatus.QUEUED;
+
+    private String provider;
+
+    private int attempts;
+
+    private String lastError;
 
     private Instant sentAt;
 
@@ -51,6 +65,14 @@ public class SmsLog {
         this.member = member;
     }
 
+    public Delivery getDelivery() {
+        return delivery;
+    }
+
+    public void setDelivery(Delivery delivery) {
+        this.delivery = delivery;
+    }
+
     public String getPhone() {
         return phone;
     }
@@ -67,20 +89,52 @@ public class SmsLog {
         this.message = message;
     }
 
+    public int getSendNumber() {
+        return sendNumber;
+    }
+
+    public void setSendNumber(int sendNumber) {
+        this.sendNumber = sendNumber;
+    }
+
     public SmsStatus getStatus() {
         return status;
     }
 
-    public void setStatus(SmsStatus status) {
-        this.status = status;
+    public String getProvider() {
+        return provider;
+    }
+
+    public int getAttempts() {
+        return attempts;
+    }
+
+    public String getLastError() {
+        return lastError;
     }
 
     public Instant getSentAt() {
         return sentAt;
     }
 
-    public void setSentAt(Instant sentAt) {
-        this.sentAt = sentAt;
+    public void markSent(String provider, Instant now) {
+        this.attempts++;
+        this.provider = provider;
+        this.status = SmsStatus.SENT;
+        this.sentAt = now;
+        this.lastError = null;
+    }
+
+    public void markFailed(String provider, String error) {
+        this.attempts++;
+        this.provider = provider;
+        this.status = SmsStatus.FAILED;
+        this.lastError = error;
+    }
+
+    public void cancel(String reason) {
+        this.status = SmsStatus.CANCELLED;
+        this.lastError = reason;
     }
 
     public Instant getCreatedAt() {

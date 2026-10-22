@@ -8,6 +8,8 @@ public record StockResponse(
         BigDecimal totalDeliveredKg,
         BigDecimal totalSoldKg,
         BigDecimal totalLostKg,
+        // Delivered kg that members have not confirmed yet. Included in the totals above (physical stock).
+        BigDecimal pendingConfirmationKg,
         BigDecimal addedTodayKg,
         long deliveriesToday,
         long openLots,

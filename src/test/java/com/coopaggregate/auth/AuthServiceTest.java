@@ -16,6 +16,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 
+import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.manager.ManagerRepository;
@@ -43,7 +44,7 @@ class AuthServiceTest {
         JwtConfig jwtConfig = new JwtConfig("test-secret-that-is-at-least-32-characters");
         jwtDecoder = jwtConfig.jwtDecoder();
         authService = new AuthService(managerRepository, passwordEncoder, jwtConfig.jwtEncoder(),
-                new LoginAttemptService());
+                new LoginAttemptService(), mock(AuditLogRepository.class));
     }
 
     @Test

@@ -35,7 +35,8 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
     @Query("SELECT l.grade.id FROM Lot l WHERE l.id = :id")
     Optional<Long> findGradeIdById(Long id);
 
-    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d WHERE d.lot.id = :lotId")
+    // Reversed deliveries and payments stay in their tables for the history but are never counted.
+    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d WHERE d.lot.id = :lotId AND d.reversedAt IS NULL")
     BigDecimal totalDeliveredKg(Long lotId);
 
     @EntityGraph(attributePaths = "grade")
@@ -49,11 +50,15 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
     @Query("""
             SELECT new com.coopaggregate.lot.LotQuantities(
                 l.id,
-                (SELECT SUM(d.quantityKg) FROM Delivery d WHERE d.lot.id = l.id),
+                (SELECT SUM(d.quantityKg) FROM Delivery d WHERE d.lot.id = l.id AND d.reversedAt IS NULL),
                 (SELECT SUM(x.quantityKg) FROM Loss x WHERE x.lot.id = l.id),
                 (SELECT SUM(s.quantityKg) FROM Sale s WHERE s.lot.id = l.id),
                 (SELECT SUM(s2.totalAmount) FROM Sale s2 WHERE s2.lot.id = l.id),
-                (SELECT COUNT(DISTINCT d2.member.id) FROM Delivery d2 WHERE d2.lot.id = l.id))
+                (SELECT COUNT(DISTINCT d2.member.id) FROM Delivery d2
+                    WHERE d2.lot.id = l.id AND d2.reversedAt IS NULL),
+                (SELECT SUM(d3.quantityKg) FROM Delivery d3
+                    WHERE d3.lot.id = l.id AND d3.reversedAt IS NULL
+                    AND d3.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.PENDING))
             FROM Lot l
             WHERE l.id IN :lotIds
             """)
@@ -62,14 +67,18 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
     @Query("""
             SELECT new com.coopaggregate.lot.LotMemberResponse(m.id, m.fullName, m.memberCode, SUM(d.quantityKg))
             FROM Delivery d JOIN d.member m
-            WHERE d.lot.id = :lotId
+            WHERE d.lot.id = :lotId AND d.reversedAt IS NULL
             GROUP BY m.id, m.fullName, m.memberCode
             ORDER BY SUM(d.quantityKg) DESC, m.fullName
             """)
     List<LotMemberResponse> findMembers(Long lotId);
 
-    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d")
+    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d WHERE d.reversedAt IS NULL")
     BigDecimal totalDeliveredKg();
+
+    @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d WHERE d.reversedAt IS NULL "
+            + "AND d.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.PENDING")
+    BigDecimal totalPendingConfirmationKg();
 
     @Query("SELECT COALESCE(SUM(x.quantityKg), 0) FROM Loss x")
     BigDecimal totalLostKg();
@@ -78,9 +87,10 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
     BigDecimal totalSoldKg();
 
     @Query("SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d "
-            + "WHERE d.deliveredAt >= :from AND d.deliveredAt < :to")
+            + "WHERE d.deliveredAt >= :from AND d.deliveredAt < :to AND d.reversedAt IS NULL")
     BigDecimal deliveredKgBetween(Instant from, Instant to);
 
-    @Query("SELECT COUNT(d) FROM Delivery d WHERE d.deliveredAt >= :from AND d.deliveredAt < :to")
+    @Query("SELECT COUNT(d) FROM Delivery d "
+            + "WHERE d.deliveredAt >= :from AND d.deliveredAt < :to AND d.reversedAt IS NULL")
     long deliveryCountBetween(Instant from, Instant to);
 }

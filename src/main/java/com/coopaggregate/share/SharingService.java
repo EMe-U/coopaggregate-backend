@@ -6,6 +6,8 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.delivery.ConfirmationStatus;
+import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
@@ -27,14 +29,17 @@ public class SharingService {
     private final LotService lotService;
     private final MemberRepository memberRepository;
     private final LedgerService ledgerService;
+    private final DeliveryRepository deliveryRepository;
 
     public SharingService(LotShareRepository lotShareRepository, LotRepository lotRepository, LotService lotService,
-                          MemberRepository memberRepository, LedgerService ledgerService) {
+                          MemberRepository memberRepository, LedgerService ledgerService,
+                          DeliveryRepository deliveryRepository) {
         this.lotShareRepository = lotShareRepository;
         this.lotRepository = lotRepository;
         this.lotService = lotService;
         this.memberRepository = memberRepository;
         this.ledgerService = ledgerService;
+        this.deliveryRepository = deliveryRepository;
     }
 
     @Transactional(readOnly = true)
@@ -42,6 +47,7 @@ public class SharingService {
         Lot lot = lotRepository.findById(lotId)
                 .orElseThrow(() -> new EntityNotFoundException("Lot " + lotId + " does not exist."));
         checkCanBeShared(lot);
+        checkAllConfirmed(lot);
         return calculate(lot);
     }
 
@@ -51,6 +57,7 @@ public class SharingService {
         Lot lot = lotRepository.findForUpdateById(lotId)
                 .orElseThrow(() -> new EntityNotFoundException("Lot " + lotId + " does not exist."));
         checkCanBeShared(lot);
+        checkAllConfirmed(lot);
 
         SharePreviewResponse result = calculate(lot);
         for (SharePreviewResponse.MemberShare member : result.members()) {
@@ -94,6 +101,25 @@ public class SharingService {
         return new SharePreviewResponse(lot.getLotCode(), lot.getGrade().getName(), quantities.deliveredKg(),
                 quantities.saleAmountRwf(), members,
                 new SharePreviewResponse.Totals(totalShare, totalDeduction, totalShare - totalDeduction));
+    }
+
+    // Only deliveries the member confirmed are shared: a pending or disputed one may have the wrong member or
+    // kilograms, and shares cannot be changed once saved. Reversed deliveries are not counted anyway.
+    private void checkAllConfirmed(Lot lot) {
+        List<UnconfirmedDelivery> unconfirmed = deliveryRepository
+                .findByLotIdAndConfirmationStatusInAndReversedAtIsNullOrderById(lot.getId(),
+                        List.of(ConfirmationStatus.PENDING, ConfirmationStatus.DISPUTED))
+                .stream()
+                .map(UnconfirmedDelivery::from)
+                .toList();
+        if (!unconfirmed.isEmpty()) {
+            String list = String.join(", ", unconfirmed.stream()
+                    .map(delivery -> delivery.receiptCode() + " (" + delivery.status() + ")")
+                    .toList());
+            throw new UnconfirmedDeliveriesException("Lot " + lot.getLotCode() + " has deliveries that are not "
+                    + "confirmed yet: " + list + ". Confirm, resolve, correct or reverse them before sharing.",
+                    unconfirmed);
+        }
     }
 
     private static void checkCanBeShared(Lot lot) {

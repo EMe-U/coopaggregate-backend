@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.common.PageResponse;
+import com.coopaggregate.ledger.ReverseRequest;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -63,5 +65,14 @@ public class PaymentController {
                                                   @AuthenticationPrincipal Jwt jwt) {
         RecordedPayment result = paymentService.record(request, authService.currentManager(jwt.getSubject()));
         return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK).body(result.payment());
+    }
+
+    @PostMapping("/{id}/reverse")
+    @Operation(summary = "Cancel a payment recorded by mistake. It stays in the history as reversed and the "
+            + "member is owed the amount again")
+    public PaymentResponse reverse(@PathVariable Long id, @Valid @RequestBody ReverseRequest request,
+                                   @AuthenticationPrincipal Jwt jwt) {
+        return PaymentResponse.from(
+                paymentService.reverse(id, request.reason(), authService.currentManager(jwt.getSubject())));
     }
 }

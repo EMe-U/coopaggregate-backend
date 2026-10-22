@@ -21,7 +21,7 @@ import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/api/auth")
-@Tag(name = "Auth", description = "Manager login")
+@Tag(name = "Auth", description = "Manager login and password")
 public class AuthController {
 
     private final AuthService authService;
@@ -41,6 +41,15 @@ public class AuthController {
     public CurrentManagerResponse me(@AuthenticationPrincipal Jwt jwt) {
         Manager manager = authService.currentManager(jwt.getSubject());
         return new CurrentManagerResponse(manager.getName(), manager.getEmail());
+    }
+
+    @PostMapping("/change-password")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(summary = "Change the manager password. newPassword: at least 8 characters, different from the "
+            + "current one. Tokens already given out stay valid until they expire",
+            security = @SecurityRequirement(name = "bearerAuth"))
+    public void changePassword(@Valid @RequestBody ChangePasswordRequest request, @AuthenticationPrincipal Jwt jwt) {
+        authService.changePassword(jwt.getSubject(), request);
     }
 
     @ExceptionHandler(InvalidLoginException.class)

@@ -16,6 +16,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.common.KigaliTime;
+import com.coopaggregate.delivery.ConfirmationStatus;
+import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.delivery.GradeDeliveredKg;
 import com.coopaggregate.grade.Grade;
@@ -86,7 +88,11 @@ public class DashboardService {
                 membersAwaitingPayment,
                 lotRepository.countByStatus(LotStatus.SOLD),
                 closedLotsWithStock(),
-                weeklyDeliveries(today));
+                weeklyDeliveries(today),
+                deliveryRepository.countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus.DISPUTED),
+                // Counted from when the server saved the delivery, so a late offline sync is not overdue at once.
+                deliveryRepository.countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(
+                        ConfirmationStatus.PENDING, Instant.now().minus(Delivery.PENDING_TOO_LONG)));
     }
 
     private List<DashboardResponse.OpenLot> openLots() {

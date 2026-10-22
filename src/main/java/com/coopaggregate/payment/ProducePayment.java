@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import org.hibernate.annotations.CreationTimestamp;
 
+import com.coopaggregate.ledger.LedgerEntry;
 import com.coopaggregate.member.Member;
 
 import jakarta.persistence.Column;
@@ -40,6 +41,13 @@ public class ProducePayment {
     private PaymentMethod method;
 
     private String referenceNo;
+
+    private Instant reversedAt;
+
+    private String reversalReason;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    private LedgerEntry reversalLedgerEntry;
 
     @CreationTimestamp
     @Column(updatable = false)
@@ -103,6 +111,29 @@ public class ProducePayment {
 
     public void setReferenceNo(String referenceNo) {
         this.referenceNo = referenceNo;
+    }
+
+    public boolean isReversed() {
+        return reversedAt != null;
+    }
+
+    public Instant getReversedAt() {
+        return reversedAt;
+    }
+
+    public String getReversalReason() {
+        return reversalReason;
+    }
+
+    public LedgerEntry getReversalLedgerEntry() {
+        return reversalLedgerEntry;
+    }
+
+    /** Marks this record as cancelled by the given REVERSAL ledger entry. */
+    public void markReversed(LedgerEntry reversal) {
+        this.reversedAt = reversal.getEntryDate();
+        this.reversalReason = reversal.getReason();
+        this.reversalLedgerEntry = reversal;
     }
 
     public Instant getCreatedAt() {
