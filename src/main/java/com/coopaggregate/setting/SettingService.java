@@ -40,10 +40,6 @@ public class SettingService {
                 .distinct()
                 .toList();
 
-        boolean requireIdentityVerification = request.requireIdentityVerification() != null
-                ? request.requireIdentityVerification()
-                : setting.isRequireIdentityVerification();
-
         String cooperativeName = blankToNull(request.cooperativeName()) != null
                 ? blankToNull(request.cooperativeName())
                 : setting.getCooperativeName();
@@ -59,16 +55,13 @@ public class SettingService {
                 .add("cooperativePhone", setting.getCooperativePhone(), cooperativePhone)
                 .add("location", setting.getLocation(), location)
                 .add("minOrderKg", setting.getMinOrderKg(), request.minOrderKg())
-                .add("committeeEmails", setting.getCommitteeEmailList(), committeeEmails)
-                .add("requireIdentityVerification", setting.isRequireIdentityVerification(),
-                        requireIdentityVerification);
+                .add("committeeEmails", setting.getCommitteeEmailList(), committeeEmails);
 
         setting.setSmsEnabled(request.smsEnabled());
         setting.setCooperativeEmail(cooperativeEmail);
         setting.setLocation(location);
         setting.setMinOrderKg(request.minOrderKg());
         setting.setCommitteeEmailList(committeeEmails);
-        setting.setRequireIdentityVerification(requireIdentityVerification);
         setting.setCooperativeName(cooperativeName);
         setting.setCooperativePhone(cooperativePhone);
 
