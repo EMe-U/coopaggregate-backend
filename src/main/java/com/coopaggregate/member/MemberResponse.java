@@ -3,8 +3,6 @@ package com.coopaggregate.member;
 import java.time.Instant;
 import java.time.LocalDate;
 
-import com.coopaggregate.identity.VerificationMethod;
-
 public record MemberResponse(
         Long id,
         String memberCode,
@@ -15,10 +13,7 @@ public record MemberResponse(
         LocalDate joinDate,
         MemberStatus status,
         String preferredLanguage,
-        Instant createdAt,
-        boolean verified,
-        VerificationMethod verificationMethod,
-        Instant verifiedAt) {
+        Instant createdAt) {
 
     public static MemberResponse from(Member member) {
         return new MemberResponse(
@@ -31,9 +26,6 @@ public record MemberResponse(
                 member.getJoinDate(),
                 member.getStatus(),
                 member.getPreferredLanguage(),
-                member.getCreatedAt(),
-                member.isIdentityVerified(),
-                member.getVerificationMethod(),
-                member.getVerifiedAt());
+                member.getCreatedAt());
     }
 }

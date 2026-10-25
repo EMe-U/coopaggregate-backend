@@ -30,8 +30,5 @@ public record MemberRequest(
         LocalDate joinDate,
 
         @Pattern(regexp = "^(rw|en)$", message = "must be rw or en")
-        String preferredLanguage,
-
-        // From POST /api/members/verify/callback. Only used when registering; ignored when updating.
-        Long verificationId) {
+        String preferredLanguage) {
 }

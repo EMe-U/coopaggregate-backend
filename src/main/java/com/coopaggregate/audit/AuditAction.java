@@ -9,7 +9,8 @@ public enum AuditAction {
     PASSWORD_CHANGED,
     CONFIRMATION_CODE_RESENT,
     DELIVERY_REVIEWED,
-    // Results of identity verification at registration. The details never hold personal data or tokens.
+    // From identity verification, which was removed until the real service is ready. Kept so old history
+    // entries still load (like PIN_SET and PIN_RESET).
     IDENTITY_VERIFIED,
     IDENTITY_DUPLICATE,
     IDENTITY_VERIFICATION_FAILED,

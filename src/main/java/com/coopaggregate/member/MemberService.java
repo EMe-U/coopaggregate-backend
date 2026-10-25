@@ -15,9 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.RwandanPhoneNumber;
-import com.coopaggregate.error.BadRequestException;
-import com.coopaggregate.identity.IdentityVerificationService;
-import com.coopaggregate.setting.SettingRepository;
 
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.Predicate;
@@ -28,14 +25,9 @@ public class MemberService {
     private static final int MAX_PAGE_SIZE = 100;
 
     private final MemberRepository memberRepository;
-    private final SettingRepository settingRepository;
-    private final IdentityVerificationService identityVerificationService;
 
-    public MemberService(MemberRepository memberRepository, SettingRepository settingRepository,
-                         IdentityVerificationService identityVerificationService) {
+    public MemberService(MemberRepository memberRepository) {
         this.memberRepository = memberRepository;
-        this.settingRepository = settingRepository;
-        this.identityVerificationService = identityVerificationService;
     }
 
     @Transactional(readOnly = true)
@@ -70,25 +62,13 @@ public class MemberService {
 
     @Transactional
     public MemberResponse create(MemberRequest request) {
-        if (request.verificationId() == null && identityVerificationRequired()) {
-            throw new BadRequestException("Identity verification is required. Verify the person first and send "
-                    + "the verificationId with the registration.");
-        }
         Member member = new Member();
         applyDetails(member, request);
         member.setJoinDate(request.joinDate() != null ? request.joinDate() : KigaliTime.today());
         // Continues from the highest existing number. If two members were created at the same moment and got
         // the same code, the unique member_code would reject the second one with 409.
         member.setMemberCode(String.format("M-%04d", memberRepository.highestMemberNumber() + 1));
-        Member saved = memberRepository.save(member);
-        if (request.verificationId() != null) {
-            identityVerificationService.attach(request.verificationId(), saved);
-        }
-        return MemberResponse.from(saved);
-    }
-
-    private boolean identityVerificationRequired() {
-        return settingRepository.findById(1L).map(setting -> setting.isRequireIdentityVerification()).orElse(false);
+        return MemberResponse.from(memberRepository.save(member));
     }
 
     @Transactional

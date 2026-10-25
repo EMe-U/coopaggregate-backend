@@ -81,7 +81,7 @@ class MemberControllerTest {
     void listDoesNotShowTheNationalId() throws Exception {
         when(memberService.list(null, null, 0, 20)).thenReturn(new PageResponse<>(List.of(new MemberListItem(
                 1L, "M-0001", "Uwimana Claudine", "+250788123456", null, LocalDate.of(2026, 10, 8),
-                MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), false, null, null)), 0, 20, 1, 1));
+                MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"))), 0, 20, 1, 1));
 
         mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
@@ -119,7 +119,7 @@ class MemberControllerTest {
     void createReturns201WithMember() throws Exception {
         when(memberService.create(any(MemberRequest.class))).thenReturn(new MemberResponse(
                 1L, "M-0001", "Uwimana Claudine", "+250788123456", null, null,
-                LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), false, null, null));
+                LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z")));
 
         mockMvc.perform(post("/api/members")
                         .header(HttpHeaders.AUTHORIZATION, bearerToken)
