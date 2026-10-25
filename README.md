@@ -90,9 +90,6 @@ cd coopaggregate-backend
 | `AT_SENDER_ID` | No | Sender name shown on members' phones, if your account has one |
 | `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
 | `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
-| `MOSIP_ENABLED` | No | `true` verifies identities with MOSIP eSignet; `false` (default) uses the mock (see Identity verification) |
-| `MOCK_VERIFICATION_ALLOWED` | No | **Local development only.** `true` lets the mock verifier work; `false` (default) switches test verification off with `503` (see Identity verification). Never set it on Render |
-| `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY` | With `MOSIP_ENABLED=true` | eSignet client details. The app does not start if one is missing |
 | `PORT` | No | HTTP port. Default: `8080` |
 
 The manager is the only user who logs in. On startup, if the `manager` table is empty,
@@ -182,7 +179,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
 | POST | `/api/auth/change-password` | JWT | Body `{"currentPassword", "newPassword"}`. Returns `204` (see Authentication) |
-| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, requireIdentityVerification, cooperativeName, cooperativePhone}` |
+| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, cooperativeName, cooperativePhone}` |
 | PUT | `/api/settings` | JWT | Saves the settings (see Settings and change history) |
 | GET | `/api/settings/history?page=0&size=20` | JWT | Change history, newest first (max 100 per page) |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
@@ -191,9 +188,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional. Without `nationalId` |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member, including `nationalId` |
-| POST | `/api/members/verify/start` | JWT | Starts an identity verification: `{provider, authorizationUrl, state, expiresAt}` |
-| POST | `/api/members/verify/callback` | JWT | Body `{"code", "state"}`. Completes it: `{verificationId, verified, method, useBefore}`, or `409` if the person is already a member |
-| POST | `/api/members` | JWT | Registers a member and returns it with `201`. Optional `verificationId` from the verification |
+| POST | `/api/members` | JWT | Registers a member and returns it with `201` |
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
@@ -263,11 +258,8 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
   in the request; left out or empty keeps the current name.
 - `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
   duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
-- `requireIdentityVerification` (default `false`): when on, members can only be registered
-  with a completed identity verification. Optional in the request; left out keeps the value.
 - Every change to the settings or a grade, every password change, every new code sent for
-  a delivery, every manager review of a delivery and every identity verification result is
-  written to the change history (`GET /api/settings/history`) with the
+  a delivery and every manager review of a delivery is written to the change history (`GET /api/settings/history`) with the
   manager and the time, for example `smsEnabled: true -> false`. Passwords and codes are
   never written to it. Rows from the old member PIN (`PIN_SET`, `PIN_RESET`) stay there.
 
@@ -414,7 +406,6 @@ Request body for `POST` and `PUT`:
 | `address` | Optional, at most 255 characters |
 | `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
-| `verificationId` | Optional, from `POST /api/members/verify/callback`. Only used when registering; required when the `requireIdentityVerification` setting is on |
 
 - The member code is generated on create as `M-` and 4 digits (`M-0001`, `M-0002`, ...):
   the highest existing number plus one. It never changes.
@@ -432,54 +423,6 @@ Request body for `POST` and `PUT`:
 - Members are never deleted, because deliveries, payments and the ledger refer to them.
   Use deactivate instead. Activate and deactivate can be called again on a member that
   already has that status.
-- Member responses show `verified`, `verificationMethod` (`OTP`, `FACE` or `MOCK`) and
-  `verifiedAt` (see Identity verification).
-
-### Identity verification
-
-New members can prove who they are with an identity provider before they are registered.
-The provider is behind an interface, so the real one (MOSIP eSignet) can be plugged in later.
-
-1. `POST /api/members/verify/start` returns `{provider, authorizationUrl, state, expiresAt}`.
-   Send the member to `authorizationUrl`; the provider sends them back to the redirect URI
-   with a `code` and the same `state`. The state is random, works **once** and expires after
-   10 minutes, and only for the manager who started it.
-2. `POST /api/members/verify/callback` with `{"code", "state"}` returns
-   `{verificationId, verified: true, method, useBefore}`.
-   - A state that is unknown or expired returns `400`, one that was already used `409`.
-   - If the person is already a member: `409` `{"message": "This person is already a member."}`,
-     without showing which member.
-   - The state is used up even when the provider fails or the person is a duplicate.
-3. `POST /api/members` with that `verificationId`, within 30 minutes. The member is saved
-   with `verified: true`. One verification registers one member.
-
-- **What is stored:** only the provider's pseudonymous id for the person (`identity_token`,
-  unique, so one person can only be one member), the method and the time. Never an ID
-  number, a photo or the provider's raw response. Codes, states, tokens and the private key
-  are never logged or returned; only a hash of each state is stored.
-- **Setting:** `requireIdentityVerification` (default `false`). While it is off, members can
-  still be registered without `verificationId`; when it is on, that returns `400`.
-- **Change history:** every result is written to it without personal data:
-  `IDENTITY_VERIFIED` ("Provider MOCK, method MOCK"), `IDENTITY_DUPLICATE` and
-  `IDENTITY_VERIFICATION_FAILED`.
-- **Mock (`MOSIP_ENABLED=false`, default):** test verification, so it must not look like a real
-  check. It is **switched off by default**: with `MOCK_VERIFICATION_ALLOWED=false` both
-  `/verify/start` and `/verify/callback` return `503` ("Test verification is switched off")
-  and nothing is saved or verified. Set `MOCK_VERIFICATION_ALLOWED=true` **only in local
-  development, never on Render**, and put it in your own local environment, not in a committed
-  file. Then `authorizationUrl` is `null`; call the callback straight away with any code. The
-  same code always gives the same person, so sending a code that was already used for a member
-  shows the duplicate rule.
-- **Labels:** member responses always return `verificationMethod` (`MOCK`, `OTP` or `FACE`), so
-  the frontend can show a test verification as "Test verification" and not as a real one.
-- **MOSIP** (`MOSIP_ENABLED=true`) does not depend on `MOCK_VERIFICATION_ALLOWED`.
-- **MOSIP eSignet (`MOSIP_ENABLED=true`):** needs `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`,
-  `MOSIP_REDIRECT_URI` and `MOSIP_PRIVATE_KEY` as environment variables (never in code or
-  Git); the app refuses to start if one is missing. `MosipIdentityVerifier` is a skeleton of
-  the standard OpenID Connect authorization-code flow with a client that signs with its
-  private key. The eSignet-specific details (endpoints, scope, authentication methods, key
-  format, which claim gives OTP or FACE) are **to confirm with the supervisor** and are kept
-  in `MosipProperties` only. Until then verification returns `503`.
 
 ### Deliveries
 
@@ -779,10 +722,6 @@ Environment variables to set in Render:
 | `SMS_PROVIDER` | `africastalking` to send real SMS, otherwise leave it unset |
 | `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
 | `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
-
-Set the `MOSIP_*` variables only once the eSignet details are confirmed; leave
-`MOSIP_ENABLED` unset until then. Never set `MOCK_VERIFICATION_ALLOWED=true` on Render: it would
-let anyone be "verified" without a real check. Left unset, test verification stays off.
 
 Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app
 refuses to start if it is `true` with `SMS_PROVIDER=africastalking`.
