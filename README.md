@@ -231,6 +231,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/deliveries/{id}/review` | JWT | Body `{"note"}`. Confirms a pending delivery after the manager checked it. Only while SMS are off, once all 3 new codes were sent, or after 48 hours pending |
 | POST | `/api/deliveries/{id}/dispute` | JWT | Body `{"reason", "note"}`. Records that the member says the delivery is wrong |
 | POST | `/api/deliveries/{id}/resolve-dispute` | JWT | Body `{"note"}`. Closes a dispute after checking the delivery is correct |
+| GET | `/api/disputes?status=open&search=&page=0&size=15` | JWT | Open or settled disputes, newest first (15 per page, max 100), with totals `{openDisputes, openKg, settledDisputes}` |
 | POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
 | GET | `/api/dashboard` | JWT | Numbers for the home screen, including disputed deliveries and confirmations pending for more than 48 hours |
 
@@ -320,6 +321,18 @@ Every delivery is confirmed by the member with a one-time code sent by SMS.
     back to `CONFIRMED` (method `MANAGER_REVIEW`).
   - If it is wrong: correct or reverse it (see Reversals); that also closes the dispute.
   - A lot cannot be shared while it has pending or disputed deliveries (see Sharing).
+  - **Disputes page:** `GET /api/disputes` lists them from the same delivery data, newest first,
+    15 per page. `status=open` (default) is every delivery still `DISPUTED` and not reversed, the
+    same as the dashboard count; `status=settled` is every delivery that was disputed and has
+    since been resolved, reversed or corrected. `search` matches the receipt code, member name or
+    member number. Each item has the delivery id, receipt code, member name and number, grade, lot
+    code, kg, reason, note, `disputedAt` and `daysOpen` (whole days until it was settled, or until
+    now). Settled items also have `outcome` (`RESOLVED`, `REVERSED` or `CORRECTED`), `settledAt`,
+    the manager's `resolutionNote` and, for a correction, `correctedById`. The response also has
+    `openDisputes`, `openKg` and `settledDisputes` for the whole page header, not just one page
+    or search. Settling stays on the delivery endpoints above.
+  - Only a delivery's latest dispute is kept: if a member disputes a delivery again after it was
+    resolved, the new reason and time replace the earlier ones.
 - Deliveries recorded before confirmations existed are `CONFIRMED` with method
   `RECORDED_BEFORE_CONFIRMATION`, so they are not counted as waiting. The member never
   confirmed them. Each delivery also has `confirmationLabel`, the text to show, for example
