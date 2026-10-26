@@ -1,5 +1,6 @@
 package com.coopaggregate.delivery;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -59,4 +60,21 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
     long countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus status);
 
     long countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(ConfirmationStatus status, Instant before);
+
+    // The same deliveries the dashboard counts as open disputes.
+    @Query("""
+            SELECT COALESCE(SUM(d.quantityKg), 0) FROM Delivery d
+            WHERE d.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.DISPUTED
+              AND d.reversedAt IS NULL
+            """)
+    BigDecimal sumOpenDisputedKg();
+
+    // A dispute is settled once the delivery was found correct (no longer DISPUTED) or reversed/corrected.
+    @Query("""
+            SELECT COUNT(d) FROM Delivery d
+            WHERE d.disputedAt IS NOT NULL
+              AND (d.confirmationStatus <> com.coopaggregate.delivery.ConfirmationStatus.DISPUTED
+                   OR d.reversedAt IS NOT NULL)
+            """)
+    long countSettledDisputes();
 }
