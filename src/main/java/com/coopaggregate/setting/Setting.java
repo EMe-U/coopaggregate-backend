@@ -27,6 +27,11 @@ public class Setting {
 
     private String location;
 
+    private String cooperativeName = "Koperative Intagamburuzwa";
+
+    // +2507XXXXXXXX, or null when not set.
+    private String cooperativePhone;
+
     private BigDecimal minOrderKg = new BigDecimal("100");
 
     public Long getId() {
@@ -82,5 +87,21 @@ public class Setting {
 
     public void setMinOrderKg(BigDecimal minOrderKg) {
         this.minOrderKg = minOrderKg;
+    }
+
+    public String getCooperativeName() {
+        return cooperativeName;
+    }
+
+    public void setCooperativeName(String cooperativeName) {
+        this.cooperativeName = cooperativeName;
+    }
+
+    public String getCooperativePhone() {
+        return cooperativePhone;
+    }
+
+    public void setCooperativePhone(String cooperativePhone) {
+        this.cooperativePhone = cooperativePhone;
     }
 }

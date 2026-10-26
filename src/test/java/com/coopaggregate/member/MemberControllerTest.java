@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.coopaggregate.auth.AuthService;
+import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.config.SecurityConfig;
 
@@ -73,6 +75,18 @@ class MemberControllerTest {
                 .andExpect(status().isUnauthorized());
 
         verifyNoInteractions(memberService);
+    }
+
+    @Test
+    void listDoesNotShowTheNationalId() throws Exception {
+        when(memberService.list(null, null, 0, 20)).thenReturn(new PageResponse<>(List.of(new MemberListItem(
+                1L, "M-0001", "Uwimana Claudine", "+250788123456", null, LocalDate.of(2026, 10, 8),
+                MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"))), 0, 20, 1, 1));
+
+        mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].fullName").value("Uwimana Claudine"))
+                .andExpect(jsonPath("$.content[0].nationalId").doesNotExist());
     }
 
     @Test

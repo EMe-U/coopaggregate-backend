@@ -33,8 +33,9 @@ public class MemberController {
     }
 
     @GetMapping
-    @Operation(summary = "List members sorted by name (max 100 per page)")
-    public PageResponse<MemberResponse> list(
+    @Operation(summary = "List members sorted by name (max 100 per page). The national ID is not included; open "
+            + "one member to see it")
+    public PageResponse<MemberListItem> list(
             @Parameter(description = "Part of the name, phone number, member code or national ID (case-insensitive)")
             @RequestParam(required = false) String search,
             @Parameter(description = "true for active members only, false for inactive members only")

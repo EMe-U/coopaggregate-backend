@@ -49,9 +49,39 @@ class SettingServiceTest {
     }
 
     @Test
+    void cooperativeNameIsChangedAndRecordedButNotEmptied() {
+        SettingsResponse renamed = service.update(new SettingsRequest(true, null, null, new BigDecimal("100"),
+                List.of(), " Koperative Abahinzi ", null), manager);
+        SettingsResponse kept = service.update(new SettingsRequest(true, null, null, new BigDecimal("100"),
+                List.of(), " ", null), manager);
+
+        assertEquals("Koperative Abahinzi", renamed.cooperativeName());
+        assertEquals("Koperative Abahinzi", kept.cooperativeName());
+        ArgumentCaptor<AuditLog> entry = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogRepository).save(entry.capture());
+        assertEquals("cooperativeName: Koperative Intagamburuzwa -> Koperative Abahinzi",
+                entry.getValue().getDetails());
+    }
+
+    @Test
+    void cooperativePhoneIsStoredAsInternationalNumberRecordedAndCanBeCleared() {
+        SettingsResponse saved = service.update(new SettingsRequest(true, null, null, new BigDecimal("100"),
+                List.of(), null, " 0788123456 "), manager);
+        SettingsResponse cleared = service.update(new SettingsRequest(true, null, null, new BigDecimal("100"),
+                List.of(), null, ""), manager);
+
+        assertEquals("+250788123456", saved.cooperativePhone());
+        assertEquals(null, cleared.cooperativePhone());
+        ArgumentCaptor<AuditLog> entries = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogRepository, org.mockito.Mockito.times(2)).save(entries.capture());
+        assertEquals("cooperativePhone: (empty) -> +250788123456", entries.getAllValues().get(0).getDetails());
+        assertEquals("cooperativePhone: +250788123456 -> (empty)", entries.getAllValues().get(1).getDetails());
+    }
+
+    @Test
     void savedSettingsAreReturned() {
         SettingsResponse saved = service.update(new SettingsRequest(false, "info@intagamburuzwa.rw",
-                "Busogo, Musanze", new BigDecimal("250"), List.of("chair@example.com", "treasurer@example.com")),
+                "Busogo, Musanze", new BigDecimal("250"), List.of("chair@example.com", "treasurer@example.com"), null, null),
                 manager);
 
         assertEquals(false, saved.smsEnabled());
@@ -64,7 +94,7 @@ class SettingServiceTest {
     @Test
     void changeHistoryListsOnlyTheFieldsThatChanged() {
         service.update(new SettingsRequest(false, null, "Busogo", new BigDecimal("100.00"),
-                List.of("chair@example.com")), manager);
+                List.of("chair@example.com"), null, null), manager);
 
         ArgumentCaptor<AuditLog> entry = ArgumentCaptor.forClass(AuditLog.class);
         verify(auditLogRepository).save(entry.capture());
@@ -76,7 +106,7 @@ class SettingServiceTest {
 
     @Test
     void savingWithoutChangesWritesNoHistory() {
-        service.update(new SettingsRequest(true, " ", "", new BigDecimal("100"), List.of()), manager);
+        service.update(new SettingsRequest(true, " ", "", new BigDecimal("100"), List.of(), null, null), manager);
 
         verify(auditLogRepository, never()).save(any());
     }
@@ -84,7 +114,7 @@ class SettingServiceTest {
     @Test
     void committeeEmailsAreTrimmedLowercasedAndDeduplicated() {
         SettingsResponse saved = service.update(new SettingsRequest(true, null, null, new BigDecimal("100"),
-                List.of(" Chair@Example.com ", "chair@example.com", "TREASURER@example.com")), manager);
+                List.of(" Chair@Example.com ", "chair@example.com", "TREASURER@example.com"), null, null), manager);
 
         assertEquals(List.of("chair@example.com", "treasurer@example.com"), saved.committeeEmails());
     }
@@ -94,7 +124,7 @@ class SettingServiceTest {
         setting.setCommitteeEmailList(List.of("chair@example.com"));
 
         SettingsResponse saved = service.update(new SettingsRequest(true, null, null, new BigDecimal("100"),
-                List.of()), manager);
+                List.of(), null, null), manager);
 
         assertEquals(List.of(), saved.committeeEmails());
         assertNull(saved.cooperativeEmail());

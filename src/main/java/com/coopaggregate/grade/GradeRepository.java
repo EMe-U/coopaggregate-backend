@@ -12,6 +12,8 @@ public interface GradeRepository extends JpaRepository<Grade, Long> {
 
     List<Grade> findByActiveTrueOrderByCodeAsc();
 
+    Optional<Grade> findByCodeAndActiveTrue(String code);
+
     // SELECT ... FOR UPDATE: deliveries of the same grade wait for each other until the transaction ends.
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<Grade> findForUpdateById(Long id);

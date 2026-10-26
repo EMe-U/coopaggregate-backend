@@ -8,5 +8,13 @@ public enum AuditAction {
     GRADE_UPDATED,
     PASSWORD_CHANGED,
     CONFIRMATION_CODE_RESENT,
-    DELIVERY_REVIEWED
+    DELIVERY_REVIEWED,
+    // From identity verification, which was removed until the real service is ready. Kept so old history
+    // entries still load (like PIN_SET and PIN_RESET).
+    IDENTITY_VERIFIED,
+    IDENTITY_DUPLICATE,
+    IDENTITY_VERIFICATION_FAILED,
+    // Changes the manager makes to buyers' purchase requests. The details hold the request code, not personal data.
+    BUYER_REQUEST_STATUS_CHANGED,
+    BUYER_REQUEST_CONVERTED
 }

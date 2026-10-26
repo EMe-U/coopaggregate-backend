@@ -179,15 +179,15 @@ ERD: see `docs/erd.png`.
 | POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
 | POST | `/api/auth/change-password` | JWT | Body `{"currentPassword", "newPassword"}`. Returns `204` (see Authentication) |
-| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg}` |
+| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, cooperativeName, cooperativePhone}` |
 | PUT | `/api/settings` | JWT | Saves the settings (see Settings and change history) |
 | GET | `/api/settings/history?page=0&size=20` | JWT | Change history, newest first (max 100 per page) |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
 | GET | `/api/ledger/verify` | JWT | Recomputes every hash. Returns `{valid, checkedEntries, firstBrokenEntryId}` |
 | POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Reverses the entry through its business action (see Reversals) and returns the REVERSAL entry |
-| GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional |
+| GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional. Without `nationalId` |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
-| GET | `/api/members/{id}` | JWT | One member |
+| GET | `/api/members/{id}` | JWT | One member, including `nationalId` |
 | POST | `/api/members` | JWT | Registers a member and returns it with `201` |
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
@@ -203,6 +203,14 @@ ERD: see `docs/erd.png`.
 | GET | `/api/lots/{id}/losses` | JWT | Losses of a lot, newest first |
 | GET | `/api/buyers?search=` | JWT | Buyers sorted by name. `search` matches name or phone |
 | POST | `/api/buyers` | JWT | Adds a buyer, returns `201` |
+| GET | `/api/public/grades` | None | Active grades `{code, name, nameRw, description, sizeInfo, packaging, availability}`. No prices or kilograms (see Public side for buyers) |
+| GET | `/api/public/info` | None | `{cooperativeName, location, cooperativeEmail, minOrderKg, cooperativePhone}` |
+| POST | `/api/public/requests` | None | A buyer's purchase request. Returns `201` `{code, status}`. Limited per IP address and phone number |
+| GET | `/api/public/requests/{code}?phone=` | None | `{code, status, message}`. `404` if the code or the phone is wrong |
+| GET | `/api/buyer-requests?status=&search=&page=0&size=15` | JWT | Buyers' requests, newest first (15 per page, max 100) |
+| GET | `/api/buyer-requests/{id}` | JWT | One request with the buyer's contact details |
+| PATCH | `/api/buyer-requests/{id}/status` | JWT | Body `{"status", "publicMessage"}` (message optional). Changes the status; kept in the change history |
+| POST | `/api/buyer-requests/{id}/buyer` | JWT | Turns the request into a buyer record, or links it to the buyer with the same phone |
 | POST | `/api/sales` | JWT | Records a sale from a closed lot. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
@@ -223,6 +231,9 @@ ERD: see `docs/erd.png`.
 | POST | `/api/deliveries/{id}/review` | JWT | Body `{"note"}`. Confirms a pending delivery after the manager checked it. Only while SMS are off, once all 3 new codes were sent, or after 48 hours pending |
 | POST | `/api/deliveries/{id}/dispute` | JWT | Body `{"reason", "note"}`. Records that the member says the delivery is wrong |
 | POST | `/api/deliveries/{id}/resolve-dispute` | JWT | Body `{"note"}`. Closes a dispute after checking the delivery is correct |
+| GET | `/api/disputes?status=open&search=&page=0&size=15` | JWT | Open or settled disputes, newest first (15 per page, max 100), with totals `{openDisputes, openKg, settledDisputes}` |
+| GET | `/api/reports/weekly?weekStart=2026-10-19` | JWT | Weekly report: deliveries, stock, sales, money and confirmations (see Weekly report) |
+| GET | `/api/reports/weeks` | JWT | The weeks of the last 52 with any activity, newest first: `[{weekStart, weekEnd}]` |
 | POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
 | GET | `/api/dashboard` | JWT | Numbers for the home screen, including disputed deliveries and confirmations pending for more than 48 hours |
 
@@ -244,7 +255,10 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
 ### Settings and change history
 
 - `smsEnabled` (default `true`) turns the member SMS on or off.
-- `cooperativeEmail` and `location` are optional. `minOrderKg` (default 100) must be more than 0.
+- `cooperativeEmail`, `cooperativePhone` and `location` are optional. The phone is a Rwandan mobile number
+  (`07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`), stored as `+2507XXXXXXXX`; empty clears it. `minOrderKg` (default 100) must be more than 0.
+- `cooperativeName` (default "Koperative Intagamburuzwa") is shown on the public pages. Optional
+  in the request; left out or empty keeps the current name.
 - `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
   duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
 - Every change to the settings or a grade, every password change, every new code sent for
@@ -309,6 +323,18 @@ Every delivery is confirmed by the member with a one-time code sent by SMS.
     back to `CONFIRMED` (method `MANAGER_REVIEW`).
   - If it is wrong: correct or reverse it (see Reversals); that also closes the dispute.
   - A lot cannot be shared while it has pending or disputed deliveries (see Sharing).
+  - **Disputes page:** `GET /api/disputes` lists them from the same delivery data, newest first,
+    15 per page. `status=open` (default) is every delivery still `DISPUTED` and not reversed, the
+    same as the dashboard count; `status=settled` is every delivery that was disputed and has
+    since been resolved, reversed or corrected. `search` matches the receipt code, member name or
+    member number. Each item has the delivery id, receipt code, member name and number, grade, lot
+    code, kg, reason, note, `disputedAt` and `daysOpen` (whole days until it was settled, or until
+    now). Settled items also have `outcome` (`RESOLVED`, `REVERSED` or `CORRECTED`), `settledAt`,
+    the manager's `resolutionNote` and, for a correction, `correctedById`. The response also has
+    `openDisputes`, `openKg` and `settledDisputes` for the whole page header, not just one page
+    or search. Settling stays on the delivery endpoints above.
+  - Only a delivery's latest dispute is kept: if a member disputes a delivery again after it was
+    resolved, the new reason and time replace the earlier ones.
 - Deliveries recorded before confirmations existed are `CONFIRMED` with method
   `RECORDED_BEFORE_CONFIRMATION`, so they are not counted as waiting. The member never
   confirmed them. Each delivery also has `confirmationLabel`, the text to show, for example
@@ -391,13 +417,16 @@ Request body for `POST` and `PUT`:
 |-------|-------|
 | `fullName` | Required, at most 150 characters |
 | `phone` | Required. A Rwandan mobile number (072, 073, 078 or 079) written as `07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`. Always stored and returned as `+2507XXXXXXXX` |
-| `nationalId` | Optional, 16 digits |
+| `nationalId` | Optional: leave it out or empty. When given, 16 digits and unique. Only returned for one member, never in the list |
 | `address` | Optional, at most 255 characters |
 | `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
 
 - The member code is generated on create as `M-` and 4 digits (`M-0001`, `M-0002`, ...):
   the highest existing number plus one. It never changes.
+- The national ID is left out of `GET /api/members`; it is only shown when one member is
+  returned (`GET /api/members/{id}`, and the responses of create, update, activate and
+  deactivate). `search` still matches it.
 - Phone numbers and national IDs must be unique. A duplicate returns `409`, for example
   `{"message": "Phone number +250788123456 is already used by member M-0003."}`.
 - `search` matches part of the name, member code, phone number or national ID, ignoring
@@ -513,6 +542,64 @@ Body for `POST /api/buyers`: `{"name", "phone", "type"}`. `name` and `phone` are
 number follows the same rules as for members and is stored as `+2507XXXXXXXX`. A phone
 number that already belongs to a buyer returns `409`.
 
+### Public side for buyers
+
+Buyers do not log in. Only `/api/public/**` (plus login, health, the SMS webhook and Swagger) is
+open; everything else needs the manager's token. CORS allows only the frontend (`FRONTEND_URL`).
+
+- `GET /api/public/grades` shows the active grades with `code`, `name`, `nameRw`, `description`,
+  `sizeInfo`, `packaging` and a stock hint `availability`. It never shows prices, ids or any
+  stock number.
+  - `availability` comes from the grade's remaining kg as on the stock page (delivered minus lost
+    minus sold, reversed deliveries left out): `NONE` below the cooperative's `minOrderKg`,
+    `LIMITED` from `minOrderKg` up to just under 500 kg, `AVAILABLE` from 500 kg. A grade with no
+    open or closed lot is `NONE`. The 500 kg is one constant, `StockAvailability.AVAILABLE_FROM_KG`
+    in `src/main/java/com/coopaggregate/publicapi/StockAvailability.java`.
+  - At most 60 calls per minute per IP address (`429` with `Retry-After`). The response has
+    `Cache-Control: max-age=60, public`, so browsers may keep it for a minute.
+- `GET /api/public/info` shows `cooperativeName`, `location`, `cooperativeEmail`, `cooperativePhone` and
+  `minOrderKg`. Nothing about members, stock, prices or the ledger.
+- `POST /api/public/requests` sends a purchase request:
+
+  ```json
+  {"name": "Kalisa Traders", "phone": "0788123456", "email": "kalisa@example.com",
+   "gradeCode": "A", "quantityKg": 250, "note": "Pick up on Friday", "website": ""}
+  ```
+
+  `name`, `phone`, `gradeCode` and `quantityKg` are required. The phone is a Rwandan mobile
+  number (`07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`, stored as `+2507XXXXXXXX`).
+  `quantityKg` must be at least `minOrderKg` (otherwise `400` "The smallest order is 100 kg.") and the
+  grade must be an active one. Sizes are limited (name 150, email 150, note 1000 characters).
+  It returns `201` `{code, status}` with a code like `BR-2026-7K2Q`: random, unique, and made
+  without letters and digits that look alike (no 0, O, 1, I or L). The request starts as `PENDING`.
+- `GET /api/public/requests/{code}?phone=0788123456` returns `{code, status, message}`:
+  the status (`PENDING`, `ACCEPTED` or `REJECTED`) and the manager's public message. The phone must be
+  the one used for the request. A wrong phone, a missing phone and an unknown code all return the
+  same `404` `{"message": "Request not found."}`, so a code cannot be tested without its phone.
+- **Protection:** at most 10 requests per hour per IP address and 3 per day per phone number
+  (`429` with a `Retry-After` header); at most 30 lookups per 10 minutes per IP address. The counters
+  are kept in memory and reset when the app restarts. `website` is a **honeypot**: hide it on the
+  page, and a bot that fills it in gets a normal answer with a code that belongs to no request;
+  nothing is saved. Names, phone numbers, emails and IP addresses are never written to the logs.
+  The server reads the real client address from `X-Forwarded-For` behind Render's proxy
+  (`server.forward-headers-strategy=native`).
+- A public request does not create a buyer record, so strangers cannot fill the buyer list. The
+  contact details stay on the request until the manager converts it.
+
+**Manager (JWT):**
+- `GET /api/buyer-requests` lists requests newest first, 15 per page. `status` filters by
+  status; `search` matches the request code, the buyer's name or phone (`0788123456` finds
+  `+250788123456`).
+- `GET /api/buyer-requests/{id}` shows one request with the buyer's contact details and note.
+- `PATCH /api/buyer-requests/{id}/status` with `{"status", "publicMessage"}` changes the status. The
+  public message (at most 500 characters) is what the buyer reads; leaving it out keeps the earlier
+  one. The same status without a new message returns `409`. Every change goes to the change
+  history (`GET /api/settings/history`) as `BR-2026-7K2Q: PENDING -> ACCEPTED`, without the
+  message text or any personal data.
+- `POST /api/buyer-requests/{id}/buyer` turns the request into a buyer record, or links it to the
+  buyer who already has that phone number (`409` if it already has a buyer). Then record the sale
+  for that buyer with `POST /api/sales/orders`; sales are not linked to the request automatically.
+
 ### Sales
 
 Request body for `POST /api/sales`:
@@ -617,6 +704,37 @@ delivered to, newest first. A shared lot shows the saved kg, percent and `shareR
 that is not shared yet shows its status (`OPEN`, `CLOSED` or `SOLD`), the current kg and
 percent, and `shareRwf: null`, so the app can show "Waiting for sale" or "Waiting for
 sharing".
+
+### Weekly report
+
+`GET /api/reports/weekly?weekStart=YYYY-MM-DD` shows one week, Monday to Sunday in Africa/Kigali
+time. `weekStart` must be a Monday (otherwise `400`, for example "weekStart must be a Monday, for
+example 2026-10-19.") and not a future week (`400`). Without it, the current week is shown.
+
+| Section | Contents |
+|---------|----------|
+| `period` | `weekStart`, `weekEnd` |
+| `deliveries` | `totalKg`, `deliveries` (count), `byGrade` (kg and count per grade) and `byMember` (member number, name, kg per grade and total kg, highest total first) |
+| `stock` | `remainingKgNow` and `remainingByGradeNow` (the same as the stock page, at the time of the request), `lostKg` and `lossesByReason` for the week |
+| `sales` | one line per sale order (or per sale recorded on its own): code, date, buyer, lot codes, kg and RWF; `totalKg`, `totalAmountRwf`, `averagePricePerKg` |
+| `money` | `sharedRwf`, `shareDeductionsRwf`, `sharedNetRwf` for lots shared in the week; `paidRwf` and `paidByMethod` (CASH, MOMO, BANK); `owedNowRwf` |
+| `confirmations` | `confirmedThisWeek` and `confirmedByMethod`; `pendingFromThisWeek` (the week's deliveries still pending), `pendingNow`, `disputedNow`; `disputesSettledThisWeek` |
+
+- **Same numbers as elsewhere:** kg per grade use the dashboard's query, stock comes from the stock
+  page, sale totals and the average price from the sales summary, paid and owed from the balances,
+  and open disputes from the dashboard. Reversed deliveries and payments are left out everywhere;
+  sales, losses and shares cannot be reversed.
+- **Which date counts:** deliveries by delivery time, sales by sale date, payments by payment date
+  and losses by loss date, as on the other pages. Three things have no such date, so they use
+  another moment: shares use the time the lot was shared, `confirmedThisWeek` uses the time of the
+  confirmation (it may confirm a delivery from an earlier week), and `disputesSettledThisWeek` uses
+  the time the dispute was resolved or the delivery reversed.
+- **Week boundary:** a delivery at 23:59 on Sunday belongs to that week, one at 00:00 on Monday to
+  the next. Amounts are whole RWF; kg keep their 2 decimals.
+- All totals are added up in the database; only the week's sales are loaded to list them.
+
+`GET /api/reports/weeks` returns the weeks of the last 52 (this one included) that have any
+delivery, sale, payment, loss or share, newest first, so the frontend can offer them.
 
 ### Interactive docs (Swagger)
 

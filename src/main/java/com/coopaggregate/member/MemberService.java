@@ -31,12 +31,12 @@ public class MemberService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<MemberResponse> list(String search, Boolean active, int page, int size) {
+    public PageResponse<MemberListItem> list(String search, Boolean active, int page, int size) {
         // Sorting by id as well keeps the order stable between pages when two members share a name.
         PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
                 Sort.by("fullName").and(Sort.by("id")));
         return PageResponse.from(memberRepository.findAll(matching(search, active), pageRequest)
-                .map(MemberResponse::from));
+                .map(MemberListItem::from));
     }
 
     @Transactional(readOnly = true)
