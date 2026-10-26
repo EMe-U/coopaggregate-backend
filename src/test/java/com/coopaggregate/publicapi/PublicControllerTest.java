@@ -50,11 +50,12 @@ class PublicControllerTest {
 
     @Test
     void gradesAreShownWithoutLoggingIn() throws Exception {
-        when(publicService.grades()).thenReturn(List.of(new PublicGradeResponse("A", "Big", "Binini",
-                "Large potatoes", "Bigger than a fist", "50 kg bags")));
+        when(publicService.grades(anyString())).thenReturn(List.of(new PublicGradeResponse("A", "Big", "Binini",
+                "Large potatoes", "Bigger than a fist", "50 kg bags", StockAvailability.LIMITED)));
 
         mockMvc.perform(get("/api/public/grades"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].availability").value("LIMITED"))
                 .andExpect(jsonPath("$[0].code").value("A"))
                 .andExpect(jsonPath("$[0].name").value("Big"))
                 .andExpect(jsonPath("$[0].nameRw").value("Binini"))
@@ -63,6 +64,37 @@ class PublicControllerTest {
                 .andExpect(jsonPath("$[0].packaging").value("50 kg bags"))
                 .andExpect(jsonPath("$[0].floorPricePerKg").doesNotExist())
                 .andExpect(jsonPath("$[0].id").doesNotExist());
+    }
+
+    @Test
+    void gradesShowNoStockNumbers() throws Exception {
+        when(publicService.grades(anyString())).thenReturn(List.of(new PublicGradeResponse("A", "Big", null, null,
+                null, null, StockAvailability.AVAILABLE)));
+
+        String body = mockMvc.perform(get("/api/public/grades"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertEquals("[{\"code\":\"A\",\"name\":\"Big\",\"nameRw\":null,\"description\":null,"
+                + "\"sizeInfo\":null,\"packaging\":null,\"availability\":\"AVAILABLE\"}]", body);
+    }
+
+    @Test
+    void gradesMayBeCachedFor60Seconds() throws Exception {
+        when(publicService.grades(anyString())).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/public/grades"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "max-age=60, public"));
+    }
+
+    @Test
+    void tooManyGradeRequestsAre429() throws Exception {
+        when(publicService.grades(anyString())).thenThrow(new TooManyRequestsException(30));
+
+        mockMvc.perform(get("/api/public/grades"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "30"));
     }
 
     @Test
@@ -81,7 +113,7 @@ class PublicControllerTest {
 
     @Test
     void responsesHaveNoFieldBeyondTheAgreedOnes() {
-        assertEquals(List.of("code", "name", "nameRw", "description", "sizeInfo", "packaging"),
+        assertEquals(List.of("code", "name", "nameRw", "description", "sizeInfo", "packaging", "availability"),
                 Arrays.stream(PublicGradeResponse.class.getRecordComponents()).map(c -> c.getName()).toList());
         assertEquals(List.of("cooperativeName", "location", "cooperativeEmail", "minOrderKg", "cooperativePhone"),
                 Arrays.stream(PublicInfoResponse.class.getRecordComponents()).map(c -> c.getName()).toList());
