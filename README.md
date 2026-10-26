@@ -232,6 +232,8 @@ ERD: see `docs/erd.png`.
 | POST | `/api/deliveries/{id}/dispute` | JWT | Body `{"reason", "note"}`. Records that the member says the delivery is wrong |
 | POST | `/api/deliveries/{id}/resolve-dispute` | JWT | Body `{"note"}`. Closes a dispute after checking the delivery is correct |
 | GET | `/api/disputes?status=open&search=&page=0&size=15` | JWT | Open or settled disputes, newest first (15 per page, max 100), with totals `{openDisputes, openKg, settledDisputes}` |
+| GET | `/api/reports/weekly?weekStart=2026-10-19` | JWT | Weekly report: deliveries, stock, sales, money and confirmations (see Weekly report) |
+| GET | `/api/reports/weeks` | JWT | The weeks of the last 52 with any activity, newest first: `[{weekStart, weekEnd}]` |
 | POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
 | GET | `/api/dashboard` | JWT | Numbers for the home screen, including disputed deliveries and confirmations pending for more than 48 hours |
 
@@ -694,6 +696,37 @@ delivered to, newest first. A shared lot shows the saved kg, percent and `shareR
 that is not shared yet shows its status (`OPEN`, `CLOSED` or `SOLD`), the current kg and
 percent, and `shareRwf: null`, so the app can show "Waiting for sale" or "Waiting for
 sharing".
+
+### Weekly report
+
+`GET /api/reports/weekly?weekStart=YYYY-MM-DD` shows one week, Monday to Sunday in Africa/Kigali
+time. `weekStart` must be a Monday (otherwise `400`, for example "weekStart must be a Monday, for
+example 2026-10-19.") and not a future week (`400`). Without it, the current week is shown.
+
+| Section | Contents |
+|---------|----------|
+| `period` | `weekStart`, `weekEnd` |
+| `deliveries` | `totalKg`, `deliveries` (count), `byGrade` (kg and count per grade) and `byMember` (member number, name, kg per grade and total kg, highest total first) |
+| `stock` | `remainingKgNow` and `remainingByGradeNow` (the same as the stock page, at the time of the request), `lostKg` and `lossesByReason` for the week |
+| `sales` | one line per sale order (or per sale recorded on its own): code, date, buyer, lot codes, kg and RWF; `totalKg`, `totalAmountRwf`, `averagePricePerKg` |
+| `money` | `sharedRwf`, `shareDeductionsRwf`, `sharedNetRwf` for lots shared in the week; `paidRwf` and `paidByMethod` (CASH, MOMO, BANK); `owedNowRwf` |
+| `confirmations` | `confirmedThisWeek` and `confirmedByMethod`; `pendingFromThisWeek` (the week's deliveries still pending), `pendingNow`, `disputedNow`; `disputesSettledThisWeek` |
+
+- **Same numbers as elsewhere:** kg per grade use the dashboard's query, stock comes from the stock
+  page, sale totals and the average price from the sales summary, paid and owed from the balances,
+  and open disputes from the dashboard. Reversed deliveries and payments are left out everywhere;
+  sales, losses and shares cannot be reversed.
+- **Which date counts:** deliveries by delivery time, sales by sale date, payments by payment date
+  and losses by loss date, as on the other pages. Three things have no such date, so they use
+  another moment: shares use the time the lot was shared, `confirmedThisWeek` uses the time of the
+  confirmation (it may confirm a delivery from an earlier week), and `disputesSettledThisWeek` uses
+  the time the dispute was resolved or the delivery reversed.
+- **Week boundary:** a delivery at 23:59 on Sunday belongs to that week, one at 00:00 on Monday to
+  the next. Amounts are whole RWF; kg keep their 2 decimals.
+- All totals are added up in the database; only the week's sales are loaded to list them.
+
+`GET /api/reports/weeks` returns the weeks of the last 52 (this one included) that have any
+delivery, sale, payment, loss or share, newest first, so the frontend can offer them.
 
 ### Interactive docs (Swagger)
 
