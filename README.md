@@ -203,7 +203,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/lots/{id}/losses` | JWT | Losses of a lot, newest first |
 | GET | `/api/buyers?search=` | JWT | Buyers sorted by name. `search` matches name or phone |
 | POST | `/api/buyers` | JWT | Adds a buyer, returns `201` |
-| GET | `/api/public/grades` | None | Active grades `{code, name, nameRw, description, sizeInfo, packaging}`. No prices (see Public side for buyers) |
+| GET | `/api/public/grades` | None | Active grades `{code, name, nameRw, description, sizeInfo, packaging, availability}`. No prices or kilograms (see Public side for buyers) |
 | GET | `/api/public/info` | None | `{cooperativeName, location, cooperativeEmail, minOrderKg, cooperativePhone}` |
 | POST | `/api/public/requests` | None | A buyer's purchase request. Returns `201` `{code, status}`. Limited per IP address and phone number |
 | GET | `/api/public/requests/{code}?phone=` | None | `{code, status, message}`. `404` if the code or the phone is wrong |
@@ -548,7 +548,15 @@ Buyers do not log in. Only `/api/public/**` (plus login, health, the SMS webhook
 open; everything else needs the manager's token. CORS allows only the frontend (`FRONTEND_URL`).
 
 - `GET /api/public/grades` shows the active grades with `code`, `name`, `nameRw`, `description`,
-  `sizeInfo` and `packaging`. It never shows prices, ids or stock.
+  `sizeInfo`, `packaging` and a stock hint `availability`. It never shows prices, ids or any
+  stock number.
+  - `availability` comes from the grade's remaining kg as on the stock page (delivered minus lost
+    minus sold, reversed deliveries left out): `NONE` below the cooperative's `minOrderKg`,
+    `LIMITED` from `minOrderKg` up to just under 500 kg, `AVAILABLE` from 500 kg. A grade with no
+    open or closed lot is `NONE`. The 500 kg is one constant, `StockAvailability.AVAILABLE_FROM_KG`
+    in `src/main/java/com/coopaggregate/publicapi/StockAvailability.java`.
+  - At most 60 calls per minute per IP address (`429` with `Retry-After`). The response has
+    `Cache-Control: max-age=60, public`, so browsers may keep it for a minute.
 - `GET /api/public/info` shows `cooperativeName`, `location`, `cooperativeEmail`, `cooperativePhone` and
   `minOrderKg`. Nothing about members, stock, prices or the ledger.
 - `POST /api/public/requests` sends a purchase request:
