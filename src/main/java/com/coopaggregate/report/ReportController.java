@@ -1,6 +1,7 @@
 package com.coopaggregate.report;
 
 import java.time.LocalDate;
+import java.util.List;
 
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,5 +33,11 @@ public class ReportController {
             @Parameter(description = "The Monday the week starts on (yyyy-MM-dd)")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStart) {
         return reportService.weekly(weekStart);
+    }
+
+    @GetMapping("/weeks")
+    @Operation(summary = "The weeks of the last 52 that have any delivery, sale, payment, loss or share, newest first")
+    public List<ReportWeek> weeks() {
+        return reportService.weeksWithActivity();
     }
 }

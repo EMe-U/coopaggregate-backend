@@ -92,4 +92,32 @@ public interface ReportRepository extends Repository<Delivery, Long> {
                    OR (d.reversedAt >= :from AND d.reversedAt < :to))
             """)
     long countDisputesSettledBetween(Instant from, Instant to);
+
+    /**
+     * The Mondays (Kigali time) of the weeks from `since` to `latest` with any delivery, sale, payment, loss or
+     * share, newest first. Native SQL because JPQL cannot cut a time into Kigali weeks; date_trunc('week') gives the
+     * Monday. Each part only reads rows from `since` on, and at most 52 weeks come back.
+     */
+    @Query(value = """
+            SELECT week_start FROM (
+                SELECT CAST(date_trunc('week', d.delivered_at AT TIME ZONE 'Africa/Kigali') AS DATE) AS week_start
+                FROM delivery d WHERE d.reversed_at IS NULL AND d.delivered_at >= :sinceInstant
+                UNION
+                SELECT CAST(date_trunc('week', CAST(s.sale_date AS TIMESTAMP)) AS DATE)
+                FROM sale s WHERE s.sale_date >= :since
+                UNION
+                SELECT CAST(date_trunc('week', CAST(p.payment_date AS TIMESTAMP)) AS DATE)
+                FROM produce_payment p WHERE p.reversed_at IS NULL AND p.payment_date >= :since
+                UNION
+                SELECT CAST(date_trunc('week', CAST(x.loss_date AS TIMESTAMP)) AS DATE)
+                FROM loss x WHERE x.loss_date >= :since
+                UNION
+                SELECT CAST(date_trunc('week', ls.created_at AT TIME ZONE 'Africa/Kigali') AS DATE)
+                FROM lot_share ls WHERE ls.created_at >= :sinceInstant
+            ) weeks
+            WHERE week_start BETWEEN :since AND :latest
+            ORDER BY week_start DESC
+            LIMIT 52
+            """, nativeQuery = true)
+    List<Object> findWeeksWithActivity(LocalDate since, Instant sinceInstant, LocalDate latest);
 }

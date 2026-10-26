@@ -42,6 +42,8 @@ import com.coopaggregate.sale.SaleRepository;
 @Service
 public class ReportService {
 
+    static final int WEEKS_OFFERED = 52;
+
     private final ReportRepository reportRepository;
     private final DeliveryRepository deliveryRepository;
     private final SaleRepository saleRepository;
@@ -94,6 +96,26 @@ public class ReportService {
                 sales(monday, sunday),
                 money(from, to, monday, sunday),
                 confirmations(from, to));
+    }
+
+    /** The weeks of the last 52 (this one included) that have any activity, newest first. */
+    @Transactional(readOnly = true)
+    public List<ReportWeek> weeksWithActivity() {
+        return weeksWithActivity(KigaliTime.today());
+    }
+
+    List<ReportWeek> weeksWithActivity(LocalDate today) {
+        LocalDate thisMonday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        LocalDate since = thisMonday.minusWeeks(WEEKS_OFFERED - 1);
+        return reportRepository.findWeeksWithActivity(since, startOfDay(since), thisMonday).stream()
+                .map(ReportService::toLocalDate)
+                .map(monday -> new ReportWeek(monday, monday.plusDays(6)))
+                .toList();
+    }
+
+    // A DATE column from native SQL may come back as java.sql.Date or as LocalDate, depending on the driver.
+    private static LocalDate toLocalDate(Object value) {
+        return value instanceof java.sql.Date date ? date.toLocalDate() : (LocalDate) value;
     }
 
     private WeeklyReport.Deliveries deliveries(Instant from, Instant to, List<String> gradeNames) {

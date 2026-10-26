@@ -106,6 +106,18 @@ class ReportControllerTest {
         verifyNoInteractions(reportService);
     }
 
+    @Test
+    void weeksWithActivityAreListed() throws Exception {
+        when(reportService.weeksWithActivity()).thenReturn(List.of(
+                new ReportWeek(LocalDate.of(2026, 10, 19), LocalDate.of(2026, 10, 25))));
+
+        mockMvc.perform(get("/api/reports/weeks").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].weekStart").value("2026-10-19"))
+                .andExpect(jsonPath("$[0].weekEnd").value("2026-10-25"));
+        mockMvc.perform(get("/api/reports/weeks")).andExpect(status().isUnauthorized());
+    }
+
     private static WeeklyReport emptyReport() {
         return new WeeklyReport(
                 new WeeklyReport.Period(LocalDate.of(2026, 10, 19), LocalDate.of(2026, 10, 25)),
