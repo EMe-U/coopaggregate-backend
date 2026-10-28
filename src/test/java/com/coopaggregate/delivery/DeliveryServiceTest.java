@@ -65,7 +65,6 @@ import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 import com.coopaggregate.member.MemberStatus;
-import com.coopaggregate.sale.SaleRepository;
 import com.coopaggregate.setting.Setting;
 import com.coopaggregate.setting.SettingRepository;
 
@@ -89,7 +88,6 @@ class DeliveryServiceTest {
     private ConfirmationCodes confirmationCodes;
     private AuditLogRepository auditLogRepository;
     private BatchAllocator batchAllocator;
-    private SaleRepository saleRepository;
     private LedgerEntryRepository ledgerEntryRepository;
     private Setting setting;
     private Grade grade;
@@ -130,7 +128,6 @@ class DeliveryServiceTest {
         when(lotRepository.save(any(Lot.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         manager = new Manager();
-        saleRepository = mock(SaleRepository.class);
         ledgerEntryRepository = mock(LedgerEntryRepository.class);
         when(memberRepository.findForUpdateById(5L)).thenReturn(Optional.of(member));
         eventPublisher = mock(ApplicationEventPublisher.class);
@@ -138,7 +135,7 @@ class DeliveryServiceTest {
         auditLogRepository = mock(AuditLogRepository.class);
         batchAllocator = mock(BatchAllocator.class);
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
-                new LotService(lotRepository, gradeRepository), ledgerService, lotRepository, saleRepository,
+                new LotService(lotRepository, gradeRepository), ledgerService, lotRepository,
                 ledgerEntryRepository, confirmationCodes, auditLogRepository, batchAllocator, eventPublisher);
     }
 
@@ -462,8 +459,8 @@ class DeliveryServiceTest {
 
     @Test
     void refusedReversalChangesNoBatch() {
-        givenStoredDelivery("100.00");
-        when(saleRepository.existsByLotId(3L)).thenReturn(true);
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.addSoldKg(new BigDecimal("40.00"));
 
         assertThrows(IllegalStateException.class, () -> service.reverse(42L, "Weighed twice", manager));
 
@@ -483,16 +480,52 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void deliveryOfALotWithSalesCannotBeReversed() {
-        givenStoredDelivery("100.00");
-        when(saleRepository.existsByLotId(3L)).thenReturn(true);
+    void deliveryWithSoldKgCannotBeReversed() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.addSoldKg(new BigDecimal("40.00"));
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> service.reverse(42L, "Weighed twice", manager));
 
-        assertEquals("Lot A-2026-01 already has sales, so its deliveries can no longer be reversed or corrected.",
+        assertEquals("Delivery RCT-7K2Q already has 40.00 kg sold, so it can no longer be reversed or corrected.",
                 e.getMessage());
         verify(ledgerService, never()).reverse(any(), any(), any());
+    }
+
+    @Test
+    void deliveryOfALotWithSalesCanBeReversedWhileItsOwnKgAreNotSold() {
+        givenStoredDelivery("100.00");
+        // The lot sold 60 kg from other batches, and 440 kg remain: this delivery's 100 kg are still unsold.
+        when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
+                new BigDecimal("500.00"), null, new BigDecimal("60.00"), 18_000L, 2L)));
+        when(ledgerService.reverse(77L, "Weighed twice", manager)).thenReturn(reversalEntry("Weighed twice"));
+
+        assertTrue(service.reverse(42L, "Weighed twice", manager).isReversed());
+    }
+
+    @Test
+    void deliveryOfASharedLotCannotBeReversed() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.getLot().setStatus(LotStatus.SHARED);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.reverse(42L, "Weighed twice", manager));
+
+        assertEquals("Lot A-2026-01 has already been shared, so its deliveries can no longer be reversed or "
+                + "corrected.", e.getMessage());
+        verify(ledgerService, never()).reverse(any(), any(), any());
+    }
+
+    @Test
+    void reversalLocksTheGradeBeforeTheLot() {
+        givenStoredDelivery("100.00");
+        when(ledgerService.reverse(77L, "Weighed twice", manager)).thenReturn(reversalEntry("Weighed twice"));
+
+        service.reverse(42L, "Weighed twice", manager);
+
+        InOrder order = inOrder(gradeRepository, lotRepository);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(lotRepository).findForUpdateById(3L);
     }
 
     @Test
@@ -584,9 +617,9 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void correctionIsBlockedOnceTheLotHasSales() {
-        givenStoredDelivery("100.00");
-        when(saleRepository.existsByLotId(3L)).thenReturn(true);
+    void correctionIsBlockedOnceTheBatchHasSoldKg() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.addSoldKg(new BigDecimal("40.00"));
 
         assertThrows(IllegalStateException.class, () -> service.correct(42L,
                 new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager));
@@ -621,6 +654,7 @@ class DeliveryServiceTest {
         delivery.setQuantityKg(new BigDecimal(quantityKg));
         delivery.setDeliveredAt(Instant.parse("2026-10-14T07:30:00Z"));
         when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.of(3L));
+        when(lotRepository.findGradeIdById(3L)).thenReturn(Optional.of(1L));
         when(lotRepository.findForUpdateById(3L)).thenReturn(Optional.of(lot));
         when(deliveryRepository.findById(42L)).thenReturn(Optional.of(delivery));
         when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,

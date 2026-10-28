@@ -42,7 +42,6 @@ import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 import com.coopaggregate.member.MemberStatus;
-import com.coopaggregate.sale.SaleRepository;
 import com.coopaggregate.setting.SettingRepository;
 
 import jakarta.persistence.EntityNotFoundException;
@@ -62,7 +61,6 @@ public class DeliveryService {
     private final LotService lotService;
     private final LedgerService ledgerService;
     private final LotRepository lotRepository;
-    private final SaleRepository saleRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final ConfirmationCodes confirmationCodes;
     private final AuditLogRepository auditLogRepository;
@@ -72,7 +70,7 @@ public class DeliveryService {
     public DeliveryService(DeliveryRepository deliveryRepository, MemberRepository memberRepository,
                            GradeRepository gradeRepository, SettingRepository settingRepository,
                            LotService lotService, LedgerService ledgerService, LotRepository lotRepository,
-                           SaleRepository saleRepository, LedgerEntryRepository ledgerEntryRepository,
+                           LedgerEntryRepository ledgerEntryRepository,
                            ConfirmationCodes confirmationCodes, AuditLogRepository auditLogRepository,
                            BatchAllocator batchAllocator, ApplicationEventPublisher eventPublisher) {
         this.deliveryRepository = deliveryRepository;
@@ -82,7 +80,6 @@ public class DeliveryService {
         this.lotService = lotService;
         this.ledgerService = ledgerService;
         this.lotRepository = lotRepository;
-        this.saleRepository = saleRepository;
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.confirmationCodes = confirmationCodes;
         this.auditLogRepository = auditLogRepository;
@@ -145,11 +142,12 @@ public class DeliveryService {
 
     /**
      * Cancels a delivery: it gets a REVERSAL ledger entry and is no longer counted anywhere. Only allowed while
-     * its lot has no sales, because sold potatoes and shared money already depend on the lot's kilograms.
+     * none of its kg are sold, because the money for sold kg was already credited to its member.
      */
     @Transactional
     public Delivery reverse(Long deliveryId, String reason, Manager manager) {
-        Lot lot = lockLotOf(deliveryId);
+        // The same lock order as a sale of the grade: the grade first, then the lot.
+        Lot lot = lockGradeAndLotOf(deliveryId);
         Delivery delivery = findDelivery(deliveryId);
         checkCanChange(delivery, lot, BigDecimal.ZERO);
         Delivery reversed = markReversed(delivery, reason, manager);
@@ -346,6 +344,15 @@ public class DeliveryService {
         return DeliveryResponse.from(delivery, correctedById);
     }
 
+    // Sales lock the grade and then the lots, so a reversal that waits for them sees the kg they sold.
+    private Lot lockGradeAndLotOf(Long deliveryId) {
+        Long lotId = deliveryRepository.findLotIdById(deliveryId)
+                .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
+        Long gradeId = lotRepository.findGradeIdById(lotId).orElseThrow();
+        gradeRepository.findForUpdateById(gradeId);
+        return lotRepository.findForUpdateById(lotId).orElseThrow();
+    }
+
     // Sales and losses lock the lot too, so the checks below cannot be passed by two requests at once.
     private Lot lockLotOf(Long deliveryId) {
         Long lotId = deliveryRepository.findLotIdById(deliveryId)
@@ -363,9 +370,14 @@ public class DeliveryService {
         if (delivery.isReversed()) {
             throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has already been reversed.");
         }
-        if (saleRepository.existsByLotId(lot.getId())) {
+        if (delivery.getSoldKg().signum() > 0) {
+            throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " already has "
+                    + delivery.getSoldKg().toPlainString() + " kg sold, so it can no longer be reversed or corrected.");
+        }
+        // The money of a shared lot was divided by the kg of all its deliveries.
+        if (lot.getStatus() == LotStatus.SHARED) {
             throw new IllegalStateException("Lot " + lot.getLotCode()
-                    + " already has sales, so its deliveries can no longer be reversed or corrected.");
+                    + " has already been shared, so its deliveries can no longer be reversed or corrected.");
         }
         BigDecimal remainingAfter = lotService.quantitiesOf(lot).remainingKg()
                 .subtract(delivery.getQuantityKg())
