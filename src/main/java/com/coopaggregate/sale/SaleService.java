@@ -184,6 +184,7 @@ public class SaleService {
         sale.setClientUuid(clientUuid);
         sale.setSaleCode(ShortCodes.unique("SAL-", saleRepository::existsBySaleCode));
         sale.setSaleOrder(order);
+        sale.setGrade(lot.getGrade());
         sale.setLot(lot);
         sale.setBuyer(buyer);
         sale.setSaleDate(saleDate);

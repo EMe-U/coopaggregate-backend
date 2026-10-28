@@ -48,6 +48,8 @@ public class LedgerReversalService {
                     "Shares cannot be reversed: the lot's money has already been divided between its members.");
             case SALE -> throw new IllegalStateException(saleMessage(recordId));
             case LOSS -> throw new IllegalStateException(lossMessage(recordId));
+            case SALE_CREDIT -> throw new IllegalStateException(
+                    "A member's credit from a sale cannot be reversed on its own.");
         };
     }
 

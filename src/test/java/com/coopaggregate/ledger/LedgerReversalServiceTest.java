@@ -83,6 +83,16 @@ class LedgerReversalServiceTest {
     }
 
     @Test
+    void saleCreditEntryCannotBeReversedOnItsOwn() {
+        givenEntry(5L, LedgerEntryType.SALE_CREDIT, 600L);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.reverse(5L, "Undo", manager));
+
+        assertEquals("A member's credit from a sale cannot be reversed on its own.", e.getMessage());
+    }
+
+    @Test
     void saleEntryCannotBeReversedAfterSharing() {
         givenEntry(4L, LedgerEntryType.SALE, 400L);
         Sale sale = new Sale();

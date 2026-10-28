@@ -32,6 +32,12 @@ public class SaleAllocation {
 
     private BigDecimal quantityKg;
 
+    // What the member is credited for these kg. Both are null for sales made before sales by grade: their members
+    // are paid through lot sharing instead.
+    private Long grossRwf;
+
+    private Long deductionRwf;
+
     @CreationTimestamp
     @Column(updatable = false)
     private Instant createdAt;
@@ -59,6 +65,19 @@ public class SaleAllocation {
 
     public BigDecimal getQuantityKg() {
         return quantityKg;
+    }
+
+    public Long getGrossRwf() {
+        return grossRwf;
+    }
+
+    public Long getDeductionRwf() {
+        return deductionRwf;
+    }
+
+    /** Gross minus the deduction, or null when these kg were paid through lot sharing. */
+    public Long netRwf() {
+        return grossRwf == null ? null : grossRwf - deductionRwf;
     }
 
     public Instant getCreatedAt() {

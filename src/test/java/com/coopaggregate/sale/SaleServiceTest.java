@@ -1,6 +1,7 @@
 package com.coopaggregate.sale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -230,6 +231,15 @@ class SaleServiceTest {
         verify(batchAllocator).allocateSale(sale.capture());
         assertEquals(new BigDecimal("100.00"), sale.getValue().getQuantityKg());
         assertEquals(11L, sale.getValue().getId());
+    }
+
+    @Test
+    void saleKeepsTheGradeOfItsLot() {
+        sell("100.00", 300L);
+
+        ArgumentCaptor<Sale> sale = ArgumentCaptor.forClass(Sale.class);
+        verify(batchAllocator).allocateSale(sale.capture());
+        assertSame(grade, sale.getValue().getGrade());
     }
 
     @Test

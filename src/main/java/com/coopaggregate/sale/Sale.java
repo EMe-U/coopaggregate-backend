@@ -9,6 +9,7 @@ import org.hibernate.annotations.CreationTimestamp;
 
 import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.buyer.BuyerRequest;
+import com.coopaggregate.grade.Grade;
 import com.coopaggregate.lot.Lot;
 
 import jakarta.persistence.Column;
@@ -30,6 +31,10 @@ public class Sale {
 
     private String saleCode;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    private Grade grade;
+
+    // Empty for a sale by grade, which can take kg from several lots; its batches are in sale_allocation.
     @ManyToOne(fetch = FetchType.LAZY)
     private Lot lot;
 
@@ -76,6 +81,14 @@ public class Sale {
 
     public void setSaleCode(String saleCode) {
         this.saleCode = saleCode;
+    }
+
+    public Grade getGrade() {
+        return grade;
+    }
+
+    public void setGrade(Grade grade) {
+        this.grade = grade;
     }
 
     public Lot getLot() {
