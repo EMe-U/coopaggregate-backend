@@ -39,7 +39,11 @@ class ReversedRecordsAreNotCountedTest {
             "ProducePaymentRepository, paidTo, 1",
             "ProducePaymentRepository, paidBetween, 1",
             // Batches: reversed deliveries are not batches.
-            "BatchRepository, lockBatchesWithKgLeft, 1"
+            "BatchRepository, lockBatchesWithKgLeft, 1",
+            "BatchRepository, findMemberBatches, 1",
+            "BatchRepository, memberTotals, 1",
+            "BatchRepository, findGradeBatchesWithKgLeft, 1",
+            "BatchRepository, gradeRemainingKg, 1"
     })
     void countingQueryLeavesOutReversedRecords(String repository, String methodName, int expectedFilters) {
         List<Query> queries = Arrays.stream(repositoryClass(repository).getMethods())
