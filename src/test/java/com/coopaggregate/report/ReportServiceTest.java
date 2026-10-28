@@ -219,6 +219,24 @@ class ReportServiceTest {
     }
 
     @Test
+    void aSaleByGradeListsTheLotsOfItsBatches() {
+        Sale gradeSale = sale(20L, "SAL-DDDD", "unused", buyer("Kalisa Traders"), null, "250.00", 75_000L,
+                LocalDate.of(2026, 10, 21));
+        gradeSale.setLot(null);
+        when(reportRepository.findSalesBetween(MONDAY, SUNDAY)).thenReturn(List.of(gradeSale));
+        when(reportRepository.findSaleLotCodesBetween(MONDAY, SUNDAY)).thenReturn(List.of(
+                new SaleLotCode(20L, "B-2026-01"), new SaleLotCode(20L, "A-2026-02"),
+                new SaleLotCode(20L, "A-2026-02"), new SaleLotCode(99L, "C-2026-01")));
+        when(saleRepository.totalKgBetween(MONDAY, SUNDAY)).thenReturn(new BigDecimal("250.00"));
+        when(saleRepository.totalAmountBetween(MONDAY, SUNDAY)).thenReturn(75_000L);
+
+        WeeklyReport.Sales sales = service.weekly(MONDAY, TODAY).sales();
+
+        assertEquals(List.of(new WeeklyReport.SaleLine("SAL-DDDD", LocalDate.of(2026, 10, 21), "Kalisa Traders",
+                List.of("A-2026-02", "B-2026-01"), new BigDecimal("250.00"), 75_000L)), sales.sales());
+    }
+
+    @Test
     void salesAreOneLinePerOrderOrSaleWithTheSalesPageTotals() {
         Buyer kalisa = buyer("Kalisa Traders");
         SaleOrder order = new SaleOrder();

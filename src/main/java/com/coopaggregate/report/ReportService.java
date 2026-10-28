@@ -9,10 +9,14 @@ import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -177,6 +181,10 @@ public class ReportService {
                         sale -> sale.getSaleOrder() != null ? "order:" + sale.getSaleOrder().getId()
                                 : "sale:" + sale.getId(),
                         LinkedHashMap::new, Collectors.toList()));
+        Map<Long, Set<String>> batchLotCodes = new HashMap<>();
+        for (SaleLotCode code : reportRepository.findSaleLotCodesBetween(monday, sunday)) {
+            batchLotCodes.computeIfAbsent(code.saleId(), id -> new TreeSet<>()).add(code.lotCode());
+        }
         List<WeeklyReport.SaleLine> lines = new ArrayList<>();
         for (List<Sale> sales : salesByLine.values()) {
             Sale first = sales.get(0);
@@ -184,7 +192,11 @@ public class ReportService {
                     first.getSaleOrder() != null ? first.getSaleOrder().getOrderCode() : first.getSaleCode(),
                     first.getSaleDate(),
                     first.getBuyer().getName(),
-                    sales.stream().map(sale -> sale.getLot().getLotCode()).distinct().sorted().toList(),
+                    sales.stream()
+                            .flatMap(sale -> Stream.concat(
+                                    sale.getLot() == null ? Stream.<String>empty() : Stream.of(sale.getLot().getLotCode()),
+                                    batchLotCodes.getOrDefault(sale.getId(), Set.of()).stream()))
+                            .distinct().sorted().toList(),
                     sales.stream().map(Sale::getQuantityKg).reduce(BigDecimal.ZERO, BigDecimal::add),
                     sales.stream().mapToLong(Sale::getTotalAmount).sum()));
         }

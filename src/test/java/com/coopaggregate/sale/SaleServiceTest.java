@@ -3,6 +3,7 @@ package com.coopaggregate.sale;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -31,9 +32,13 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.batch.BatchAllocator;
+import com.coopaggregate.batch.SaleAllocation;
+import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.buyer.BuyerRepository;
 import com.coopaggregate.common.KigaliTime;
+import com.coopaggregate.common.PageResponse;
+import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.ledger.LedgerEntryType;
@@ -44,6 +49,7 @@ import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
+import com.coopaggregate.member.Member;
 
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
@@ -53,6 +59,7 @@ import jakarta.persistence.criteria.Root;
 class SaleServiceTest {
 
     private BatchAllocator batchAllocator;
+    private SaleAllocationRepository saleAllocationRepository;
 
     private static final UUID CLIENT_UUID = UUID.fromString("0f8fad5b-d9cb-469f-a165-70867728950e");
 
@@ -99,8 +106,9 @@ class SaleServiceTest {
 
         manager = new Manager();
         batchAllocator = mock(BatchAllocator.class);
+        saleAllocationRepository = mock(SaleAllocationRepository.class);
         service = new SaleService(saleRepository, mock(SaleOrderRepository.class), lotRepository, buyerRepository,
-                lotService, ledgerService, batchAllocator);
+                lotService, ledgerService, batchAllocator, saleAllocationRepository);
     }
 
     @Test
@@ -205,6 +213,7 @@ class SaleServiceTest {
         Sale existing = new Sale();
         ReflectionTestUtils.setField(existing, "id", 7L);
         existing.setSaleCode("SAL-7K2Q");
+        existing.setGrade(grade);
         existing.setLot(lot);
         Buyer buyer = new Buyer();
         buyer.setName("Kalisa Traders");
@@ -283,13 +292,84 @@ class SaleServiceTest {
     }
 
     @Test
+    void saleResponseListsTheBatchesAndWhatEachMemberWasCredited() {
+        Sale sale = new Sale();
+        ReflectionTestUtils.setField(sale, "id", 7L);
+        sale.setSaleCode("SAL-7K2Q");
+        sale.setGrade(grade);
+        Buyer buyer = new Buyer();
+        buyer.setName("Kalisa Traders");
+        sale.setBuyer(buyer);
+        sale.setQuantityKg(new BigDecimal("150.00"));
+        sale.setPricePerKg(300L);
+        sale.setTotalAmount(45_000L);
+        when(saleRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(sale));
+        when(saleAllocationRepository.findBySaleIdOrderById(7L)).thenReturn(List.of(
+                credit(sale, 42L, "RCT-0042", "100.00", 30_000L, 500L),
+                credit(sale, 43L, "RCT-0043", "50.00", 15_000L, 250L)));
+
+        SaleResponse response = sell("150.00", 300L).sale();
+
+        assertNull(response.lotId(), "a sale by grade has no lot of its own");
+        assertEquals(List.of("RCT-0042", "RCT-0043"),
+                response.batches().stream().map(SaleResponse.BatchLine::receiptCode).toList());
+        assertEquals(new SaleResponse.BatchLine(42L, "RCT-0042", 3L, "A-2026-01", 5L, "M-0005", "Uwimana Claudine",
+                new BigDecimal("100.00"), 30_000L, 500L, 29_500L), response.batches().get(0));
+        assertEquals(750L, response.totalDeductionRwf());
+        assertEquals(44_250L, response.totalNetRwf());
+    }
+
+    @Test
+    void saleMadeBeforeCreditsShowsItsBatchesWithoutMoney() {
+        Sale sale = new Sale();
+        ReflectionTestUtils.setField(sale, "id", 7L);
+        sale.setGrade(grade);
+        sale.setLot(lot);
+        sale.setBuyer(new Buyer());
+        when(saleRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(sale));
+        SaleAllocation old = new SaleAllocation(sale, delivery(42L, "RCT-0042"), new BigDecimal("100.00"));
+        when(saleAllocationRepository.findBySaleIdOrderById(7L)).thenReturn(List.of(old));
+
+        SaleResponse response = sell("100.00", 300L).sale();
+
+        assertEquals("A-2026-01", response.lotCode());
+        assertEquals(1, response.batches().size());
+        assertNull(response.batches().get(0).netRwf());
+        assertNull(response.totalNetRwf(), "its members are paid through the lot share");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void listBuildsTheBatchesOfAWholePageInOneQuery() {
+        Sale one = new Sale();
+        ReflectionTestUtils.setField(one, "id", 7L);
+        one.setGrade(grade);
+        one.setBuyer(new Buyer());
+        Sale two = new Sale();
+        ReflectionTestUtils.setField(two, "id", 8L);
+        two.setGrade(grade);
+        two.setBuyer(new Buyer());
+        when(saleRepository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(one, two)));
+        when(saleAllocationRepository.findBySaleIdInOrderByIdAsc(List.of(7L, 8L))).thenReturn(List.of(
+                credit(two, 43L, "RCT-0043", "50.00", 15_000L, 250L)));
+
+        PageResponse<SaleResponse> page = service.list(null, null, null, null, 0, 20);
+
+        assertEquals(0, page.content().get(0).batches().size());
+        assertEquals(1, page.content().get(1).batches().size());
+        verify(saleAllocationRepository).findBySaleIdInOrderByIdAsc(List.of(7L, 8L));
+    }
+
+    @Test
     void searchMatchesBuyerNameLotCodeAndSaleCode() {
         Root<Sale> root = deepRoot();
         Path<Object> id = root.get("id");
 
         CriteriaBuilder cb = applyListFilters("Kalisa", null, root);
 
-        verify(cb, times(3)).like(any(), eq("%kalisa%"));
+        // Buyer name, lot code (the lot of an older sale, or a lot of a sale batches) and sale code.
+        verify(cb, times(4)).like(any(), eq("%kalisa%"));
         verify(cb, never()).equal(eq(id), any(Object.class));
     }
 
@@ -301,13 +381,13 @@ class SaleServiceTest {
         CriteriaBuilder cb = applyListFilters("42", null, root);
 
         verify(cb).equal(id, 42L);
-        verify(cb, times(3)).like(any(), eq("%42%"));
+        verify(cb, times(4)).like(any(), eq("%42%"));
     }
 
     @Test
-    void gradeFilterUsesTheLotsGrade() {
+    void gradeFilterUsesTheSalesGrade() {
         Root<Sale> root = deepRoot();
-        Path<Object> gradeId = root.get("lot").get("grade").get("id");
+        Path<Object> gradeId = root.get("grade").get("id");
 
         CriteriaBuilder cb = applyListFilters(null, 2L, root);
 
@@ -323,13 +403,34 @@ class SaleServiceTest {
         service.list(search, null, null, gradeId, 0, 20);
 
         CriteriaBuilder cb = mock(CriteriaBuilder.class);
-        spec.getValue().toPredicate(root, mock(CriteriaQuery.class), cb);
+        spec.getValue().toPredicate(root, mock(CriteriaQuery.class, RETURNS_DEEP_STUBS), cb);
         return cb;
     }
 
     @SuppressWarnings("unchecked")
     private static Root<Sale> deepRoot() {
         return mock(Root.class, RETURNS_DEEP_STUBS);
+    }
+
+    private Delivery delivery(Long id, String receiptCode) {
+        Member member = new Member();
+        ReflectionTestUtils.setField(member, "id", 5L);
+        member.setMemberCode("M-0005");
+        member.setFullName("Uwimana Claudine");
+        Delivery delivery = new Delivery();
+        ReflectionTestUtils.setField(delivery, "id", id);
+        delivery.setReceiptCode(receiptCode);
+        delivery.setMember(member);
+        delivery.setLot(lot);
+        return delivery;
+    }
+
+    private SaleAllocation credit(Sale sale, Long deliveryId, String receiptCode, String kg, long gross,
+                                  long deduction) {
+        SaleAllocation allocation = new SaleAllocation(sale, delivery(deliveryId, receiptCode), new BigDecimal(kg));
+        ReflectionTestUtils.setField(allocation, "grossRwf", gross);
+        ReflectionTestUtils.setField(allocation, "deductionRwf", deduction);
+        return allocation;
     }
 
     private RecordedSale sell(String quantityKg, long pricePerKg) {

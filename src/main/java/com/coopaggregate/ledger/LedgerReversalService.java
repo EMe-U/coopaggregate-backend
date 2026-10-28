@@ -55,7 +55,7 @@ public class LedgerReversalService {
 
     private String saleMessage(Long saleId) {
         boolean shared = saleRepository.findById(saleId)
-                .map(sale -> sale.getLot().getStatus() == LotStatus.SHARED)
+                .map(sale -> sale.getLot() != null && sale.getLot().getStatus() == LotStatus.SHARED)
                 .orElse(false);
         return shared
                 ? "The sale's lot has already been shared, so the sale can no longer be reversed."

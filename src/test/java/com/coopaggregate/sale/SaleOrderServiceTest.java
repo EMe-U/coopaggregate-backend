@@ -25,6 +25,7 @@ import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.batch.BatchAllocator;
+import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.buyer.BuyerRepository;
 import com.coopaggregate.error.BadRequestException;
@@ -91,7 +92,7 @@ class SaleOrderServiceTest {
 
         manager = new Manager();
         service = new SaleService(saleRepository, saleOrderRepository, lotRepository, buyerRepository, lotService,
-                ledgerService, mock(BatchAllocator.class));
+                ledgerService, mock(BatchAllocator.class), mock(SaleAllocationRepository.class));
     }
 
     @Test
@@ -190,6 +191,7 @@ class SaleOrderServiceTest {
         existing.setBuyer(buyer);
         Sale sale = new Sale();
         sale.setSaleOrder(existing);
+        sale.setGrade(lotA.getGrade());
         sale.setLot(lotA);
         sale.setBuyer(buyer);
         sale.setQuantityKg(new BigDecimal("500.00"));

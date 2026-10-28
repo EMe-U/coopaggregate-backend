@@ -19,6 +19,8 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.batch.SaleAllocation;
+import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.delivery.Delivery;
@@ -53,16 +55,19 @@ public class LedgerQueryService {
     private final SaleRepository saleRepository;
     private final LotShareRepository lotShareRepository;
     private final ProducePaymentRepository paymentRepository;
+    private final SaleAllocationRepository saleAllocationRepository;
 
     public LedgerQueryService(LedgerEntryRepository ledgerEntryRepository, DeliveryRepository deliveryRepository,
                               LossRepository lossRepository, SaleRepository saleRepository,
-                              LotShareRepository lotShareRepository, ProducePaymentRepository paymentRepository) {
+                              LotShareRepository lotShareRepository, ProducePaymentRepository paymentRepository,
+                              SaleAllocationRepository saleAllocationRepository) {
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.deliveryRepository = deliveryRepository;
         this.lossRepository = lossRepository;
         this.saleRepository = saleRepository;
         this.lotShareRepository = lotShareRepository;
         this.paymentRepository = paymentRepository;
+        this.saleAllocationRepository = saleAllocationRepository;
     }
 
     @Transactional(readOnly = true)
@@ -156,8 +161,15 @@ public class LedgerQueryService {
                     Loss::getId, loss -> new LedgerReference(null, null, null, loss.getLot().getId(),
                             loss.getLot().getLotCode(), null)));
             case "SALE" -> saleRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
-                    Sale::getId, s -> new LedgerReference(s.getSaleCode(), null, null, s.getLot().getId(),
-                            s.getLot().getLotCode(), s.getBuyer().getName())));
+                    Sale::getId, s -> new LedgerReference(s.getSaleCode(), null, null,
+                            s.getLot() == null ? null : s.getLot().getId(),
+                            s.getLot() == null ? null : s.getLot().getLotCode(), s.getBuyer().getName())));
+            // What a sale credited to the member of one batch.
+            case "SALE_ALLOCATION" -> saleAllocationRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
+                    SaleAllocation::getId, a -> new LedgerReference(a.getSale().getSaleCode(),
+                            a.getDelivery().getMember().getId(), a.getDelivery().getMember().getFullName(),
+                            a.getDelivery().getLot().getId(), a.getDelivery().getLot().getLotCode(),
+                            a.getSale().getBuyer().getName())));
             case "LOT_SHARE" -> lotShareRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     LotShare::getId, share -> new LedgerReference(null, share.getMember().getId(),
                             share.getMember().getFullName(), share.getLot().getId(), share.getLot().getLotCode(),
@@ -200,6 +212,8 @@ public class LedgerQueryService {
                                 d -> cb.equal(d.get("member").get("id"), memberId))),
                         related(root, cb, "LOT_SHARE", idsOf(query, LotShare.class,
                                 share -> cb.equal(share.get("member").get("id"), memberId))),
+                        related(root, cb, "SALE_ALLOCATION", idsOf(query, SaleAllocation.class,
+                                a -> cb.equal(a.get("delivery").get("member").get("id"), memberId))),
                         related(root, cb, "PAYMENT", idsOf(query, ProducePayment.class,
                                 p -> cb.equal(p.get("member").get("id"), memberId)))));
             }
@@ -212,6 +226,10 @@ public class LedgerQueryService {
                                 loss -> cb.equal(loss.get("lot").get("id"), lotId))),
                         related(root, cb, "SALE", idsOf(query, Sale.class,
                                 s -> cb.equal(s.get("lot").get("id"), lotId))),
+                        // A sale by grade has no lot; it is found through the lots of the batches it used.
+                        related(root, cb, "SALE", salesWithBatchesInLot(query, cb, lotId)),
+                        related(root, cb, "SALE_ALLOCATION", idsOf(query, SaleAllocation.class,
+                                a -> cb.equal(a.get("delivery").get("lot").get("id"), lotId))),
                         related(root, cb, "LOT_SHARE", idsOf(query, LotShare.class,
                                 share -> cb.equal(share.get("lot").get("id"), lotId)))));
             }
@@ -236,6 +254,9 @@ public class LedgerQueryService {
                             cb.like(cb.lower(s.get("saleCode")), pattern),
                             cb.like(cb.lower(order.get("orderCode")), pattern));
                 })),
+                related(root, cb, "SALE_ALLOCATION", idsOf(query, SaleAllocation.class, a -> cb.or(
+                        cb.like(cb.lower(a.get("sale").get("saleCode")), pattern),
+                        cb.like(cb.lower(a.get("delivery").get("member").get("fullName")), pattern)))),
                 related(root, cb, "LOT_SHARE", idsOf(query, LotShare.class,
                         share -> cb.like(cb.lower(share.get("member").get("fullName")), pattern))),
                 related(root, cb, "PAYMENT", idsOf(query, ProducePayment.class, p -> cb.or(
@@ -247,6 +268,13 @@ public class LedgerQueryService {
                                      Subquery<Long> relatedIds) {
         return cb.and(cb.equal(root.get("relatedEntityType"), relatedType),
                 root.get("relatedEntityId").in(relatedIds));
+    }
+
+    private static Subquery<Long> salesWithBatchesInLot(CriteriaQuery<?> query, CriteriaBuilder cb, Long lotId) {
+        Subquery<Long> subquery = query.subquery(Long.class);
+        Root<SaleAllocation> allocation = subquery.from(SaleAllocation.class);
+        return subquery.select(allocation.<Long>get("sale").get("id"))
+                .where(cb.equal(allocation.get("delivery").get("lot").get("id"), lotId));
     }
 
     private static <T> Subquery<Long> idsOf(CriteriaQuery<?> query, Class<T> type,

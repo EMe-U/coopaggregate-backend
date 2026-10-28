@@ -12,7 +12,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -20,6 +23,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.batch.BatchAllocator;
+import com.coopaggregate.batch.SaleAllocation;
+import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.buyer.BuyerRepository;
 import com.coopaggregate.common.KigaliTime;
@@ -34,7 +39,12 @@ import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
 
 @Service
 public class SaleService {
@@ -48,10 +58,12 @@ public class SaleService {
     private final LotService lotService;
     private final LedgerService ledgerService;
     private final BatchAllocator batchAllocator;
+    private final SaleAllocationRepository saleAllocationRepository;
 
     public SaleService(SaleRepository saleRepository, SaleOrderRepository saleOrderRepository,
                        LotRepository lotRepository, BuyerRepository buyerRepository, LotService lotService,
-                       LedgerService ledgerService, BatchAllocator batchAllocator) {
+                       LedgerService ledgerService, BatchAllocator batchAllocator,
+                       SaleAllocationRepository saleAllocationRepository) {
         this.saleRepository = saleRepository;
         this.saleOrderRepository = saleOrderRepository;
         this.lotRepository = lotRepository;
@@ -59,6 +71,7 @@ public class SaleService {
         this.lotService = lotService;
         this.ledgerService = ledgerService;
         this.batchAllocator = batchAllocator;
+        this.saleAllocationRepository = saleAllocationRepository;
     }
 
     @Transactional
@@ -71,7 +84,7 @@ public class SaleService {
         // Checked before the lot status, so a re-sent sale is still answered after the lot became SOLD.
         Optional<Sale> existing = saleRepository.findByClientUuid(request.clientUuid());
         if (existing.isPresent()) {
-            return new RecordedSale(SaleResponse.from(existing.get()), false);
+            return new RecordedSale(responseOf(existing.get()), false);
         }
 
         BigDecimal remainingKg = checkSellable(lot, request.quantityKg());
@@ -79,7 +92,7 @@ public class SaleService {
         LocalDate saleDate = request.soldAt() != null ? request.soldAt() : KigaliTime.today();
         Sale saved = saveSale(lot, buyer, request.clientUuid(), null, saleDate, request.quantityKg(),
                 request.pricePerKg(), remainingKg, manager);
-        return new RecordedSale(SaleResponse.from(saved), true);
+        return new RecordedSale(responseOf(saved), true);
     }
 
     @Transactional
@@ -116,23 +129,24 @@ public class SaleService {
         order.setSaleDate(request.soldAt() != null ? request.soldAt() : KigaliTime.today());
         SaleOrder savedOrder = saleOrderRepository.save(order);
 
-        List<SaleResponse> sales = new ArrayList<>();
+        List<Sale> savedSales = new ArrayList<>();
         for (SaleOrderRequest.Item item : request.items()) {
             // The order holds the client UUID, so each sale row gets a random one of its own.
             Sale saved = saveSale(lots.get(item.lotId()), buyer, UUID.randomUUID(), savedOrder,
                     savedOrder.getSaleDate(), item.quantityKg(), item.pricePerKg(),
                     remainingByLot.get(item.lotId()), manager);
-            sales.add(SaleResponse.from(saved));
+            savedSales.add(saved);
         }
-        return new RecordedSaleOrder(SaleOrderResponse.from(savedOrder, sales), true);
+        return new RecordedSaleOrder(SaleOrderResponse.from(savedOrder, responsesOf(savedSales)), true);
     }
 
     @Transactional(readOnly = true)
     public PageResponse<SaleResponse> list(String search, Long lotId, Long buyerId, Long gradeId, int page, int size) {
         PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
                 Sort.by(Sort.Direction.DESC, "saleDate", "id"));
-        return PageResponse.from(saleRepository.findAll(matching(search, lotId, buyerId, gradeId), pageRequest)
-                .map(SaleResponse::from));
+        Page<Sale> sales = saleRepository.findAll(matching(search, lotId, buyerId, gradeId), pageRequest);
+        return new PageResponse<>(responsesOf(sales.getContent()), sales.getNumber(), sales.getSize(),
+                sales.getTotalElements(), sales.getTotalPages());
     }
 
     @Transactional(readOnly = true)
@@ -154,9 +168,24 @@ public class SaleService {
     }
 
     private SaleOrderResponse toResponse(SaleOrder order) {
-        return SaleOrderResponse.from(order, saleRepository.findBySaleOrderIdOrderByIdAsc(order.getId()).stream()
-                .map(SaleResponse::from)
-                .toList());
+        return SaleOrderResponse.from(order, responsesOf(saleRepository.findBySaleOrderIdOrderByIdAsc(order.getId())));
+    }
+
+    private SaleResponse responseOf(Sale sale) {
+        return SaleResponse.from(sale, saleAllocationRepository.findBySaleIdOrderById(sale.getId()));
+    }
+
+    // The batches of all the sales in one query, not one per sale.
+    private List<SaleResponse> responsesOf(List<Sale> sales) {
+        if (sales.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, List<SaleAllocation>> batches = saleAllocationRepository
+                .findBySaleIdInOrderByIdAsc(sales.stream().map(Sale::getId).toList()).stream()
+                .collect(Collectors.groupingBy(allocation -> allocation.getSale().getId()));
+        return sales.stream()
+                .map(sale -> SaleResponse.from(sale, batches.getOrDefault(sale.getId(), List.of())))
+                .toList();
     }
 
     private Buyer findBuyer(Long buyerId) {
@@ -217,24 +246,39 @@ public class SaleService {
         return floorPricePerKg != null && pricePerKg < floorPricePerKg;
     }
 
+    // The sale's batches that satisfy a condition, for an EXISTS test on the sale.
+    private static Subquery<Long> batchesOf(CriteriaQuery<?> query, CriteriaBuilder cb, Root<Sale> sale,
+                                            Function<Root<SaleAllocation>, Predicate> condition) {
+        Subquery<Long> subquery = query.subquery(Long.class);
+        Root<SaleAllocation> allocation = subquery.from(SaleAllocation.class);
+        return subquery.select(allocation.<Long>get("id"))
+                .where(cb.equal(allocation.get("sale").get("id"), sale.get("id")), condition.apply(allocation));
+    }
+
     private static Specification<Sale> matching(String search, Long lotId, Long buyerId, Long gradeId) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (lotId != null) {
-                predicates.add(cb.equal(root.get("lot").get("id"), lotId));
+                // A sale made from one lot, or a sale by grade that took kg from the lot's batches.
+                predicates.add(cb.or(cb.equal(root.get("lot").get("id"), lotId),
+                        cb.exists(batchesOf(query, cb, root,
+                                a -> cb.equal(a.get("delivery").get("lot").get("id"), lotId)))));
             }
             if (buyerId != null) {
                 predicates.add(cb.equal(root.get("buyer").get("id"), buyerId));
             }
             if (gradeId != null) {
-                predicates.add(cb.equal(root.get("lot").get("grade").get("id"), gradeId));
+                predicates.add(cb.equal(root.get("grade").get("id"), gradeId));
             }
             if (search != null && !search.isBlank()) {
                 String term = search.trim();
                 String pattern = "%" + term.toLowerCase(Locale.ROOT) + "%";
                 List<Predicate> matches = new ArrayList<>();
                 matches.add(cb.like(cb.lower(root.get("buyer").get("name")), pattern));
-                matches.add(cb.like(cb.lower(root.get("lot").get("lotCode")), pattern));
+                // A sale by grade has no lot of its own, so the lot code is also looked for in its batches.
+                matches.add(cb.like(cb.lower(root.join("lot", JoinType.LEFT).get("lotCode")), pattern));
+                matches.add(cb.exists(batchesOf(query, cb, root,
+                        a -> cb.like(cb.lower(a.get("delivery").get("lot").get("lotCode")), pattern))));
                 matches.add(cb.like(cb.lower(root.get("saleCode")), pattern));
                 // A number on its own can also be the sale's id.
                 if (term.matches("\\d{1,18}")) {

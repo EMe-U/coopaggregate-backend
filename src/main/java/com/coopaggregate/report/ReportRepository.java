@@ -43,11 +43,19 @@ public interface ReportRepository extends Repository<Delivery, Long> {
 
     // Only the week's sales are loaded, with their lot, buyer and order, to list them one per sale or order.
     @Query("""
-            SELECT s FROM Sale s JOIN FETCH s.lot JOIN FETCH s.buyer LEFT JOIN FETCH s.saleOrder
+            SELECT s FROM Sale s LEFT JOIN FETCH s.lot JOIN FETCH s.buyer LEFT JOIN FETCH s.saleOrder
             WHERE s.saleDate BETWEEN :from AND :to
             ORDER BY s.saleDate, s.id
             """)
     List<Sale> findSalesBetween(LocalDate from, LocalDate to);
+
+    // The lots that the week's sales by grade took kg from (they have no lot of their own).
+    @Query("""
+            SELECT new com.coopaggregate.report.SaleLotCode(a.sale.id, a.delivery.lot.lotCode)
+            FROM SaleAllocation a
+            WHERE a.sale.saleDate BETWEEN :from AND :to
+            """)
+    List<SaleLotCode> findSaleLotCodesBetween(LocalDate from, LocalDate to);
 
     // Shares have no date of their own, so the moment the manager shared the lot is used.
     @Query("SELECT COALESCE(SUM(ls.shareAmount), 0) FROM LotShare ls WHERE ls.createdAt >= :from AND ls.createdAt < :to")

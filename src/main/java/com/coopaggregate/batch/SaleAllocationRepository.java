@@ -15,7 +15,15 @@ import org.springframework.data.jpa.repository.Query;
  */
 public interface SaleAllocationRepository extends JpaRepository<SaleAllocation, Long> {
 
+    @EntityGraph(attributePaths = {"delivery", "delivery.member", "delivery.lot"})
     List<SaleAllocation> findBySaleIdOrderById(Long saleId);
+
+    // The batches of a whole page of sales in one query.
+    @EntityGraph(attributePaths = {"delivery", "delivery.member", "delivery.lot"})
+    List<SaleAllocation> findBySaleIdInOrderByIdAsc(Collection<Long> saleIds);
+
+    @EntityGraph(attributePaths = {"sale", "sale.buyer", "delivery", "delivery.member", "delivery.lot"})
+    List<SaleAllocation> findByIdIn(Collection<Long> ids);
 
     boolean existsByDeliveryLotId(Long lotId);
 
