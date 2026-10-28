@@ -199,8 +199,10 @@ public class ReportService {
     }
 
     private WeeklyReport.Money money(Instant from, Instant to, LocalDate monday, LocalDate sunday) {
-        long shared = reportRepository.sumSharedBetween(from, to);
-        long deductions = reportRepository.sumShareDeductionsBetween(from, to);
+        // Lot shares (sales before sales by grade) and sale credits by batch are both money earned by members.
+        long shared = reportRepository.sumSharedBetween(from, to) + reportRepository.sumCreditedBetween(from, to);
+        long deductions = reportRepository.sumShareDeductionsBetween(from, to)
+                + reportRepository.sumCreditDeductionsBetween(from, to);
         Map<PaymentMethod, Long> paidByMethod = reportRepository.findPaidByMethodBetween(monday, sunday).stream()
                 .collect(Collectors.toMap(MethodAmount::method, MethodAmount::amountRwf));
         return new WeeklyReport.Money(

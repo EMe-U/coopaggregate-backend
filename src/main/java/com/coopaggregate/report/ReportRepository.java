@@ -57,6 +57,15 @@ public interface ReportRepository extends Repository<Delivery, Long> {
             + "WHERE ls.createdAt >= :from AND ls.createdAt < :to")
     long sumShareDeductionsBetween(Instant from, Instant to);
 
+    // Sale credits by batch, by the moment the sale credited them. Old allocations have none (gross is null).
+    @Query("SELECT COALESCE(SUM(a.grossRwf), 0) FROM SaleAllocation a "
+            + "WHERE a.grossRwf IS NOT NULL AND a.createdAt >= :from AND a.createdAt < :to")
+    long sumCreditedBetween(Instant from, Instant to);
+
+    @Query("SELECT COALESCE(SUM(a.deductionRwf), 0) FROM SaleAllocation a "
+            + "WHERE a.grossRwf IS NOT NULL AND a.createdAt >= :from AND a.createdAt < :to")
+    long sumCreditDeductionsBetween(Instant from, Instant to);
+
     @Query("""
             SELECT new com.coopaggregate.report.MethodAmount(p.method, SUM(p.amount))
             FROM ProducePayment p

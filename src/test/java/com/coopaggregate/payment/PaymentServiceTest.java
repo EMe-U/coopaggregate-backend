@@ -27,6 +27,8 @@ import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.ledger.LedgerEntry;
 import com.coopaggregate.ledger.LedgerEntryRepository;
+import com.coopaggregate.batch.MemberCredit;
+import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.manager.Manager;
@@ -43,6 +45,7 @@ class PaymentServiceTest {
     private MemberRepository memberRepository;
     private LedgerService ledgerService;
     private LedgerEntryRepository ledgerEntryRepository;
+    private SaleAllocationRepository saleAllocationRepository;
     private Member alice;
     private Manager manager;
     private PaymentService service;
@@ -68,12 +71,21 @@ class PaymentServiceTest {
 
         manager = new Manager();
         ledgerEntryRepository = mock(LedgerEntryRepository.class);
-        service = new PaymentService(paymentRepository, memberRepository, ledgerService, ledgerEntryRepository);
+        saleAllocationRepository = mock(SaleAllocationRepository.class);
+        service = new PaymentService(paymentRepository, memberRepository, ledgerService, ledgerEntryRepository,
+                saleAllocationRepository);
     }
 
     @Test
     void owedIsSharesMinusDeductionsMinusPayments() {
         assertEquals(451_000L, service.owedTo(1L));
+    }
+
+    @Test
+    void saleCreditsByBatchAreOwedToo() {
+        when(saleAllocationRepository.netCreditsOf(1L)).thenReturn(29_500L);
+
+        assertEquals(480_500L, service.owedTo(1L));
     }
 
     @Test
@@ -187,6 +199,25 @@ class PaymentServiceTest {
         service.balances(null, null, LocalDate.of(2026, 10, 14));
 
         verify(memberRepository).findAllById(Set.of(1L, 2L, 3L));
+    }
+
+    @Test
+    void saleCreditsAreAddedToTheLotSharesOfEachMember() {
+        givenAliceBoscoCarine();
+        Member diane = member(4L, "Diane Ingabire", "M-0004", "+250788000004");
+        when(memberRepository.findAllById(any())).thenReturn(List.of(alice, diane));
+        // Alice has a lot share and sale credits; Diane only sale credits.
+        when(saleAllocationRepository.findCreditTotalsByMember()).thenReturn(List.of(
+                new MemberCredit(1L, 30_000L, 500L), new MemberCredit(4L, 12_000L, 200L)));
+
+        BalancesResponse balances = service.balances(null, null, LocalDate.of(2026, 10, 14));
+
+        verify(memberRepository).findAllById(Set.of(1L, 2L, 3L, 4L));
+        assertEquals(List.of(
+                new BalancesResponse.MemberBalance(1L, "Alice Uwase", "M-0001", "+250788000001",
+                        1_506_000L, 25_500L, 1_000_000L, 480_500L, BalanceStatus.PART_PAID),
+                new BalancesResponse.MemberBalance(4L, "Diane Ingabire", "M-0004", "+250788000004",
+                        12_000L, 200L, 0L, 11_800L, BalanceStatus.UNPAID)), balances.members());
     }
 
     @Test

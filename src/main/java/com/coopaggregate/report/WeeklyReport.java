@@ -54,8 +54,9 @@ public record WeeklyReport(
     }
 
     /**
-     * sharedRwf is the gross share of lots shared in the week (by the time they were shared), shareDeductionsRwf the
-     * deductions in those shares. paidRwf is by payment date; owedNowRwf is what members are owed now.
+     * sharedRwf is the gross share of lots shared in the week (by the time they were shared) plus the gross sale
+     * credits by batch made in the week; shareDeductionsRwf the deductions in both. paidRwf is by payment date;
+     * owedNowRwf is what members are owed now.
      */
     public record Money(long sharedRwf, long shareDeductionsRwf, long sharedNetRwf, long paidRwf,
                         List<MethodLine> paidByMethod, long owedNowRwf) {

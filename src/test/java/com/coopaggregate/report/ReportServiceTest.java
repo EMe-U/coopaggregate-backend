@@ -267,6 +267,21 @@ class ReportServiceTest {
     }
 
     @Test
+    void saleCreditsByBatchInTheWeekCountAsSharedMoney() {
+        when(reportRepository.sumSharedBetween(FROM, TO)).thenReturn(2_952_000L);
+        when(reportRepository.sumShareDeductionsBetween(FROM, TO)).thenReturn(50_000L);
+        when(reportRepository.sumCreditedBetween(FROM, TO)).thenReturn(30_000L);
+        when(reportRepository.sumCreditDeductionsBetween(FROM, TO)).thenReturn(500L);
+        when(paymentService.balances(null, null)).thenReturn(new BalancesResponse(0, 0, List.of()));
+
+        WeeklyReport.Money money = service.weekly(MONDAY, TODAY).money();
+
+        assertEquals(2_982_000L, money.sharedRwf());
+        assertEquals(50_500L, money.shareDeductionsRwf());
+        assertEquals(2_931_500L, money.sharedNetRwf());
+    }
+
+    @Test
     void confirmationsInTheWeekAndCountsNow() {
         when(reportRepository.findConfirmedByMethodBetween(FROM, TO)).thenReturn(List.of(
                 new MethodCount(ConfirmationMethod.MANAGER_REVIEW, 1L), new MethodCount(ConfirmationMethod.OTP, 7L)));

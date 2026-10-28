@@ -33,4 +33,8 @@ public interface LotShareRepository extends JpaRepository<LotShare, Long> {
 
     @EntityGraph(attributePaths = {"member", "lot"})
     List<LotShare> findByIdIn(Collection<Long> ids);
+
+    @Query("SELECT new com.coopaggregate.share.MemberLot(ls.member.id, ls.lot.id) FROM LotShare ls "
+            + "WHERE ls.lot.id IN :lotIds")
+    List<MemberLot> findSharedMemberLots(Collection<Long> lotIds);
 }

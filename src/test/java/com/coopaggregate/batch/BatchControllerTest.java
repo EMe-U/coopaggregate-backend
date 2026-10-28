@@ -69,6 +69,7 @@ class BatchControllerTest {
         when(batchService.memberBatches(5L, "unsold", 0, 20)).thenReturn(new MemberBatchesResponse(5L, "M-0005",
                 "Uwimana Claudine", new BatchTotals(new BigDecimal("120.50"), new BigDecimal("100.00"),
                         new BigDecimal("0.50"), new BigDecimal("20.00")),
+                new BatchEarnings(30000L, 500L),
                 new PageResponse<>(List.of(batch()), 0, 20, 1, 1)));
 
         mockMvc.perform(get("/api/members/5/batches").param("status", "unsold")
@@ -80,7 +81,10 @@ class BatchControllerTest {
                 .andExpect(jsonPath("$.batches.content[0].receiptCode").value("RCT-7K2Q"))
                 .andExpect(jsonPath("$.batches.content[0].soldKg").value(100.00))
                 .andExpect(jsonPath("$.batches.content[0].remainingKg").value(20.00))
-                .andExpect(jsonPath("$.batches.content[0].deliveredAt").value("2026-10-19T08:00:00Z"));
+                .andExpect(jsonPath("$.batches.content[0].deliveredAt").value("2026-10-19T08:00:00Z"))
+                .andExpect(jsonPath("$.batches.content[0].earnedRwf").value(29500))
+                .andExpect(jsonPath("$.batches.content[0].payment").value("BATCH"))
+                .andExpect(jsonPath("$.earnings.earnedRwf").value(29500));
     }
 
     @Test
@@ -99,6 +103,7 @@ class BatchControllerTest {
     private static BatchResponse batch() {
         return new BatchResponse(42L, "RCT-7K2Q", 5L, "M-0005", "Uwimana Claudine", "Big", 3L, "A-2026-01",
                 LotStatus.CLOSED, Instant.parse("2026-10-19T08:00:00Z"), new BigDecimal("120.50"),
-                new BigDecimal("100.00"), new BigDecimal("0.50"), new BigDecimal("20.00"), ConfirmationStatus.CONFIRMED);
+                new BigDecimal("100.00"), new BigDecimal("0.50"), new BigDecimal("20.00"), ConfirmationStatus.CONFIRMED,
+                30000, 500, 29500, BatchPayment.BATCH);
     }
 }

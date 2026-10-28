@@ -34,6 +34,8 @@ import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
+import com.coopaggregate.share.LotShareRepository;
+import com.coopaggregate.share.MemberLot;
 
 import jakarta.persistence.EntityNotFoundException;
 
@@ -42,6 +44,8 @@ class BatchServiceTest {
     private BatchRepository batchRepository;
     private MemberRepository memberRepository;
     private GradeRepository gradeRepository;
+    private SaleAllocationRepository saleAllocationRepository;
+    private LotShareRepository lotShareRepository;
     private Member member;
     private Grade grade;
     private BatchService service;
@@ -51,6 +55,9 @@ class BatchServiceTest {
         batchRepository = mock(BatchRepository.class);
         memberRepository = mock(MemberRepository.class);
         gradeRepository = mock(GradeRepository.class);
+        saleAllocationRepository = mock(SaleAllocationRepository.class);
+        lotShareRepository = mock(LotShareRepository.class);
+        when(saleAllocationRepository.memberEarnings(anyLong())).thenReturn(BatchEarnings.NONE);
         member = new Member();
         ReflectionTestUtils.setField(member, "id", 5L);
         member.setMemberCode("M-0005");
@@ -81,8 +88,53 @@ class BatchServiceTest {
                 new BigDecimal("220.00")), response.totals());
         assertEquals(new BatchResponse(42L, "RCT-7K2Q", 5L, "M-0005", "Uwimana Claudine", "Big", 3L, "A-2026-01",
                 LotStatus.CLOSED, Instant.parse("2026-10-19T08:00:00Z"), new BigDecimal("120.50"),
-                new BigDecimal("100.00"), new BigDecimal("0.50"), new BigDecimal("20.00"), ConfirmationStatus.PENDING),
+                new BigDecimal("100.00"), new BigDecimal("0.50"), new BigDecimal("20.00"), ConfirmationStatus.PENDING,
+                0, 0, 0, BatchPayment.AWAITING_SETTLEMENT),
                 response.batches().content().get(0));
+        assertEquals(BatchEarnings.NONE, response.earnings());
+    }
+
+    @Test
+    void creditsAreShownPerBatchAndInTotal() {
+        Delivery batch = batch(42L, "RCT-7K2Q", "120.50", "100.00", "0.50", "20.00");
+        when(batchRepository.findMemberBatches(eq(5L), eq(false), any())).thenReturn(new PageImpl<>(List.of(batch)));
+        when(saleAllocationRepository.findCreditsOfBatches(List.of(42L)))
+                .thenReturn(List.of(new BatchCredit(42L, new BigDecimal("100.00"), 30000L, 500L)));
+        when(saleAllocationRepository.memberEarnings(5L)).thenReturn(new BatchEarnings(45000L, 750L));
+
+        MemberBatchesResponse response = service().memberBatches(5L, null, 0, 20);
+
+        BatchResponse line = response.batches().content().get(0);
+        assertEquals(30000L, line.grossRwf());
+        assertEquals(500L, line.deductionRwf());
+        assertEquals(29500L, line.earnedRwf());
+        assertEquals(BatchPayment.BATCH, line.payment());
+        assertEquals(new BatchEarnings(45000, 750, 44250), response.earnings());
+    }
+
+    @Test
+    void kgSoldBeforeSalesByGradeArePaidThroughTheLotShare() {
+        Delivery batch = batch(42L, "RCT-7K2Q", "120.50", "120.50", "0", "0");
+        when(batchRepository.findMemberBatches(eq(5L), eq(false), any())).thenReturn(new PageImpl<>(List.of(batch)));
+        when(lotShareRepository.findSharedMemberLots(List.of(3L))).thenReturn(List.of(new MemberLot(5L, 3L)));
+
+        BatchResponse line = service().memberBatches(5L, null, 0, 20).batches().content().get(0);
+
+        assertEquals(BatchPayment.LOT_SHARE, line.payment());
+        assertEquals(0L, line.earnedRwf(), "a lot share is not split per batch");
+    }
+
+    @Test
+    void paymentSaysHowTheSoldKgArePaid() {
+        assertEquals(BatchPayment.NOTHING_SOLD, BatchResponse.paymentOf(new BigDecimal("0.00"), BigDecimal.ZERO, false));
+        assertEquals(BatchPayment.BATCH,
+                BatchResponse.paymentOf(new BigDecimal("80.00"), new BigDecimal("80.00"), false));
+        // Part sold before sales by grade (not shared yet), part credited by batch.
+        assertEquals(BatchPayment.AWAITING_SETTLEMENT,
+                BatchResponse.paymentOf(new BigDecimal("80.00"), new BigDecimal("30.00"), false));
+        assertEquals(BatchPayment.AWAITING_SETTLEMENT,
+                BatchResponse.paymentOf(new BigDecimal("80.00"), BigDecimal.ZERO, false));
+        assertEquals(BatchPayment.LOT_SHARE, BatchResponse.paymentOf(new BigDecimal("80.00"), BigDecimal.ZERO, true));
     }
 
     @Test
@@ -142,7 +194,8 @@ class BatchServiceTest {
     }
 
     private BatchService service() {
-        return new BatchService(batchRepository, memberRepository, gradeRepository);
+        return new BatchService(batchRepository, memberRepository, gradeRepository, saleAllocationRepository,
+                lotShareRepository);
     }
 
     // The database fills remainingKg; here it is set the way the database would.

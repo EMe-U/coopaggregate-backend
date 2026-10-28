@@ -17,6 +17,8 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.batch.MemberCredit;
+import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.RwandanPhoneNumber;
@@ -41,13 +43,16 @@ public class PaymentService {
     private final MemberRepository memberRepository;
     private final LedgerService ledgerService;
     private final LedgerEntryRepository ledgerEntryRepository;
+    private final SaleAllocationRepository saleAllocationRepository;
 
     public PaymentService(ProducePaymentRepository paymentRepository, MemberRepository memberRepository,
-                          LedgerService ledgerService, LedgerEntryRepository ledgerEntryRepository) {
+                          LedgerService ledgerService, LedgerEntryRepository ledgerEntryRepository,
+                          SaleAllocationRepository saleAllocationRepository) {
         this.paymentRepository = paymentRepository;
         this.memberRepository = memberRepository;
         this.ledgerService = ledgerService;
         this.ledgerEntryRepository = ledgerEntryRepository;
+        this.saleAllocationRepository = saleAllocationRepository;
     }
 
     @Transactional
@@ -120,8 +125,10 @@ public class PaymentService {
         return payment;
     }
 
+    // A member earns through lot shares (sales before sales by grade) and through sale credits by batch.
     public long owedTo(Long memberId) {
-        return paymentRepository.netSharesOf(memberId) - paymentRepository.paidTo(memberId);
+        return paymentRepository.netSharesOf(memberId) + saleAllocationRepository.netCreditsOf(memberId)
+                - paymentRepository.paidTo(memberId);
     }
 
     @Transactional(readOnly = true)
@@ -139,6 +146,13 @@ public class PaymentService {
         Map<Long, MemberShareTotals> sharesByMember = new HashMap<>();
         for (MemberShareTotals shares : paymentRepository.findShareTotalsByMember()) {
             sharesByMember.put(shares.memberId(), shares);
+        }
+        // Sale credits by batch are added to the lot shares: shareRwf and deductionRwf cover both.
+        for (MemberCredit credit : saleAllocationRepository.findCreditTotalsByMember()) {
+            sharesByMember.merge(credit.memberId(),
+                    new MemberShareTotals(credit.memberId(), credit.grossRwf(), credit.deductionRwf()),
+                    (shares, credits) -> new MemberShareTotals(shares.memberId(),
+                            shares.shareRwf() + credits.shareRwf(), shares.deductionRwf() + credits.deductionRwf()));
         }
 
         List<BalancesResponse.MemberBalance> all = memberRepository.findAllById(sharesByMember.keySet()).stream()
