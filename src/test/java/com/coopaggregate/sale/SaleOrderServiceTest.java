@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.batch.BatchAllocator;
 import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.buyer.BuyerRepository;
 import com.coopaggregate.error.BadRequestException;
@@ -90,7 +91,7 @@ class SaleOrderServiceTest {
 
         manager = new Manager();
         service = new SaleService(saleRepository, saleOrderRepository, lotRepository, buyerRepository, lotService,
-                ledgerService);
+                ledgerService, mock(BatchAllocator.class));
     }
 
     @Test

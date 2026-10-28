@@ -11,6 +11,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.data.jpa.repository.Query;
 
+import com.coopaggregate.batch.BatchRepository;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.payment.ProducePaymentRepository;
@@ -36,7 +37,9 @@ class ReversedRecordsAreNotCountedTest {
             "DeliveryRepository, findKgByGradeBetween, 1",
             "ProducePaymentRepository, findPaymentsByMember, 1",
             "ProducePaymentRepository, paidTo, 1",
-            "ProducePaymentRepository, paidBetween, 1"
+            "ProducePaymentRepository, paidBetween, 1",
+            // Batches: reversed deliveries are not batches.
+            "BatchRepository, lockBatchesWithKgLeft, 1"
     })
     void countingQueryLeavesOutReversedRecords(String repository, String methodName, int expectedFilters) {
         List<Query> queries = Arrays.stream(repositoryClass(repository).getMethods())
@@ -58,6 +61,7 @@ class ReversedRecordsAreNotCountedTest {
             case "LotShareRepository" -> LotShareRepository.class;
             case "DeliveryRepository" -> DeliveryRepository.class;
             case "ProducePaymentRepository" -> ProducePaymentRepository.class;
+            case "BatchRepository" -> BatchRepository.class;
             default -> throw new IllegalArgumentException(name);
         };
     }

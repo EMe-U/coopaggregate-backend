@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.coopaggregate.audit.AuditAction;
 import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
+import com.coopaggregate.batch.BatchAllocator;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.ShortCodes;
@@ -65,6 +66,7 @@ public class DeliveryService {
     private final LedgerEntryRepository ledgerEntryRepository;
     private final ConfirmationCodes confirmationCodes;
     private final AuditLogRepository auditLogRepository;
+    private final BatchAllocator batchAllocator;
     private final ApplicationEventPublisher eventPublisher;
 
     public DeliveryService(DeliveryRepository deliveryRepository, MemberRepository memberRepository,
@@ -72,7 +74,7 @@ public class DeliveryService {
                            LotService lotService, LedgerService ledgerService, LotRepository lotRepository,
                            SaleRepository saleRepository, LedgerEntryRepository ledgerEntryRepository,
                            ConfirmationCodes confirmationCodes, AuditLogRepository auditLogRepository,
-                           ApplicationEventPublisher eventPublisher) {
+                           BatchAllocator batchAllocator, ApplicationEventPublisher eventPublisher) {
         this.deliveryRepository = deliveryRepository;
         this.memberRepository = memberRepository;
         this.gradeRepository = gradeRepository;
@@ -84,6 +86,7 @@ public class DeliveryService {
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.confirmationCodes = confirmationCodes;
         this.auditLogRepository = auditLogRepository;
+        this.batchAllocator = batchAllocator;
         this.eventPublisher = eventPublisher;
     }
 
@@ -149,7 +152,9 @@ public class DeliveryService {
         Lot lot = lockLotOf(deliveryId);
         Delivery delivery = findDelivery(deliveryId);
         checkCanChange(delivery, lot, BigDecimal.ZERO);
-        return markReversed(delivery, reason, manager);
+        Delivery reversed = markReversed(delivery, reason, manager);
+        batchAllocator.releaseLosses(reversed);
+        return reversed;
     }
 
     /** reverse for the API: the response is built before the transaction ends, while lazy data can still load. */
@@ -187,6 +192,8 @@ public class DeliveryService {
         corrected.setDeductionAmount(deductionFor(request.quantityKg()));
         corrected.setReceiptCode(ShortCodes.unique("RCT-", deliveryRepository::existsByReceiptCode));
         Delivery saved = deliveryRepository.save(corrected);
+        // After the corrected delivery is saved, so it can take the lost kg when it stays in the same lot.
+        batchAllocator.releaseLosses(original);
         if (original.getConfirmationStatus() == ConfirmationStatus.DISPUTED) {
             original.setResolutionNote("Corrected by " + saved.getReceiptCode() + ": " + request.reason());
         }

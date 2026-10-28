@@ -19,6 +19,7 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.batch.BatchAllocator;
 import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.buyer.BuyerRepository;
 import com.coopaggregate.common.KigaliTime;
@@ -46,16 +47,18 @@ public class SaleService {
     private final BuyerRepository buyerRepository;
     private final LotService lotService;
     private final LedgerService ledgerService;
+    private final BatchAllocator batchAllocator;
 
     public SaleService(SaleRepository saleRepository, SaleOrderRepository saleOrderRepository,
                        LotRepository lotRepository, BuyerRepository buyerRepository, LotService lotService,
-                       LedgerService ledgerService) {
+                       LedgerService ledgerService, BatchAllocator batchAllocator) {
         this.saleRepository = saleRepository;
         this.saleOrderRepository = saleOrderRepository;
         this.lotRepository = lotRepository;
         this.buyerRepository = buyerRepository;
         this.lotService = lotService;
         this.ledgerService = ledgerService;
+        this.batchAllocator = batchAllocator;
     }
 
     @Transactional
@@ -189,6 +192,7 @@ public class SaleService {
         sale.setTotalAmount(totalAmount(quantityKg, pricePerKg));
         sale.setBelowFloorPrice(isBelowFloor(lot, pricePerKg));
         Sale saved = saleRepository.save(sale);
+        batchAllocator.allocateSale(saved);
         ledgerService.record(LedgerEntryType.SALE, "SALE", saved.getId(), saved.getQuantityKg(),
                 saved.getTotalAmount(),
                 "Sale " + saved.getSaleCode() + " from " + lot.getLotCode() + " to " + buyer.getName(), manager);

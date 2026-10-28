@@ -15,8 +15,10 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.batch.BatchAllocator;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.ledger.LedgerEntryType;
@@ -31,6 +33,8 @@ import com.coopaggregate.manager.Manager;
 import jakarta.persistence.EntityNotFoundException;
 
 class LossServiceTest {
+
+    private BatchAllocator batchAllocator;
 
     private LossRepository lossRepository;
     private LedgerService ledgerService;
@@ -61,7 +65,8 @@ class LossServiceTest {
         });
 
         manager = new Manager();
-        service = new LossService(lossRepository, lotRepository, lotService, ledgerService);
+        batchAllocator = mock(BatchAllocator.class);
+        service = new LossService(lossRepository, lotRepository, lotService, ledgerService, batchAllocator);
     }
 
     @Test
@@ -73,6 +78,15 @@ class LossServiceTest {
         assertEquals(new BigDecimal("30.00"), response.quantityKg());
         assertEquals(LossReason.ROT, response.reason());
         assertEquals(KigaliTime.today(), response.recordedAt());
+    }
+
+    @Test
+    void lossTakesItsKgFromTheLotsBatches() {
+        service.record(3L, request("30.00", null), manager);
+
+        ArgumentCaptor<Loss> loss = ArgumentCaptor.forClass(Loss.class);
+        verify(batchAllocator).allocateLoss(loss.capture());
+        assertEquals(new BigDecimal("30.00"), loss.getValue().getQuantityKg());
     }
 
     @Test

@@ -6,6 +6,8 @@ import java.time.Instant;
 import java.util.UUID;
 
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 
 import com.coopaggregate.ledger.LedgerEntry;
 import com.coopaggregate.lot.Lot;
@@ -41,7 +43,18 @@ public class Delivery {
 
     private Instant deliveredAt;
 
+    // As a batch: kg received is quantityKg; sales and losses take kg from it oldest batch first.
     private BigDecimal quantityKg;
+
+    private BigDecimal soldKg = BigDecimal.ZERO;
+
+    private BigDecimal lostKg = BigDecimal.ZERO;
+
+    // quantity_kg - sold_kg - lost_kg, computed by the database. Never written by the app; read back after each
+    // insert or update, so it is current once the change is flushed.
+    @Generated(event = {EventType.INSERT, EventType.UPDATE})
+    @Column(insertable = false, updatable = false)
+    private BigDecimal remainingKg;
 
     private Long deductionAmount = 0L;
 
@@ -130,6 +143,39 @@ public class Delivery {
 
     public void setQuantityKg(BigDecimal quantityKg) {
         this.quantityKg = quantityKg;
+    }
+
+    public BigDecimal getSoldKg() {
+        return soldKg;
+    }
+
+    public BigDecimal getLostKg() {
+        return lostKg;
+    }
+
+    /** As stored by the database; see unallocatedKg() for the value while a change is not yet saved. */
+    public BigDecimal getRemainingKg() {
+        return remainingKg;
+    }
+
+    /** The kg not yet sold or lost, from the values in memory. Equal to remainingKg once saved. */
+    public BigDecimal unallocatedKg() {
+        return quantityKg.subtract(soldKg).subtract(lostKg);
+    }
+
+    public void addSoldKg(BigDecimal kg) {
+        this.soldKg = soldKg.add(kg);
+    }
+
+    public void addLostKg(BigDecimal kg) {
+        this.lostKg = lostKg.add(kg);
+    }
+
+    /** A reversed delivery hands its lost kg back, so they can be taken from the lot's other batches. */
+    public BigDecimal releaseLostKg() {
+        BigDecimal released = lostKg;
+        this.lostKg = BigDecimal.ZERO;
+        return released;
     }
 
     public Long getDeductionAmount() {

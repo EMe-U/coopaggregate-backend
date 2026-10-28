@@ -10,6 +10,7 @@ import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -33,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -44,6 +46,7 @@ import com.coopaggregate.audit.AuditAction;
 import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.auth.AuthService;
+import com.coopaggregate.batch.BatchAllocator;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
@@ -85,6 +88,7 @@ class DeliveryServiceTest {
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(4);
     private ConfirmationCodes confirmationCodes;
     private AuditLogRepository auditLogRepository;
+    private BatchAllocator batchAllocator;
     private SaleRepository saleRepository;
     private LedgerEntryRepository ledgerEntryRepository;
     private Setting setting;
@@ -132,9 +136,10 @@ class DeliveryServiceTest {
         eventPublisher = mock(ApplicationEventPublisher.class);
         confirmationCodes = new ConfirmationCodes(encoder);
         auditLogRepository = mock(AuditLogRepository.class);
+        batchAllocator = mock(BatchAllocator.class);
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
                 new LotService(lotRepository, gradeRepository), ledgerService, lotRepository, saleRepository,
-                ledgerEntryRepository, confirmationCodes, auditLogRepository, eventPublisher);
+                ledgerEntryRepository, confirmationCodes, auditLogRepository, batchAllocator, eventPublisher);
     }
 
     @ParameterizedTest
@@ -443,6 +448,38 @@ class DeliveryServiceTest {
         assertEquals(reversal.getEntryDate(), reversed.getReversedAt());
         assertEquals(reversal, reversed.getReversalLedgerEntry());
         assertTrue(DeliveryResponse.from(reversed).reversed());
+    }
+
+    @Test
+    void reversedDeliveryHandsItsLostKgBackToTheLot() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        when(ledgerService.reverse(77L, "Weighed twice", manager)).thenReturn(reversalEntry("Weighed twice"));
+
+        service.reverse(42L, "Weighed twice", manager);
+
+        verify(batchAllocator).releaseLosses(delivery);
+    }
+
+    @Test
+    void refusedReversalChangesNoBatch() {
+        givenStoredDelivery("100.00");
+        when(saleRepository.existsByLotId(3L)).thenReturn(true);
+
+        assertThrows(IllegalStateException.class, () -> service.reverse(42L, "Weighed twice", manager));
+
+        verify(batchAllocator, never()).releaseLosses(any());
+    }
+
+    @Test
+    void correctionHandsTheLostKgBackOnlyAfterTheCorrectedDeliveryIsSaved() {
+        Delivery original = givenStoredDelivery("100.00");
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
+
+        service.correct(42L, new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
+
+        InOrder order = inOrder(deliveryRepository, batchAllocator);
+        order.verify(deliveryRepository).save(any(Delivery.class));
+        order.verify(batchAllocator).releaseLosses(original);
     }
 
     @Test

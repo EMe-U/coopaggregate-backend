@@ -29,6 +29,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.batch.BatchAllocator;
 import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.buyer.BuyerRepository;
 import com.coopaggregate.common.KigaliTime;
@@ -49,6 +50,8 @@ import jakarta.persistence.criteria.Path;
 import jakarta.persistence.criteria.Root;
 
 class SaleServiceTest {
+
+    private BatchAllocator batchAllocator;
 
     private static final UUID CLIENT_UUID = UUID.fromString("0f8fad5b-d9cb-469f-a165-70867728950e");
 
@@ -94,8 +97,9 @@ class SaleServiceTest {
         });
 
         manager = new Manager();
+        batchAllocator = mock(BatchAllocator.class);
         service = new SaleService(saleRepository, mock(SaleOrderRepository.class), lotRepository, buyerRepository,
-                lotService, ledgerService);
+                lotService, ledgerService, batchAllocator);
     }
 
     @Test
@@ -216,6 +220,23 @@ class SaleServiceTest {
         assertEquals("SAL-7K2Q", result.sale().saleCode());
         verify(saleRepository, never()).save(any());
         verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void saleTakesItsKgFromTheLotsBatches() {
+        sell("100.00", 300L);
+
+        ArgumentCaptor<Sale> sale = ArgumentCaptor.forClass(Sale.class);
+        verify(batchAllocator).allocateSale(sale.capture());
+        assertEquals(new BigDecimal("100.00"), sale.getValue().getQuantityKg());
+        assertEquals(11L, sale.getValue().getId());
+    }
+
+    @Test
+    void refusedSaleTakesNoKgFromTheBatches() {
+        assertThrows(RuntimeException.class, () -> sell("999999.00", 300L));
+
+        verify(batchAllocator, never()).allocateSale(any());
     }
 
     @Test
