@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 
+import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.Delivery;
 
 import jakarta.persistence.LockModeType;
@@ -60,4 +61,21 @@ public interface BatchRepository extends Repository<Delivery, Long> {
 
     @Query("SELECT COALESCE(SUM(d.remainingKg), 0) FROM Delivery d WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL")
     BigDecimal gradeRemainingKg(Long gradeId);
+
+    // The batches a sale of the grade may use, in the order it uses them: confirmed (by the member, by the manager or
+    // recorded before confirmations existed), not reversed and with kg left, whatever their lot. Not locked.
+    @EntityGraph(attributePaths = {"member", "lot"})
+    @Query("""
+            SELECT d FROM Delivery d
+            WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL AND d.remainingKg > 0
+              AND d.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.CONFIRMED
+            ORDER BY d.deliveredAt, d.id
+            """)
+    List<Delivery> findSellableBatches(Long gradeId);
+
+    @Query("""
+            SELECT COALESCE(SUM(d.remainingKg), 0) FROM Delivery d
+            WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL AND d.confirmationStatus = :status
+            """)
+    BigDecimal gradeRemainingKgWithStatus(Long gradeId, ConfirmationStatus status);
 }

@@ -47,6 +47,9 @@ class BatchControllerTest {
     @MockitoBean
     private BatchService batchService;
 
+    @MockitoBean
+    private SalePreviewService salePreviewService;
+
     private String bearerToken;
 
     @BeforeEach
@@ -98,6 +101,46 @@ class BatchControllerTest {
                 .andExpect(jsonPath("$.remainingKg").value(20.00))
                 .andExpect(jsonPath("$.batches.content[0].lotStatus").value("CLOSED"));
         verify(batchService).gradeBatches(1L, 0, 20);
+    }
+
+    @Test
+    void salePreviewNeedsALogin() throws Exception {
+        mockMvc.perform(get("/api/grades/1/sale-preview").param("quantityKg", "10").param("pricePerKg", "300"))
+                .andExpect(status().isUnauthorized());
+        verifyNoInteractions(salePreviewService);
+    }
+
+    @Test
+    void salePreviewPassesTheQuantityPriceAndSkippedBatches() throws Exception {
+        when(salePreviewService.preview(1L, new BigDecimal("180.50"), 300L, List.of(12L, 15L)))
+                .thenReturn(new SalePreviewResponse(1L, "Big", new BigDecimal("180.50"), 300L, false, 5L,
+                        new BigDecimal("400.00"), BigDecimal.ZERO, BigDecimal.ZERO, true, null, 54_150L, 903L,
+                        53_247L, List.of(), List.of()));
+
+        mockMvc.perform(get("/api/grades/1/sale-preview").param("quantityKg", "180.50").param("pricePerKg", "300")
+                        .param("skip", "12,15").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enough").value(true))
+                .andExpect(jsonPath("$.totalNetRwf").value(53247));
+    }
+
+    @Test
+    void salePreviewWithoutAQuantityIsABadRequest() throws Exception {
+        when(salePreviewService.preview(1L, null, 300L, null))
+                .thenThrow(new com.coopaggregate.error.BadRequestException(
+                        "quantityKg is required and must be more than 0."));
+
+        mockMvc.perform(get("/api/grades/1/sale-preview").param("pricePerKg", "300")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void salePreviewWithAQuantityThatIsNotANumberIsABadRequest() throws Exception {
+        mockMvc.perform(get("/api/grades/1/sale-preview").param("quantityKg", "ten").param("pricePerKg", "300")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(salePreviewService);
     }
 
     private static BatchResponse batch() {

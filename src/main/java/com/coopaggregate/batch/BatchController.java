@@ -1,5 +1,8 @@
 package com.coopaggregate.batch;
 
+import java.math.BigDecimal;
+import java.util.List;
+
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -16,9 +19,25 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 public class BatchController {
 
     private final BatchService batchService;
+    private final SalePreviewService salePreviewService;
 
-    public BatchController(BatchService batchService) {
+    public BatchController(BatchService batchService, SalePreviewService salePreviewService) {
         this.batchService = batchService;
+        this.salePreviewService = salePreviewService;
+    }
+
+    @GetMapping("/api/grades/{gradeId}/sale-preview")
+    @Operation(summary = "Which batches a sale of this grade would use, oldest first whatever their lot, and what "
+            + "each member would be credited (their part of the sale amount, minus the deduction per kg). Only "
+            + "confirmed batches are sold. Nothing is saved; when there are not enough kg, enough is false and "
+            + "message says why")
+    public SalePreviewResponse salePreview(
+            @PathVariable Long gradeId,
+            @RequestParam(required = false) BigDecimal quantityKg,
+            @RequestParam(required = false) Long pricePerKg,
+            @Parameter(description = "Ids of batches (deliveries) to pass over, for example skip=12,15")
+            @RequestParam(required = false) List<Long> skip) {
+        return salePreviewService.preview(gradeId, quantityKg, pricePerKg, skip);
     }
 
     @GetMapping("/api/members/{memberId}/batches")
