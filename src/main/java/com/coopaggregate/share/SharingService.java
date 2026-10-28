@@ -6,6 +6,7 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.error.BadRequestException;
@@ -18,6 +19,7 @@ import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.MemberRepository;
+import com.coopaggregate.sale.SaleRepository;
 
 import jakarta.persistence.EntityNotFoundException;
 
@@ -30,16 +32,21 @@ public class SharingService {
     private final MemberRepository memberRepository;
     private final LedgerService ledgerService;
     private final DeliveryRepository deliveryRepository;
+    private final SaleRepository saleRepository;
+    private final SaleAllocationRepository saleAllocationRepository;
 
     public SharingService(LotShareRepository lotShareRepository, LotRepository lotRepository, LotService lotService,
                           MemberRepository memberRepository, LedgerService ledgerService,
-                          DeliveryRepository deliveryRepository) {
+                          DeliveryRepository deliveryRepository, SaleRepository saleRepository,
+                          SaleAllocationRepository saleAllocationRepository) {
         this.lotShareRepository = lotShareRepository;
         this.lotRepository = lotRepository;
         this.lotService = lotService;
         this.memberRepository = memberRepository;
         this.ledgerService = ledgerService;
         this.deliveryRepository = deliveryRepository;
+        this.saleRepository = saleRepository;
+        this.saleAllocationRepository = saleAllocationRepository;
     }
 
     @Transactional(readOnly = true)
@@ -122,9 +129,15 @@ public class SharingService {
         }
     }
 
-    private static void checkCanBeShared(Lot lot) {
+    private void checkCanBeShared(Lot lot) {
         if (lot.getStatus() == LotStatus.SHARED) {
             throw new IllegalStateException("Lot " + lot.getLotCode() + " has already been shared.");
+        }
+        // Sales now pay the members of the batches they used, when they are made. Sharing the lot pro rata as well
+        // would pay those members twice.
+        if (saleRepository.existsByLotId(lot.getId()) || saleAllocationRepository.existsByDeliveryLotId(lot.getId())) {
+            throw new IllegalStateException("Lot " + lot.getLotCode() + " has sales, and sales are paid to the "
+                    + "members by batch. Sharing the lot as well would pay them twice, so it cannot be shared.");
         }
         if (lot.getStatus() != LotStatus.SOLD) {
             throw new BadRequestException("Lot " + lot.getLotCode() + " is " + lot.getStatus()

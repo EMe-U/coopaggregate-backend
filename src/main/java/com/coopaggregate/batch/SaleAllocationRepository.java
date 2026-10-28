@@ -17,6 +17,8 @@ public interface SaleAllocationRepository extends JpaRepository<SaleAllocation, 
 
     List<SaleAllocation> findBySaleIdOrderById(Long saleId);
 
+    boolean existsByDeliveryLotId(Long lotId);
+
     @Query("""
             SELECT new com.coopaggregate.batch.MemberCredit(a.delivery.member.id, SUM(a.grossRwf), SUM(a.deductionRwf))
             FROM SaleAllocation a
