@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.common.KigaliTime;
+import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
 
@@ -130,17 +131,19 @@ class LotServiceTest {
     }
 
     @Test
-    void stockAddsRemainingKgOfOpenAndClosedLotsPerGrade() {
+    void stockIsReadPerGradeFromTheBatchesAndSplitBySellableWaitingAndDisputedKg() {
         Lot openA = lot(3L, "A-2026-02", "A", "Big", LotStatus.OPEN);
         Lot closedA = lot(4L, "A-2026-01", "A", "Big", LotStatus.CLOSED);
         Lot closedB = lot(5L, "B-2026-01", "B", "Normal", LotStatus.CLOSED);
         when(lotRepository.findByStatusIn(List.of(LotStatus.OPEN, LotStatus.CLOSED)))
                 .thenReturn(List.of(openA, closedB, closedA));
-        when(lotRepository.findQuantities(anyCollection())).thenReturn(List.of(
-                new LotQuantities(3L, new BigDecimal("200.00"), null, null, null, null),
-                new LotQuantities(4L, new BigDecimal("1000.00"), new BigDecimal("50.00"), new BigDecimal("900.00"),
-                        null, null),
-                new LotQuantities(5L, new BigDecimal("300.00"), null, null, null, null)));
+        // Lots of the same grade are added together; a status with no kg left is simply not there.
+        when(lotRepository.findKgLeftByGradeAndStatus()).thenReturn(List.of(
+                new GradeKgLeft("B", "Normal", ConfirmationStatus.CONFIRMED, new BigDecimal("300.00")),
+                new GradeKgLeft("A", "Big", ConfirmationStatus.CONFIRMED, new BigDecimal("200.00")),
+                new GradeKgLeft("A", "Big", ConfirmationStatus.PENDING, new BigDecimal("40.00")),
+                new GradeKgLeft("A", "Big", ConfirmationStatus.DISPUTED, new BigDecimal("10.00")),
+                new GradeKgLeft("B", "Normal", ConfirmationStatus.PENDING, new BigDecimal("25.50"))));
 
         when(lotRepository.totalDeliveredKg()).thenReturn(new BigDecimal("4000.00"));
         when(lotRepository.totalSoldKg()).thenReturn(new BigDecimal("3300.00"));
@@ -151,7 +154,10 @@ class LotServiceTest {
 
         StockResponse stock = service.stock();
 
-        assertEquals(new BigDecimal("550.00"), stock.totalRemainingKg());
+        assertEquals(new BigDecimal("575.50"), stock.totalRemainingKg());
+        assertEquals(new BigDecimal("500.00"), stock.totalSellableKg());
+        assertEquals(new BigDecimal("65.50"), stock.totalWaitingKg());
+        assertEquals(new BigDecimal("10.00"), stock.totalDisputedKg());
         assertEquals(new BigDecimal("4000.00"), stock.totalDeliveredKg());
         assertEquals(new BigDecimal("3300.00"), stock.totalSoldKg());
         assertEquals(new BigDecimal("150.00"), stock.totalLostKg());
@@ -160,9 +166,41 @@ class LotServiceTest {
         assertEquals(3L, stock.deliveriesToday());
         assertEquals(1, stock.openLots());
         assertEquals(2, stock.closedLots());
+        // In grade code order. remainingKg is the three parts added up.
         assertEquals(List.of(
-                new StockResponse.GradeStock("Big", new BigDecimal("250.00")),
-                new StockResponse.GradeStock("Normal", new BigDecimal("300.00"))), stock.byGrade());
+                new StockResponse.GradeStock("Big", new BigDecimal("250.00"), new BigDecimal("200.00"),
+                        new BigDecimal("40.00"), new BigDecimal("10.00")),
+                new StockResponse.GradeStock("Normal", new BigDecimal("325.50"), new BigDecimal("300.00"),
+                        new BigDecimal("25.50"), BigDecimal.ZERO)), stock.byGrade());
+    }
+
+    @Test
+    void stockDoesNotNeedALotToBeClosed() {
+        // The kg of an open lot are sellable stock like those of a closed lot: only confirmation matters.
+        when(lotRepository.findByStatusIn(List.of(LotStatus.OPEN, LotStatus.CLOSED)))
+                .thenReturn(List.of(lot(3L, "A-2026-02", "A", "Big", LotStatus.OPEN)));
+        when(lotRepository.findKgLeftByGradeAndStatus()).thenReturn(List.of(
+                new GradeKgLeft("A", "Big", ConfirmationStatus.CONFIRMED, new BigDecimal("120.00"))));
+
+        StockResponse stock = service.stock();
+
+        assertEquals(new BigDecimal("120.00"), stock.totalSellableKg());
+        assertEquals(1, stock.openLots());
+        assertEquals(0, stock.closedLots());
+    }
+
+    @Test
+    void aGradeWithNoKgLeftIsNotListed() {
+        when(lotRepository.findByStatusIn(any())).thenReturn(List.of());
+        when(lotRepository.findKgLeftByGradeAndStatus()).thenReturn(List.of());
+
+        StockResponse stock = service.stock();
+
+        assertEquals(List.of(), stock.byGrade());
+        assertEquals(BigDecimal.ZERO, stock.totalRemainingKg());
+        assertEquals(BigDecimal.ZERO, stock.totalSellableKg());
+        assertEquals(BigDecimal.ZERO, stock.totalWaitingKg());
+        assertEquals(BigDecimal.ZERO, stock.totalDisputedKg());
     }
 
     private void givenLot(Lot lot) {

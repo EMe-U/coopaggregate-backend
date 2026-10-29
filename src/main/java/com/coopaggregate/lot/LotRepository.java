@@ -68,6 +68,16 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
             """)
     List<LotQuantities> findQuantities(Collection<Long> lotIds);
 
+    // Kg left per grade, read from the batches (deliveries) whatever their lot, split by confirmation status. Reversed
+    // deliveries are not batches. Only confirmed kg can be sold.
+    @Query("""
+            SELECT new com.coopaggregate.lot.GradeKgLeft(g.code, g.name, d.confirmationStatus, SUM(d.remainingKg))
+            FROM Delivery d JOIN d.lot l JOIN l.grade g
+            WHERE d.reversedAt IS NULL AND d.remainingKg > 0
+            GROUP BY g.code, g.name, d.confirmationStatus
+            """)
+    List<GradeKgLeft> findKgLeftByGradeAndStatus();
+
     @Query("""
             SELECT new com.coopaggregate.lot.LotMemberResponse(m.id, m.fullName, m.memberCode, SUM(d.quantityKg))
             FROM Delivery d JOIN d.member m

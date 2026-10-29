@@ -198,8 +198,8 @@ class ReportServiceTest {
     @Test
     void stockIsTheStockPageNowAndLossesAreByReason() {
         when(lotService.stock()).thenReturn(stock(new BigDecimal("550.00"), List.of(
-                new StockResponse.GradeStock("Big", new BigDecimal("250.00")),
-                new StockResponse.GradeStock("Normal", new BigDecimal("300.00")))));
+                new StockResponse.GradeStock("Big", new BigDecimal("250.00"), new BigDecimal("250.00"), BigDecimal.ZERO, BigDecimal.ZERO),
+                new StockResponse.GradeStock("Normal", new BigDecimal("300.00"), new BigDecimal("300.00"), BigDecimal.ZERO, BigDecimal.ZERO))));
         when(reportRepository.findLossKgByReasonBetween(MONDAY, SUNDAY)).thenReturn(List.of(
                 new ReasonKg(LossReason.ROT, new BigDecimal("12.50")),
                 new ReasonKg(LossReason.THEFT, new BigDecimal("3.00"))));
@@ -376,7 +376,7 @@ class ReportServiceTest {
     }
 
     static StockResponse stock(BigDecimal remaining, List<StockResponse.GradeStock> byGrade) {
-        return new StockResponse(remaining, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, 0, 0, 0, byGrade);
+        return new StockResponse(remaining, remaining, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0, 0, 0, byGrade);
     }
 }

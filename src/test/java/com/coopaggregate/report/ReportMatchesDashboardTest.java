@@ -52,8 +52,8 @@ class ReportMatchesDashboardTest {
                 new GradeDeliveredKg("Big", new BigDecimal("420.50")),
                 new GradeDeliveredKg("Normal", new BigDecimal("130.00"))));
         when(lotService.stock()).thenReturn(ReportServiceTest.stock(new BigDecimal("550.00"), List.of(
-                new StockResponse.GradeStock("Big", new BigDecimal("250.00")),
-                new StockResponse.GradeStock("Normal", new BigDecimal("300.00")))));
+                new StockResponse.GradeStock("Big", new BigDecimal("250.00"), new BigDecimal("250.00"), BigDecimal.ZERO, BigDecimal.ZERO),
+                new StockResponse.GradeStock("Normal", new BigDecimal("300.00"), new BigDecimal("300.00"), BigDecimal.ZERO, BigDecimal.ZERO))));
         when(lotService.quantitiesOf(any(List.class))).thenReturn(Map.of());
         when(paymentService.balances(null, null)).thenReturn(new BalancesResponse(1_321_600L, 200_000L, List.of()));
         when(deliveryRepository.countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus.DISPUTED))

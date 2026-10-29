@@ -72,32 +72,54 @@ public class LotService {
         return toResponse(lot);
     }
 
-    // Only open and closed lots still hold potatoes; sold and shared lots have nothing left. The delivered,
-    // sold and lost totals cover all lots, so delivered - lost - sold still equals the remaining kg.
+    // The kg left are read per grade from the batches, whatever their lot, split into sellable (confirmed), waiting
+    // (pending) and disputed kg. The delivered, sold and lost totals cover all lots, so delivered - lost - sold still
+    // equals the remaining kg. The lot counts below are only for information: a lot does not have to be closed to be
+    // sold.
     @Transactional(readOnly = true)
     public StockResponse stock() {
         List<Lot> lots = lotRepository.findByStatusIn(List.of(LotStatus.OPEN, LotStatus.CLOSED));
-        Map<Long, LotQuantities> quantities = quantitiesOf(lots);
 
-        BigDecimal totalRemainingKg = BigDecimal.ZERO;
-        Map<String, BigDecimal> remainingByGradeCode = new TreeMap<>();
+        // By grade code, so the grades are listed in the same order as before.
         Map<String, String> gradeNameByCode = new TreeMap<>();
-        for (Lot lot : lots) {
-            BigDecimal remainingKg = quantities.get(lot.getId()).remainingKg();
-            totalRemainingKg = totalRemainingKg.add(remainingKg);
-            remainingByGradeCode.merge(lot.getGrade().getCode(), remainingKg, BigDecimal::add);
-            gradeNameByCode.put(lot.getGrade().getCode(), lot.getGrade().getName());
+        Map<String, BigDecimal[]> kgByGradeCode = new TreeMap<>();
+        BigDecimal totalSellableKg = BigDecimal.ZERO;
+        BigDecimal totalWaitingKg = BigDecimal.ZERO;
+        BigDecimal totalDisputedKg = BigDecimal.ZERO;
+        for (GradeKgLeft left : lotRepository.findKgLeftByGradeAndStatus()) {
+            gradeNameByCode.put(left.gradeCode(), left.gradeName());
+            BigDecimal[] kg = kgByGradeCode.computeIfAbsent(left.gradeCode(),
+                    code -> new BigDecimal[] {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO});
+            switch (left.status()) {
+                case CONFIRMED -> {
+                    kg[0] = kg[0].add(left.kg());
+                    totalSellableKg = totalSellableKg.add(left.kg());
+                }
+                case PENDING -> {
+                    kg[1] = kg[1].add(left.kg());
+                    totalWaitingKg = totalWaitingKg.add(left.kg());
+                }
+                case DISPUTED -> {
+                    kg[2] = kg[2].add(left.kg());
+                    totalDisputedKg = totalDisputedKg.add(left.kg());
+                }
+            }
         }
-
-        List<StockResponse.GradeStock> byGrade = remainingByGradeCode.entrySet().stream()
-                .map(entry -> new StockResponse.GradeStock(gradeNameByCode.get(entry.getKey()), entry.getValue()))
+        List<StockResponse.GradeStock> byGrade = kgByGradeCode.entrySet().stream()
+                .map(entry -> new StockResponse.GradeStock(gradeNameByCode.get(entry.getKey()),
+                        entry.getValue()[0].add(entry.getValue()[1]).add(entry.getValue()[2]),
+                        entry.getValue()[0], entry.getValue()[1], entry.getValue()[2]))
                 .toList();
+        BigDecimal totalRemainingKg = totalSellableKg.add(totalWaitingKg).add(totalDisputedKg);
         long openLots = lots.stream().filter(lot -> lot.getStatus() == LotStatus.OPEN).count();
 
         Instant startOfToday = KigaliTime.today().atStartOfDay(KigaliTime.ZONE).toInstant();
         Instant startOfTomorrow = KigaliTime.today().plusDays(1).atStartOfDay(KigaliTime.ZONE).toInstant();
         return new StockResponse(
                 totalRemainingKg,
+                totalSellableKg,
+                totalWaitingKg,
+                totalDisputedKg,
                 lotRepository.totalDeliveredKg(),
                 lotRepository.totalSoldKg(),
                 lotRepository.totalLostKg(),

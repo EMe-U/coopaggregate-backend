@@ -32,6 +32,7 @@ class ReversedRecordsAreNotCountedTest {
             "LotRepository, findMembers, 1",
             "LotRepository, deliveredKgBetween, 1",
             "LotRepository, deliveryCountBetween, 1",
+            "LotRepository, findKgLeftByGradeAndStatus, 1",
             "LotShareRepository, findDeliveredByMember, 1",
             "LotShareRepository, findLotsOfMember, 1",
             "DeliveryRepository, findKgByGradeBetween, 1",

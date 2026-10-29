@@ -50,7 +50,7 @@ class PublicServiceTest {
         big.setPackaging("50 kg bags");
         big.setFloorPricePerKg(350L);
         when(gradeRepository.findByActiveTrueOrderByCodeAsc()).thenReturn(List.of(big));
-        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("750.00")));
+        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("750.00"), new BigDecimal("750.00"), BigDecimal.ZERO, BigDecimal.ZERO));
 
         assertEquals(List.of(new PublicGradeResponse("A", "Big", "Binini", "Large potatoes", "Bigger than a fist",
                 "50 kg bags", StockAvailability.AVAILABLE)), service.grades("203.0.113.5"));
@@ -62,9 +62,9 @@ class PublicServiceTest {
     void eachGradeGetsItsLevelFromTheStockPageNumbers() {
         setting.setMinOrderKg(new BigDecimal("100"));
         givenGrades("Big", "Normal", "Small");
-        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("1200.00")),
-                new StockResponse.GradeStock("Normal", new BigDecimal("250.00")),
-                new StockResponse.GradeStock("Small", new BigDecimal("40.00")));
+        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("1200.00"), new BigDecimal("1200.00"), BigDecimal.ZERO, BigDecimal.ZERO),
+                new StockResponse.GradeStock("Normal", new BigDecimal("250.00"), new BigDecimal("250.00"), BigDecimal.ZERO, BigDecimal.ZERO),
+                new StockResponse.GradeStock("Small", new BigDecimal("40.00"), new BigDecimal("40.00"), BigDecimal.ZERO, BigDecimal.ZERO));
 
         assertEquals(List.of(StockAvailability.AVAILABLE, StockAvailability.LIMITED, StockAvailability.NONE),
                 service.grades("203.0.113.5").stream().map(PublicGradeResponse::availability).toList());
@@ -74,8 +74,8 @@ class PublicServiceTest {
     void exactlyTheMinimumOrderIsLimitedAndJustBelowIsNone() {
         setting.setMinOrderKg(new BigDecimal("100"));
         givenGrades("Big", "Normal");
-        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("100.00")),
-                new StockResponse.GradeStock("Normal", new BigDecimal("99.99")));
+        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("100.00"), new BigDecimal("100.00"), BigDecimal.ZERO, BigDecimal.ZERO),
+                new StockResponse.GradeStock("Normal", new BigDecimal("99.99"), new BigDecimal("99.99"), BigDecimal.ZERO, BigDecimal.ZERO));
 
         assertEquals(List.of(StockAvailability.LIMITED, StockAvailability.NONE),
                 service.grades("203.0.113.5").stream().map(PublicGradeResponse::availability).toList());
@@ -85,8 +85,8 @@ class PublicServiceTest {
     void exactly500KgIsAvailableAndJustBelowIsLimited() {
         setting.setMinOrderKg(new BigDecimal("100"));
         givenGrades("Big", "Normal");
-        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("500.00")),
-                new StockResponse.GradeStock("Normal", new BigDecimal("499.99")));
+        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("500.00"), new BigDecimal("500.00"), BigDecimal.ZERO, BigDecimal.ZERO),
+                new StockResponse.GradeStock("Normal", new BigDecimal("499.99"), new BigDecimal("499.99"), BigDecimal.ZERO, BigDecimal.ZERO));
 
         assertEquals(List.of(StockAvailability.AVAILABLE, StockAvailability.LIMITED),
                 service.grades("203.0.113.5").stream().map(PublicGradeResponse::availability).toList());
@@ -95,7 +95,7 @@ class PublicServiceTest {
     @Test
     void gradeWithNoLotsHasNoStock() {
         givenGrades("Big", "Small");
-        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("800.00")));
+        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("800.00"), new BigDecimal("800.00"), BigDecimal.ZERO, BigDecimal.ZERO));
 
         assertEquals(List.of(StockAvailability.AVAILABLE, StockAvailability.NONE),
                 service.grades("203.0.113.5").stream().map(PublicGradeResponse::availability).toList());
@@ -105,8 +105,8 @@ class PublicServiceTest {
     void aMinimumOrderAbove500MakesSmallerStockNone() {
         setting.setMinOrderKg(new BigDecimal("600"));
         givenGrades("Big", "Normal");
-        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("550.00")),
-                new StockResponse.GradeStock("Normal", new BigDecimal("600.00")));
+        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("550.00"), new BigDecimal("550.00"), BigDecimal.ZERO, BigDecimal.ZERO),
+                new StockResponse.GradeStock("Normal", new BigDecimal("600.00"), new BigDecimal("600.00"), BigDecimal.ZERO, BigDecimal.ZERO));
 
         assertEquals(List.of(StockAvailability.NONE, StockAvailability.AVAILABLE),
                 service.grades("203.0.113.5").stream().map(PublicGradeResponse::availability).toList());
@@ -139,8 +139,9 @@ class PublicServiceTest {
     }
 
     private void givenStock(StockResponse.GradeStock... byGrade) {
-        when(lotService.stock()).thenReturn(new StockResponse(new BigDecimal("999.00"), BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0, 0, 0, List.of(byGrade)));
+        when(lotService.stock()).thenReturn(new StockResponse(new BigDecimal("999.00"), new BigDecimal("999.00"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, 0, 0, 0, List.of(byGrade)));
     }
 
     @Test
