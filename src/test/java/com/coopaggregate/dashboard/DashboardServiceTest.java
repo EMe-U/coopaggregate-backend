@@ -117,21 +117,56 @@ class DashboardServiceTest {
     }
 
     @Test
-    void readyToShareCountsSoldLotsAndReadyToSellCountsClosedLotsWithStock() {
+    void readyToShareCountsSoldLots() {
         when(lotRepository.countByStatus(LotStatus.SOLD)).thenReturn(2L);
-        Lot withStock = lot(4L, "A-2026-03", big, LotStatus.CLOSED);
-        Lot empty = lot(5L, "B-2026-02", normal, LotStatus.CLOSED);
-        List<Lot> closed = List.of(withStock, empty);
-        when(lotRepository.findByStatusIn(List.of(LotStatus.CLOSED))).thenReturn(closed);
-        // The second lot was closed and then lost everything, so there is nothing left to sell.
-        when(lotService.quantitiesOf(closed)).thenReturn(Map.of(
-                4L, new LotQuantities(4L, new BigDecimal("800.00"), null, new BigDecimal("300.00"), null, null),
-                5L, new LotQuantities(5L, new BigDecimal("120.00"), new BigDecimal("120.00"), null, null, null)));
+
+        assertEquals(2, service.dashboard(WEDNESDAY).lotsReadyToShare());
+    }
+
+    @Test
+    void gradesWithSellableKgAreCountedWhateverTheirLotsStatus() {
+        // Big has sellable kg (some of them in open lots: no lot has to be closed). Normal has kg left but none of
+        // them is confirmed yet. Small has nothing left and is not listed.
+        when(lotService.stock()).thenReturn(new StockResponse(new BigDecimal("700.00"), new BigDecimal("400.00"),
+                new BigDecimal("250.00"), new BigDecimal("50.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, 0, 2, 1, List.of(
+                new StockResponse.GradeStock("Big", new BigDecimal("400.00"), new BigDecimal("400.00"),
+                        BigDecimal.ZERO, BigDecimal.ZERO),
+                new StockResponse.GradeStock("Normal", new BigDecimal("300.00"), BigDecimal.ZERO,
+                        new BigDecimal("250.00"), new BigDecimal("50.00")))));
 
         DashboardResponse dashboard = service.dashboard(WEDNESDAY);
 
-        assertEquals(2, dashboard.lotsReadyToShare());
-        assertEquals(1, dashboard.lotsReadyToSell());
+        assertEquals(1, dashboard.gradesWithSellableKg());
+        assertEquals(1, dashboard.lotsReadyToSell(), "kept for older screens: the same number");
+    }
+
+    @Test
+    void stockIsSplitIntoSellableWaitingAndDisputedKgInTotalAndPerGrade() {
+        when(lotService.stock()).thenReturn(new StockResponse(new BigDecimal("575.50"), new BigDecimal("500.00"),
+                new BigDecimal("65.50"), new BigDecimal("10.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, 0, 1, 2, List.of(
+                new StockResponse.GradeStock("Big", new BigDecimal("250.00"), new BigDecimal("200.00"),
+                        new BigDecimal("40.00"), new BigDecimal("10.00")),
+                new StockResponse.GradeStock("Normal", new BigDecimal("325.50"), new BigDecimal("300.00"),
+                        new BigDecimal("25.50"), BigDecimal.ZERO))));
+
+        DashboardResponse dashboard = service.dashboard(WEDNESDAY);
+
+        // The existing fields keep their meaning: all the kg left.
+        assertEquals(new BigDecimal("575.50"), dashboard.stockKg());
+        assertEquals(List.of(new DashboardResponse.GradeKg("Big", new BigDecimal("250.00")),
+                new DashboardResponse.GradeKg("Normal", new BigDecimal("325.50"))), dashboard.stockByGrade());
+        // The new fields split them.
+        assertEquals(new BigDecimal("500.00"), dashboard.sellableKg());
+        assertEquals(new BigDecimal("65.50"), dashboard.waitingKg());
+        assertEquals(new BigDecimal("10.00"), dashboard.disputedKg());
+        assertEquals(List.of(
+                new DashboardResponse.GradeStockKg("Big", new BigDecimal("250.00"), new BigDecimal("200.00"),
+                        new BigDecimal("40.00"), new BigDecimal("10.00")),
+                new DashboardResponse.GradeStockKg("Normal", new BigDecimal("325.50"), new BigDecimal("300.00"),
+                        new BigDecimal("25.50"), BigDecimal.ZERO)), dashboard.stockByGradeDetail());
+        assertEquals(2, dashboard.gradesWithSellableKg());
     }
 
     @Test
@@ -215,6 +250,11 @@ class DashboardServiceTest {
         assertEquals(0, dashboard.membersAwaitingPayment());
         assertEquals(0, dashboard.lotsReadyToShare());
         assertEquals(0, dashboard.lotsReadyToSell());
+        assertEquals(0, dashboard.gradesWithSellableKg());
+        assertEquals(BigDecimal.ZERO, dashboard.sellableKg());
+        assertEquals(BigDecimal.ZERO, dashboard.waitingKg());
+        assertEquals(BigDecimal.ZERO, dashboard.disputedKg());
+        assertEquals(List.of(), dashboard.stockByGradeDetail());
         assertEquals(4, dashboard.weeklyDeliveries().size());
         dashboard.weeklyDeliveries().forEach(week -> assertEquals(grades("0", "0", "0"), week.grades()));
     }

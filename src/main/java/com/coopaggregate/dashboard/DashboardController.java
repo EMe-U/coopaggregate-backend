@@ -21,8 +21,9 @@ public class DashboardController {
     }
 
     @GetMapping
-    @Operation(summary = "Members, stock, today's deliveries, open lots, money owed, lots ready to sell or share, "
-            + "and deliveries per grade for the last 4 weeks (Kigali time)")
+    @Operation(summary = "Members, stock (kg left, split into sellable, waiting and disputed kg, in total and per "
+            + "grade), today's deliveries, open lots, money owed, grades with sellable kg, sold lots waiting to be "
+            + "shared, and deliveries per grade for the last 4 weeks (Kigali time)")
     public DashboardResponse dashboard() {
         return dashboardService.dashboard();
     }
