@@ -51,6 +51,13 @@ public class SaleAllocation {
         this.quantityKg = quantityKg;
     }
 
+    /** The kg a sale took from a batch, with what its member is credited for them. */
+    public SaleAllocation(Sale sale, Delivery delivery, BigDecimal quantityKg, long grossRwf, long deductionRwf) {
+        this(sale, delivery, quantityKg);
+        this.grossRwf = grossRwf;
+        this.deductionRwf = deductionRwf;
+    }
+
     public Long getId() {
         return id;
     }

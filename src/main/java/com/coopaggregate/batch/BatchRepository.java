@@ -1,6 +1,7 @@
 package com.coopaggregate.batch;
 
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.domain.Page;
@@ -78,4 +79,24 @@ public interface BatchRepository extends Repository<Delivery, Long> {
             WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL AND d.confirmationStatus = :status
             """)
     BigDecimal gradeRemainingKgWithStatus(Long gradeId, ConfirmationStatus status);
+
+    // The lots a sale of the grade may take kg from, in id order: the order the sale locks them in.
+    @Query("""
+            SELECT DISTINCT d.lot.id FROM Delivery d
+            WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL AND d.remainingKg > 0
+              AND d.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.CONFIRMED
+            ORDER BY d.lot.id
+            """)
+    List<Long> findLotIdsWithSellableBatches(Long gradeId);
+
+    // SELECT ... FOR UPDATE, oldest first across the lots. The caller already holds the grade and these lots, so the
+    // order of locks stays grade, lots, then batches.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            SELECT d FROM Delivery d
+            WHERE d.lot.id IN :lotIds AND d.reversedAt IS NULL AND d.remainingKg > 0
+              AND d.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.CONFIRMED
+            ORDER BY d.deliveredAt, d.id
+            """)
+    List<Delivery> lockSellableBatches(Collection<Long> lotIds);
 }

@@ -16,5 +16,7 @@ public enum AuditAction {
     IDENTITY_VERIFICATION_FAILED,
     // Changes the manager makes to buyers' purchase requests. The details hold the request code, not personal data.
     BUYER_REQUEST_STATUS_CHANGED,
-    BUYER_REQUEST_CONVERTED
+    BUYER_REQUEST_CONVERTED,
+    // A sale passed over the oldest batches. The details hold the sale code, the receipt codes and the reason.
+    SALE_FIFO_SKIPPED
 }

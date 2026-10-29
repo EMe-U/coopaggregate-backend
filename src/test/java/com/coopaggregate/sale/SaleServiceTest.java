@@ -1,7 +1,6 @@
 package com.coopaggregate.sale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -19,7 +18,9 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,25 +32,18 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.audit.AuditAction;
 import com.coopaggregate.batch.BatchAllocator;
+import com.coopaggregate.batch.LossAllocation;
+import com.coopaggregate.batch.LossAllocationRepository;
 import com.coopaggregate.batch.SaleAllocation;
-import com.coopaggregate.batch.SaleAllocationRepository;
-import com.coopaggregate.buyer.Buyer;
-import com.coopaggregate.buyer.BuyerRepository;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.error.BadRequestException;
-import com.coopaggregate.grade.Grade;
 import com.coopaggregate.ledger.LedgerEntryType;
-import com.coopaggregate.ledger.LedgerService;
-import com.coopaggregate.lot.Lot;
-import com.coopaggregate.lot.LotQuantities;
-import com.coopaggregate.lot.LotRepository;
-import com.coopaggregate.lot.LotService;
+import com.coopaggregate.loss.Loss;
 import com.coopaggregate.lot.LotStatus;
-import com.coopaggregate.manager.Manager;
-import com.coopaggregate.member.Member;
 
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
@@ -58,221 +52,347 @@ import jakarta.persistence.criteria.Root;
 
 class SaleServiceTest {
 
-    private BatchAllocator batchAllocator;
-    private SaleAllocationRepository saleAllocationRepository;
-
     private static final UUID CLIENT_UUID = UUID.fromString("0f8fad5b-d9cb-469f-a165-70867728950e");
 
-    private SaleRepository saleRepository;
-    private BuyerRepository buyerRepository;
-    private LedgerService ledgerService;
-    private Grade grade;
-    private Lot lot;
-    private Manager manager;
+    private SaleTestFixture f;
     private SaleService service;
 
     @BeforeEach
     void setUp() {
-        saleRepository = mock(SaleRepository.class);
-        buyerRepository = mock(BuyerRepository.class);
-        LotRepository lotRepository = mock(LotRepository.class);
-        LotService lotService = mock(LotService.class);
-        ledgerService = mock(LedgerService.class);
-
-        grade = new Grade();
-        grade.setCode("A");
-        grade.setName("Big");
-        lot = new Lot();
-        ReflectionTestUtils.setField(lot, "id", 3L);
-        lot.setLotCode("A-2026-01");
-        lot.setGrade(grade);
-        lot.setStatus(LotStatus.CLOSED);
-        when(lotRepository.findForUpdateById(3L)).thenReturn(Optional.of(lot));
-        // 1000 delivered, 25.50 lost, 400 sold: 574.50 kg remain.
-        when(lotService.quantitiesOf(lot)).thenReturn(new LotQuantities(3L, new BigDecimal("1000.00"),
-                new BigDecimal("25.50"), new BigDecimal("400.00"), 120000L, 4L));
-
-        Buyer buyer = new Buyer();
-        ReflectionTestUtils.setField(buyer, "id", 2L);
-        buyer.setName("Kalisa Traders");
-        when(buyerRepository.findById(2L)).thenReturn(Optional.of(buyer));
-
-        when(saleRepository.findByClientUuid(any())).thenReturn(Optional.empty());
-        when(saleRepository.save(any(Sale.class))).thenAnswer(invocation -> {
-            Sale sale = invocation.getArgument(0);
-            ReflectionTestUtils.setField(sale, "id", 11L);
-            return sale;
-        });
-
-        manager = new Manager();
-        batchAllocator = mock(BatchAllocator.class);
-        saleAllocationRepository = mock(SaleAllocationRepository.class);
-        service = new SaleService(saleRepository, mock(SaleOrderRepository.class), lotRepository, buyerRepository,
-                lotService, ledgerService, batchAllocator, saleAllocationRepository);
+        f = new SaleTestFixture();
+        f.stockOfBig();
+        service = f.service;
     }
 
+    // --- Taking kg from the oldest batches ---
+
     @Test
-    void saleIsRecordedFromClosedLot() {
-        RecordedSale result = sell("100.00", 300L);
+    void kgComeFromTheOldestBatchesWhateverTheirLot() {
+        RecordedSale result = sell("120.00", 300L);
 
         assertTrue(result.created());
         SaleResponse sale = result.sale();
         assertEquals(11L, sale.id());
         assertTrue(sale.saleCode().matches("SAL-[2-9A-HJKMNP-Z]{4}"), sale.saleCode());
-        assertEquals("A-2026-01", sale.lotCode());
-        assertEquals("Kalisa Traders", sale.buyerName());
-        assertEquals(30000L, sale.totalAmountRwf());
-        assertEquals(KigaliTime.today(), sale.soldAt());
-        assertEquals(LotStatus.CLOSED, sale.lotStatus());
+        assertEquals("Big", sale.gradeName());
+        assertNull(sale.lotId(), "a sale by grade has no lot of its own");
+        // Batch 2 (lot A-2) is the oldest, then batch 1 (lot A-1); batch 3 is not reached.
+        assertEquals(List.of(2L, 1L), sale.batches().stream().map(SaleResponse.BatchLine::deliveryId).toList());
+        assertEquals(List.of("A-2026-02", "A-2026-01"),
+                sale.batches().stream().map(SaleResponse.BatchLine::lotCode).toList());
+        assertEquals(new BigDecimal("50.00"), f.deliveries.get(1).getSoldKg());
+        assertEquals(new BigDecimal("70.00"), f.deliveries.get(0).getSoldKg());
+        assertEquals(BigDecimal.ZERO, f.deliveries.get(2).getSoldKg());
+    }
+
+    @Test
+    void theLastKgCanBeSoldAndEmptiedLotsBecomeSold() {
+        SaleResponse sale = sell("250.00", 300L).sale();
+
+        assertEquals(3, sale.batches().size());
+        f.deliveries.forEach(batch -> assertEquals(0, batch.unallocatedKg().signum()));
+        // The closed lot and the open lot are both sold, closing was not needed; nothing was closed by hand.
+        assertEquals(LotStatus.SOLD, f.lotA1.getStatus());
+        assertEquals(LotStatus.SOLD, f.lotA2.getStatus());
+        assertEquals(KigaliTime.today(), f.lotA2.getCloseDate());
+    }
+
+    @Test
+    void aLotWithKgLeftKeepsItsStatus() {
+        sell("120.00", 300L);
+
+        assertEquals(LotStatus.CLOSED, f.lotA1.getStatus());
+        // Lot A-2 sold its only batch of 50 kg completely.
+        assertEquals(LotStatus.SOLD, f.lotA2.getStatus());
+    }
+
+    @Test
+    void pendingAndDisputedBatchesAreNotSold() {
+        f.pendingBatch(9L, f.lotA1, f.alice, "2026-09-01T08:00:00Z", "500.00");
+
+        BadRequestException e = assertThrows(BadRequestException.class, () -> sell("300.00", 300L));
+
+        assertEquals("Only 250.00 kg of Big can be sold now, but 300.00 kg were asked for. 500.00 kg are waiting for "
+                + "their members to confirm them.", e.getMessage());
+    }
+
+    @Test
+    void notEnoughSellableKgIs400AndSavesNothing() {
+        assertThrows(BadRequestException.class, () -> sell("250.01", 300L));
+
+        assertNothingSaved();
+        f.deliveries.forEach(batch -> assertEquals(BigDecimal.ZERO, batch.getSoldKg()));
+        assertEquals(LotStatus.CLOSED, f.lotA1.getStatus());
+    }
+
+    @Test
+    void aPriceAtOrBelowTheDeductionIs400AndSavesNothing() {
+        BadRequestException e = assertThrows(BadRequestException.class, () -> sell("10.00", 5L));
+
+        assertEquals("The price must be more than the deduction of 5 RWF per kg, otherwise the members would earn "
+                + "nothing.", e.getMessage());
+        assertNothingSaved();
+    }
+
+    @Test
+    void aSaleOfAnUnknownGradeOrBuyerIs400AndSavesNothing() {
+        assertEquals("Grade 99 does not exist.", assertThrows(BadRequestException.class,
+                () -> service.record(request(99L, 2L, "10.00", 300L, null, null), f.manager)).getMessage());
+        assertEquals("Buyer 99 does not exist.", assertThrows(BadRequestException.class,
+                () -> service.record(request(1L, 99L, "10.00", 300L, null, null), f.manager)).getMessage());
+        assertNothingSaved();
+    }
+
+    // --- Money ---
+
+    @Test
+    void creditsAddUpExactlyToTheSaleTotal() {
+        SaleResponse sale = sell("120.00", 301L).sale();
+
+        assertEquals(36_120L, sale.totalAmountRwf());
+        assertEquals(36_120L, sale.batches().stream().mapToLong(SaleResponse.BatchLine::grossRwf).sum());
+        assertEquals(36_120L, f.ledger.get(0).amount());
+        // Each member: their part of the amount minus 5 RWF per kg taken.
+        assertEquals(new SaleResponse.BatchLine(2L, "RCT-0002", 4L, "A-2026-02", 6L, "M-0006", "Habimana Bosco",
+                new BigDecimal("50.00"), 15_050L, 250L, 14_800L), sale.batches().get(0));
+        assertEquals(new SaleResponse.BatchLine(1L, "RCT-0001", 3L, "A-2026-01", 5L, "M-0005", "Uwimana Claudine",
+                new BigDecimal("70.00"), 21_070L, 350L, 20_720L), sale.batches().get(1));
+        assertEquals(600L, sale.totalDeductionRwf());
+        assertEquals(35_520L, sale.totalNetRwf());
+        assertEquals(sale.totalAmountRwf(), sale.totalDeductionRwf() + sale.totalNetRwf());
+    }
+
+    @Test
+    void theSaleTotalIsKilogramsTimesPriceRoundedToWholeRwf() {
+        assertEquals(150L, sell("0.50", 300L).sale().totalAmountRwf());
     }
 
     @ParameterizedTest
-    @CsvSource({"100.00, 300, 30000", "120.25, 333, 40043", "0.50, 301, 151", "574.50, 250, 143625"})
+    @CsvSource({"100.00, 300, 30000", "0.01, 300, 3", "12.25, 310, 3798", "12.30, 310, 3813"})
     void totalIsKilogramsTimesPriceRoundedToWholeRwf(String quantityKg, long pricePerKg, long expectedTotal) {
         assertEquals(expectedTotal, sell(quantityKg, pricePerKg).sale().totalAmountRwf());
     }
 
     @Test
-    void saleFromOpenLotIsRejected() {
-        lot.setStatus(LotStatus.OPEN);
+    void membersOfOlderSalesDoNotChange() {
+        // The batch of the first sale is used up before the second sale starts.
+        sell("50.00", 300L);
+        SaleResponse second = service.record(new SaleRequest(UUID.randomUUID(), 1L, 2L, new BigDecimal("60.00"), 320L,
+                null, null, null), f.manager).sale();
 
-        BadRequestException e = assertThrows(BadRequestException.class, () -> sell("100.00", 300L));
-
-        assertEquals("Lot A-2026-01 is OPEN. Only a closed lot can be sold.", e.getMessage());
-        verify(saleRepository, never()).save(any());
-    }
-
-    @Test
-    void saleFromSoldLotIsRejected() {
-        lot.setStatus(LotStatus.SOLD);
-
-        assertThrows(BadRequestException.class, () -> sell("10.00", 300L));
-    }
-
-    @Test
-    void saleMoreThanRemainingIsRejected() {
-        BadRequestException e = assertThrows(BadRequestException.class, () -> sell("574.51", 300L));
-
-        assertEquals("Only 574.50 kg remain in lot A-2026-01.", e.getMessage());
-        verify(saleRepository, never()).save(any());
-        verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void unknownBuyerIsRejected() {
-        when(buyerRepository.findById(2L)).thenReturn(Optional.empty());
-
-        BadRequestException e = assertThrows(BadRequestException.class, () -> sell("10.00", 300L));
-
-        assertEquals("Buyer 2 does not exist.", e.getMessage());
-    }
-
-    @Test
-    void lotBecomesSoldWhenNothingRemains() {
-        SaleResponse sale = sell("574.50", 300L).sale();
-
-        assertEquals(LotStatus.SOLD, lot.getStatus());
-        assertEquals(LotStatus.SOLD, sale.lotStatus());
-    }
-
-    @Test
-    void lotStaysClosedWhileSomethingRemains() {
-        sell("574.49", 300L);
-
-        assertEquals(LotStatus.CLOSED, lot.getStatus());
+        assertEquals(List.of(1L), second.batches().stream().map(SaleResponse.BatchLine::deliveryId).toList());
+        assertEquals(new BigDecimal("60.00"), f.deliveries.get(0).getSoldKg());
+        assertEquals(new BigDecimal("50.00"), f.deliveries.get(1).getSoldKg());
     }
 
     @Test
     void priceBelowFloorIsFlaggedButSaved() {
-        grade.setFloorPricePerKg(300L);
+        f.big.setFloorPricePerKg(300L);
 
-        RecordedSale result = sell("100.00", 250L);
-
-        assertTrue(result.sale().belowFloor());
-        verify(saleRepository).save(any(Sale.class));
+        assertTrue(sell("100.00", 299L).sale().belowFloor());
     }
 
     @Test
     void priceAtOrAboveFloorIsNotFlagged() {
-        grade.setFloorPricePerKg(300L);
+        f.big.setFloorPricePerKg(300L);
 
         assertFalse(sell("100.00", 300L).sale().belowFloor());
-        assertFalse(sell("100.00", 350L).sale().belowFloor());
     }
 
     @Test
     void gradeWithoutFloorPriceIsNeverBelowFloor() {
-        grade.setFloorPricePerKg(null);
+        f.big.setFloorPricePerKg(null);
 
-        assertFalse(sell("100.00", 1L).sale().belowFloor());
+        assertFalse(sell("100.00", 6L).sale().belowFloor());
+    }
+
+    // --- The ledger ---
+
+    @Test
+    void saleIsRecordedInLedgerThenOneCreditPerAllocation() {
+        SaleResponse sale = sell("120.00", 300L).sale();
+
+        assertEquals(3, f.ledger.size());
+        SaleTestFixture.Ledgered saleEntry = f.ledger.get(0);
+        assertEquals(LedgerEntryType.SALE, saleEntry.type());
+        assertEquals("SALE", saleEntry.relatedType());
+        assertEquals(11L, saleEntry.relatedId());
+        assertEquals(new BigDecimal("120.00"), saleEntry.kg());
+        assertEquals(36_000L, saleEntry.amount());
+        assertEquals("Sale " + sale.saleCode() + " of Big to Kalisa Traders", saleEntry.reason());
     }
 
     @Test
-    void sameClientUuidReturnsExistingSale() {
-        lot.setStatus(LotStatus.SOLD);
-        Sale existing = new Sale();
-        ReflectionTestUtils.setField(existing, "id", 7L);
-        existing.setSaleCode("SAL-7K2Q");
-        existing.setGrade(grade);
-        existing.setLot(lot);
-        Buyer buyer = new Buyer();
-        buyer.setName("Kalisa Traders");
-        existing.setBuyer(buyer);
-        existing.setQuantityKg(new BigDecimal("574.50"));
-        existing.setPricePerKg(300L);
-        existing.setTotalAmount(172350L);
-        when(saleRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(existing));
+    void everyAllocationHasExactlyOneCreditOfItsNetAmount() {
+        sell("120.00", 300L);
 
-        RecordedSale result = sell("574.50", 300L);
-
-        assertFalse(result.created());
-        assertEquals(7L, result.sale().id());
-        assertEquals("SAL-7K2Q", result.sale().saleCode());
-        verify(saleRepository, never()).save(any());
-        verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
+        assertEquals(2, f.savedAllocations.size());
+        List<SaleTestFixture.Ledgered> credits = f.credits();
+        assertEquals(f.savedAllocations.size(), credits.size());
+        for (SaleAllocation allocation : f.savedAllocations) {
+            List<SaleTestFixture.Ledgered> own = credits.stream()
+                    .filter(credit -> credit.relatedId().equals(allocation.getId())).toList();
+            assertEquals(1, own.size(), "credits of allocation " + allocation.getId());
+            assertEquals("SALE_ALLOCATION", own.get(0).relatedType());
+            assertEquals(allocation.getQuantityKg(), own.get(0).kg());
+            assertEquals(allocation.netRwf(), own.get(0).amount());
+        }
+        assertEquals(Set.of(101L, 102L), credits.stream().map(SaleTestFixture.Ledgered::relatedId)
+                .collect(Collectors.toSet()));
+        // The reason holds codes only, never a name.
+        assertEquals("Credit for sale " + f.savedSales.get(0).getSaleCode() + " from RCT-0002",
+                credits.get(0).reason());
     }
 
     @Test
-    void saleTakesItsKgFromTheLotsBatches() {
-        sell("100.00", 300L);
+    void locksAreTakenGradeThenLotsInIdOrderThenBatchesThenLedger() {
+        sell("120.00", 300L);
 
-        ArgumentCaptor<Sale> sale = ArgumentCaptor.forClass(Sale.class);
-        verify(batchAllocator).allocateSale(sale.capture());
-        assertEquals(new BigDecimal("100.00"), sale.getValue().getQuantityKg());
-        assertEquals(11L, sale.getValue().getId());
+        // The oldest batch is in lot 4, but lot 3 is locked first.
+        assertEquals(List.of("grade:1", "lot:3", "lot:4", "batches", "sale", "allocation", "allocation",
+                "ledger:SALE", "ledger:SALE_CREDIT", "ledger:SALE_CREDIT"), f.calls);
     }
 
     @Test
-    void saleKeepsTheGradeOfItsLot() {
-        sell("100.00", 300L);
+    void lotsWithoutSellableBatchesAreNotLocked() {
+        f.deliveries.get(1).addSoldKg(new BigDecimal("50.00"));
 
-        ArgumentCaptor<Sale> sale = ArgumentCaptor.forClass(Sale.class);
-        verify(batchAllocator).allocateSale(sale.capture());
-        assertSame(grade, sale.getValue().getGrade());
+        sell("10.00", 300L);
+
+        assertEquals(List.of("grade:1", "lot:3", "batches"), f.calls.subList(0, 3));
+        verify(f.lotRepository, never()).findForUpdateById(4L);
+    }
+
+    // --- Repeating a request ---
+
+    @Test
+    void sameClientUuidReturnsTheFirstSaleAndChangesNothing() {
+        SaleResponse first = sell("120.00", 300L).sale();
+        f.calls.clear();
+        f.ledger.clear();
+        when(f.saleRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(f.savedSales.get(0)));
+
+        RecordedSale again = sell("120.00", 300L);
+
+        assertFalse(again.created());
+        assertEquals(first.id(), again.sale().id());
+        assertEquals(first.batches(), again.sale().batches());
+        assertEquals(1, f.savedSales.size());
+        assertEquals(2, f.savedAllocations.size());
+        assertEquals(new BigDecimal("70.00"), f.deliveries.get(0).getSoldKg(), "no kg were taken twice");
+        assertTrue(f.ledger.isEmpty());
+        // Only the grade was locked, so the repeat waits for the first request.
+        assertEquals(List.of("grade:1"), f.calls);
+    }
+
+    // --- Skipping the oldest batch ---
+
+    @Test
+    void aSkippedBatchIsPassedOverAndTheSkipIsRecordedInTheAuditLog() {
+        SaleResponse sale = service.record(request(1L, 2L, "120.00", 300L, List.of(2L),
+                "  Customer wants potatoes from Alice only  "), f.manager).sale();
+
+        assertEquals(List.of(1L, 3L), sale.batches().stream().map(SaleResponse.BatchLine::deliveryId).toList());
+        assertEquals(BigDecimal.ZERO, f.deliveries.get(1).getSoldKg());
+        assertEquals(1, f.audits.size());
+        assertEquals(AuditAction.SALE_FIFO_SKIPPED, f.audits.get(0).getAction());
+        assertEquals("Sale " + sale.saleCode() + ": skipped RCT-0002. Reason: Customer wants potatoes from Alice only",
+                f.audits.get(0).getDetails());
+        assertNull(f.audits.get(0).getMember());
     }
 
     @Test
-    void refusedSaleTakesNoKgFromTheBatches() {
-        assertThrows(RuntimeException.class, () -> sell("999999.00", 300L));
+    void aSaleWithoutSkipsWritesNoAuditEntry() {
+        sell("120.00", 300L);
 
-        verify(batchAllocator, never()).allocateSale(any());
+        assertTrue(f.audits.isEmpty());
     }
 
     @Test
-    void saleIsRecordedInLedger() {
-        SaleResponse sale = sell("100.00", 300L).sale();
+    void skippingNeedsAReasonOf10To500Characters() {
+        String message = "A reason of 10 to 500 characters is needed to skip a batch.";
+        for (String reason : new String[] {null, "", "         ", "too short", "x".repeat(501)}) {
+            assertEquals(message, assertThrows(BadRequestException.class, () -> service.record(
+                    request(1L, 2L, "120.00", 300L, List.of(2L), reason), f.manager)).getMessage(),
+                    String.valueOf(reason));
+        }
 
-        verify(ledgerService).record(LedgerEntryType.SALE, "SALE", 11L, new BigDecimal("100.00"), 30000L,
-                "Sale " + sale.saleCode() + " from A-2026-01 to Kalisa Traders", manager);
+        // Refused before anything is locked or saved.
+        assertTrue(f.calls.isEmpty());
+        assertNothingSaved();
+        assertEquals(BigDecimal.ZERO, f.deliveries.get(1).getSoldKg());
     }
+
+    @Test
+    void aReasonWithoutSkipsIsIgnored() {
+        service.record(request(1L, 2L, "120.00", 300L, List.of(), "not needed"), f.manager);
+
+        assertTrue(f.audits.isEmpty());
+    }
+
+    @Test
+    void aSkippedBatchTheSaleWouldNotReachIsRefusedAndSavesNothing() {
+        BadRequestException e = assertThrows(BadRequestException.class, () -> service.record(
+                request(1L, 2L, "40.00", 300L, List.of(3L), "Wants the older potatoes"), f.manager));
+
+        assertEquals("Batch RCT-0003 would not be used by this sale, so it does not need to be skipped.",
+                e.getMessage());
+        assertNothingSaved();
+        assertTrue(f.audits.isEmpty());
+    }
+
+    // --- A sale and a loss on the same lot ---
+
+    @Test
+    void aLossOnTheSameLotOnlyTakesWhatTheSaleLeft() {
+        sell("120.00", 300L);
+        // The sale took 70 kg from batch 1 (lot A-1) and all of batch 2 (lot A-2).
+        LossAllocationRepository lossAllocations = mock(LossAllocationRepository.class);
+        when(f.batchRepository.lockBatchesWithKgLeft(3L)).thenAnswer(invocation -> f.deliveries.stream()
+                .filter(d -> d.getLot() == f.lotA1 && d.unallocatedKg().signum() > 0)
+                .sorted(java.util.Comparator.comparing(Delivery::getDeliveredAt).thenComparing(Delivery::getId))
+                .toList());
+        Loss loss = new Loss();
+        ReflectionTestUtils.setField(loss, "id", 1L);
+        loss.setLot(f.lotA1);
+        loss.setQuantityKg(new BigDecimal("40.00"));
+
+        new BatchAllocator(f.batchRepository, lossAllocations).allocateLoss(loss);
+
+        Delivery first = f.deliveries.get(0);
+        Delivery third = f.deliveries.get(2);
+        assertEquals(new BigDecimal("70.00"), first.getSoldKg());
+        assertEquals(new BigDecimal("30.00"), first.getLostKg());
+        assertEquals(new BigDecimal("10.00"), third.getLostKg());
+        assertEquals(0, first.unallocatedKg().signum());
+        assertEquals(new BigDecimal("90.00"), third.unallocatedKg());
+        verify(lossAllocations, times(2)).save(any(LossAllocation.class));
+        // The lot has 200 kg: 70 sold, 40 lost, 90 left.
+        assertEquals(new BigDecimal("90.00"), f.lotService.quantitiesOf(List.of(f.lotA1)).get(3L).remainingKg());
+    }
+
+    @Test
+    void aSaleAfterALossOnTheSameLotOnlyTakesWhatTheLossLeft() {
+        f.deliveries.get(0).addLostKg(new BigDecimal("60.00"));
+
+        SaleResponse sale = sell("140.00", 300L).sale();
+
+        // Batch 2 (50 kg), then batch 1 with only 40 kg left, then batch 3 with 50 of its 100 kg.
+        assertEquals(List.of(new BigDecimal("50.00"), new BigDecimal("40.00"), new BigDecimal("50.00")),
+                sale.batches().stream().map(SaleResponse.BatchLine::kg).toList());
+        f.deliveries.forEach(batch -> assertTrue(batch.getSoldKg().add(batch.getLostKg())
+                .compareTo(batch.getQuantityKg()) <= 0));
+    }
+
+    // --- Listing ---
 
     @Test
     void summaryAddsUpThisMonthsSales() {
         LocalDate first = LocalDate.of(2026, 10, 1);
         LocalDate last = LocalDate.of(2026, 10, 31);
-        when(saleRepository.totalAmountBetween(first, last)).thenReturn(160250L);
-        when(saleRepository.totalKgBetween(first, last)).thenReturn(new BigDecimal("500.75"));
-        when(saleRepository.buyerCountBetween(first, last)).thenReturn(3L);
+        when(f.saleRepository.totalAmountBetween(first, last)).thenReturn(160250L);
+        when(f.saleRepository.totalKgBetween(first, last)).thenReturn(new BigDecimal("500.75"));
+        when(f.saleRepository.buyerCountBetween(first, last)).thenReturn(3L);
 
         SaleSummaryResponse summary = service.summary(LocalDate.of(2026, 10, 9));
 
@@ -282,83 +402,38 @@ class SaleServiceTest {
 
     @Test
     void averagePriceIsZeroWithoutSales() {
-        when(saleRepository.totalAmountBetween(any(), any())).thenReturn(0L);
-        when(saleRepository.totalKgBetween(any(), any())).thenReturn(BigDecimal.ZERO);
+        when(f.saleRepository.totalAmountBetween(any(), any())).thenReturn(0L);
+        when(f.saleRepository.totalKgBetween(any(), any())).thenReturn(BigDecimal.ZERO);
 
         SaleSummaryResponse summary = service.summary(LocalDate.of(2028, 2, 29));
 
         assertEquals(BigDecimal.ZERO, summary.averagePricePerKg());
-        verify(saleRepository).totalKgBetween(LocalDate.of(2028, 2, 1), LocalDate.of(2028, 2, 29));
+        verify(f.saleRepository).totalKgBetween(LocalDate.of(2028, 2, 1), LocalDate.of(2028, 2, 29));
     }
 
     @Test
     void saleResponseListsTheBatchesAndWhatEachMemberWasCredited() {
-        Sale sale = new Sale();
-        ReflectionTestUtils.setField(sale, "id", 7L);
-        sale.setSaleCode("SAL-7K2Q");
-        sale.setGrade(grade);
-        Buyer buyer = new Buyer();
-        buyer.setName("Kalisa Traders");
-        sale.setBuyer(buyer);
-        sale.setQuantityKg(new BigDecimal("150.00"));
-        sale.setPricePerKg(300L);
-        sale.setTotalAmount(45_000L);
-        when(saleRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(sale));
-        when(saleAllocationRepository.findBySaleIdOrderById(7L)).thenReturn(List.of(
-                credit(sale, 42L, "RCT-0042", "100.00", 30_000L, 500L),
-                credit(sale, 43L, "RCT-0043", "50.00", 15_000L, 250L)));
+        SaleResponse sale = sell("120.00", 300L).sale();
 
-        SaleResponse response = sell("150.00", 300L).sale();
-
-        assertNull(response.lotId(), "a sale by grade has no lot of its own");
-        assertEquals(List.of("RCT-0042", "RCT-0043"),
-                response.batches().stream().map(SaleResponse.BatchLine::receiptCode).toList());
-        assertEquals(new SaleResponse.BatchLine(42L, "RCT-0042", 3L, "A-2026-01", 5L, "M-0005", "Uwimana Claudine",
-                new BigDecimal("100.00"), 30_000L, 500L, 29_500L), response.batches().get(0));
-        assertEquals(750L, response.totalDeductionRwf());
-        assertEquals(44_250L, response.totalNetRwf());
+        assertEquals(2, sale.batches().size());
+        assertEquals(35_400L, sale.totalNetRwf());
+        assertEquals(600L, sale.totalDeductionRwf());
     }
 
     @Test
-    void saleMadeBeforeCreditsShowsItsBatchesWithoutMoney() {
-        Sale sale = new Sale();
-        ReflectionTestUtils.setField(sale, "id", 7L);
-        sale.setGrade(grade);
-        sale.setLot(lot);
-        sale.setBuyer(new Buyer());
-        when(saleRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(sale));
-        SaleAllocation old = new SaleAllocation(sale, delivery(42L, "RCT-0042"), new BigDecimal("100.00"));
-        when(saleAllocationRepository.findBySaleIdOrderById(7L)).thenReturn(List.of(old));
-
-        SaleResponse response = sell("100.00", 300L).sale();
-
-        assertEquals("A-2026-01", response.lotCode());
-        assertEquals(1, response.batches().size());
-        assertNull(response.batches().get(0).netRwf());
-        assertNull(response.totalNetRwf(), "its members are paid through the lot share");
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
     void listBuildsTheBatchesOfAWholePageInOneQuery() {
-        Sale one = new Sale();
-        ReflectionTestUtils.setField(one, "id", 7L);
-        one.setGrade(grade);
-        one.setBuyer(new Buyer());
-        Sale two = new Sale();
-        ReflectionTestUtils.setField(two, "id", 8L);
-        two.setGrade(grade);
-        two.setBuyer(new Buyer());
-        when(saleRepository.findAll(any(Specification.class), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(one, two)));
-        when(saleAllocationRepository.findBySaleIdInOrderByIdAsc(List.of(7L, 8L))).thenReturn(List.of(
-                credit(two, 43L, "RCT-0043", "50.00", 15_000L, 250L)));
+        sell("120.00", 300L);
+        Sale other = new Sale();
+        ReflectionTestUtils.setField(other, "id", 99L);
+        other.setGrade(f.big);
+        other.setBuyer(f.buyer);
+        when(f.saleRepository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(f.savedSales.get(0), other)));
 
         PageResponse<SaleResponse> page = service.list(null, null, null, null, 0, 20);
 
-        assertEquals(0, page.content().get(0).batches().size());
-        assertEquals(1, page.content().get(1).batches().size());
-        verify(saleAllocationRepository).findBySaleIdInOrderByIdAsc(List.of(7L, 8L));
+        assertEquals(2, page.content().get(0).batches().size());
+        assertEquals(0, page.content().get(1).batches().size());
     }
 
     @Test
@@ -398,7 +473,7 @@ class SaleServiceTest {
     @SuppressWarnings("unchecked")
     private CriteriaBuilder applyListFilters(String search, Long gradeId, Root<Sale> root) {
         ArgumentCaptor<Specification<Sale>> spec = ArgumentCaptor.forClass(Specification.class);
-        when(saleRepository.findAll(spec.capture(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
+        when(f.saleRepository.findAll(spec.capture(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
 
         service.list(search, null, null, gradeId, 0, 20);
 
@@ -412,29 +487,22 @@ class SaleServiceTest {
         return mock(Root.class, RETURNS_DEEP_STUBS);
     }
 
-    private Delivery delivery(Long id, String receiptCode) {
-        Member member = new Member();
-        ReflectionTestUtils.setField(member, "id", 5L);
-        member.setMemberCode("M-0005");
-        member.setFullName("Uwimana Claudine");
-        Delivery delivery = new Delivery();
-        ReflectionTestUtils.setField(delivery, "id", id);
-        delivery.setReceiptCode(receiptCode);
-        delivery.setMember(member);
-        delivery.setLot(lot);
-        return delivery;
-    }
+    // --- Helpers ---
 
-    private SaleAllocation credit(Sale sale, Long deliveryId, String receiptCode, String kg, long gross,
-                                  long deduction) {
-        SaleAllocation allocation = new SaleAllocation(sale, delivery(deliveryId, receiptCode), new BigDecimal(kg));
-        ReflectionTestUtils.setField(allocation, "grossRwf", gross);
-        ReflectionTestUtils.setField(allocation, "deductionRwf", deduction);
-        return allocation;
+    private void assertNothingSaved() {
+        verify(f.saleRepository, never()).save(any());
+        assertTrue(f.savedAllocations.isEmpty());
+        assertTrue(f.ledger.isEmpty());
+        assertTrue(f.audits.isEmpty());
     }
 
     private RecordedSale sell(String quantityKg, long pricePerKg) {
-        return service.record(
-                new SaleRequest(CLIENT_UUID, 3L, 2L, new BigDecimal(quantityKg), pricePerKg, null), manager);
+        return service.record(request(1L, 2L, quantityKg, pricePerKg, null, null), f.manager);
+    }
+
+    private static SaleRequest request(Long gradeId, Long buyerId, String quantityKg, long pricePerKg,
+                                       List<Long> skipDeliveryIds, String skipReason) {
+        return new SaleRequest(CLIENT_UUID, gradeId, buyerId, new BigDecimal(quantityKg), pricePerKg, null,
+                skipDeliveryIds, skipReason);
     }
 }

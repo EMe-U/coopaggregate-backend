@@ -25,8 +25,9 @@ import com.coopaggregate.lot.Lot;
 import com.coopaggregate.sale.Sale;
 
 /**
- * Sales and losses take kg from the lot's oldest batches first. After every step the batches must add up to the
- * lot's own totals, computed here independently: delivered (not reversed) minus lost minus sold.
+ * Losses take kg from the lot's oldest batches first, and sales take kg from the oldest batches too (SalePlanner,
+ * as SaleService does). After every step the batches must add up to the lot's own totals, computed here
+ * independently: delivered (not reversed) minus lost minus sold.
  */
 class BatchAllocatorTest {
 
@@ -51,11 +52,6 @@ class BatchAllocatorTest {
                 .filter(d -> !d.isReversed() && d.unallocatedKg().signum() > 0)
                 .sorted(Comparator.comparing(Delivery::getDeliveredAt).thenComparing(Delivery::getId))
                 .toList());
-        SaleAllocationRepository saleAllocationRepository = mock(SaleAllocationRepository.class);
-        when(saleAllocationRepository.save(any(SaleAllocation.class))).thenAnswer(invocation -> {
-            saleAllocations.add(invocation.getArgument(0));
-            return invocation.getArgument(0);
-        });
         LossAllocationRepository lossAllocationRepository = mock(LossAllocationRepository.class);
         when(lossAllocationRepository.save(any(LossAllocation.class))).thenAnswer(invocation -> {
             lossAllocations.add(invocation.getArgument(0));
@@ -74,7 +70,7 @@ class BatchAllocatorTest {
             return null;
         }).when(lossAllocationRepository).deleteAll(any());
 
-        allocator = new BatchAllocator(batchRepository, saleAllocationRepository, lossAllocationRepository);
+        allocator = new BatchAllocator(batchRepository, lossAllocationRepository);
     }
 
     @Test
@@ -157,10 +153,39 @@ class BatchAllocatorTest {
     void moreKgThanTheBatchesHoldIsRefused() {
         delivery(1L, "2026-10-19T08:00:00Z", "100.00");
 
-        IllegalStateException e = assertThrows(IllegalStateException.class, () -> sell("100.01"));
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> lose("100.01"));
 
         assertEquals("The batches of lot A-2026-01 are 0.01 kg short of the lot's total. Nothing was saved.",
                 e.getMessage());
+    }
+
+    @Test
+    void aLossAfterASaleOnlyTakesWhatTheSaleLeft() {
+        Delivery older = delivery(1L, "2026-10-19T08:00:00Z", "100.00");
+        Delivery newer = delivery(2L, "2026-10-19T09:00:00Z", "100.00");
+
+        sell("70.00");
+        lose("50.00");
+
+        assertEquals(new BigDecimal("70.00"), older.getSoldKg());
+        assertEquals(new BigDecimal("30.00"), older.getLostKg());
+        assertEquals(new BigDecimal("20.00"), newer.getLostKg());
+        assertEquals(0, older.unallocatedKg().signum());
+        assertTotalsMatchTheLot();
+    }
+
+    @Test
+    void aSaleAfterALossOnlyTakesWhatTheLossLeft() {
+        Delivery older = delivery(1L, "2026-10-19T08:00:00Z", "100.00");
+        Delivery newer = delivery(2L, "2026-10-19T09:00:00Z", "100.00");
+
+        lose("60.00");
+        sell("60.00");
+
+        assertEquals(new BigDecimal("60.00"), older.getLostKg());
+        assertEquals(new BigDecimal("40.00"), older.getSoldKg());
+        assertEquals(new BigDecimal("20.00"), newer.getSoldKg());
+        assertTotalsMatchTheLot();
     }
 
     @Test
@@ -251,12 +276,30 @@ class BatchAllocatorTest {
         return delivery;
     }
 
+    // A sale the way SaleService makes it: SalePlanner picks the oldest batches with kg left, each one's sold kg go up
+    // and an allocation with its money is saved.
     private Sale sell(String kg) {
         Sale sale = new Sale();
         ReflectionTestUtils.setField(sale, "id", (long) sales.size() + 1);
         sale.setLot(lot);
         sale.setQuantityKg(new BigDecimal(kg));
-        allocator.allocateSale(sale);
+        List<Delivery> sellable = deliveries.stream()
+                .filter(d -> !d.isReversed() && d.unallocatedKg().signum() > 0)
+                .sorted(Comparator.comparing(Delivery::getDeliveredAt).thenComparing(Delivery::getId))
+                .toList();
+        SalePlan plan = SalePlanner.plan(sellable.stream()
+                .map(d -> new SellableBatch(d.getId(), null, lot.getId(), lot.getLotCode(), null, null, null,
+                        d.getDeliveredAt(), d.unallocatedKg()))
+                .toList(), new BigDecimal(kg), 300, 5, List.of());
+        if (!plan.enough()) {
+            throw new IllegalStateException("not enough kg");
+        }
+        for (SalePlan.Line line : plan.lines()) {
+            Delivery batch = sellable.stream().filter(d -> d.getId().equals(line.batch().deliveryId())).findFirst()
+                    .orElseThrow();
+            batch.addSoldKg(line.kg());
+            saleAllocations.add(new SaleAllocation(sale, batch, line.kg(), line.grossRwf(), line.deductionRwf()));
+        }
         sales.add(sale);
         return sale;
     }

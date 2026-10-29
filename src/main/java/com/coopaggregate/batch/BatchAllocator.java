@@ -9,32 +9,22 @@ import org.springframework.stereotype.Component;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.loss.Loss;
 import com.coopaggregate.lot.Lot;
-import com.coopaggregate.sale.Sale;
 
 /**
- * Keeps the batches (deliveries) in step with the lot: a sale or loss takes its kg from the lot's oldest batches
- * first (by delivered time, then id) and records which ones. Money and lot totals do not depend on this; the sum of
- * a lot's batches always equals the lot's own remaining kg. The caller must hold the lot's lock.
+ * Keeps the batches (deliveries) in step with the lot's losses: a loss takes its kg from the lot's oldest batches
+ * first (by delivered time, then id) and records which ones; the member of those batches bears it. The sum of a
+ * lot's batches always equals the lot's own remaining kg. The caller must hold the lot's lock. Sales do not use this:
+ * they take kg by grade (see SaleService).
  */
 @Component
 public class BatchAllocator {
 
     private final BatchRepository batchRepository;
-    private final SaleAllocationRepository saleAllocationRepository;
     private final LossAllocationRepository lossAllocationRepository;
 
-    public BatchAllocator(BatchRepository batchRepository, SaleAllocationRepository saleAllocationRepository,
-                          LossAllocationRepository lossAllocationRepository) {
+    public BatchAllocator(BatchRepository batchRepository, LossAllocationRepository lossAllocationRepository) {
         this.batchRepository = batchRepository;
-        this.saleAllocationRepository = saleAllocationRepository;
         this.lossAllocationRepository = lossAllocationRepository;
-    }
-
-    public void allocateSale(Sale sale) {
-        take(sale.getLot(), sale.getQuantityKg(), (batch, kg) -> {
-            batch.addSoldKg(kg);
-            saleAllocationRepository.save(new SaleAllocation(sale, batch, kg));
-        });
     }
 
     public void allocateLoss(Loss loss) {

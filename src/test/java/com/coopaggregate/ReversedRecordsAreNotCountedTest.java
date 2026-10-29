@@ -45,7 +45,9 @@ class ReversedRecordsAreNotCountedTest {
             "BatchRepository, findGradeBatchesWithKgLeft, 1",
             "BatchRepository, gradeRemainingKg, 1",
             "BatchRepository, findSellableBatches, 1",
-            "BatchRepository, gradeRemainingKgWithStatus, 1"
+            "BatchRepository, gradeRemainingKgWithStatus, 1",
+            "BatchRepository, findLotIdsWithSellableBatches, 1",
+            "BatchRepository, lockSellableBatches, 1"
     })
     void countingQueryLeavesOutReversedRecords(String repository, String methodName, int expectedFilters) {
         List<Query> queries = Arrays.stream(repositoryClass(repository).getMethods())
