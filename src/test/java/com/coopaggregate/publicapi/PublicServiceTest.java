@@ -113,6 +113,47 @@ class PublicServiceTest {
     }
 
     @Test
+    void theHintCountsOnlySellableKgNotKgWaitingForConfirmationOrDisputed() {
+        setting.setMinOrderKg(new BigDecimal("100"));
+        givenGrades("Big", "Normal", "Small");
+        // Big has 900 kg in the shed but only 300 are confirmed; Normal has 600 kg and 450 are confirmed;
+        // Small has 700 kg and none is confirmed.
+        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("900.00"), new BigDecimal("300.00"),
+                        new BigDecimal("500.00"), new BigDecimal("100.00")),
+                new StockResponse.GradeStock("Normal", new BigDecimal("600.00"), new BigDecimal("450.00"),
+                        new BigDecimal("150.00"), BigDecimal.ZERO),
+                new StockResponse.GradeStock("Small", new BigDecimal("700.00"), BigDecimal.ZERO,
+                        new BigDecimal("300.00"), new BigDecimal("400.00")));
+
+        assertEquals(List.of(StockAvailability.LIMITED, StockAvailability.LIMITED, StockAvailability.NONE),
+                service.grades("203.0.113.5").stream().map(PublicGradeResponse::availability).toList());
+    }
+
+    @Test
+    void sellableKgOfExactly500IsAvailableEvenWithMoreKgWaiting() {
+        setting.setMinOrderKg(new BigDecimal("100"));
+        givenGrades("Big", "Normal");
+        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("800.00"), new BigDecimal("500.00"),
+                        new BigDecimal("300.00"), BigDecimal.ZERO),
+                new StockResponse.GradeStock("Normal", new BigDecimal("800.00"), new BigDecimal("499.99"),
+                        new BigDecimal("300.01"), BigDecimal.ZERO));
+
+        assertEquals(List.of(StockAvailability.AVAILABLE, StockAvailability.LIMITED),
+                service.grades("203.0.113.5").stream().map(PublicGradeResponse::availability).toList());
+    }
+
+    @Test
+    void sellableKgBelowTheMinimumOrderIsNoneEvenWhenManyKgAreWaiting() {
+        setting.setMinOrderKg(new BigDecimal("100"));
+        givenGrades("Big");
+        givenStock(new StockResponse.GradeStock("Big", new BigDecimal("5000.00"), new BigDecimal("99.99"),
+                new BigDecimal("4900.01"), BigDecimal.ZERO));
+
+        assertEquals(List.of(StockAvailability.NONE),
+                service.grades("203.0.113.5").stream().map(PublicGradeResponse::availability).toList());
+    }
+
+    @Test
     void gradesAreLimitedPerAddress() {
         givenGrades("Big");
         for (int i = 0; i < 60; i++) {

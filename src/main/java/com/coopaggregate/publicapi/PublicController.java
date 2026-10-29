@@ -39,7 +39,8 @@ public class PublicController {
 
     @GetMapping("/grades")
     @Operation(summary = "Active grades with their description, size, packaging and a stock hint (AVAILABLE, LIMITED "
-            + "or NONE). No prices or kilograms. Limited per IP address (429); may be cached for 60 seconds")
+            + "or NONE) worked out from the grade's sellable (confirmed) kg. No prices or kilograms. Limited per "
+            + "IP address (429); may be cached for 60 seconds")
     public ResponseEntity<List<PublicGradeResponse>> grades(HttpServletRequest request) {
         // A minute-old hint is good enough, and caching keeps the stock calculation off every page view.
         return ResponseEntity.ok()
