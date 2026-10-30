@@ -35,7 +35,8 @@ public class BuyerRequestController {
     }
 
     @GetMapping
-    @Operation(summary = "List requests, newest first (15 per page by default, max 100)")
+    @Operation(summary = "List requests, newest first (15 per page by default, max 100), each with how the buyer "
+            + "wants to be contacted (contactMethod CALL or WHATSAPP, and whatsappNumber)")
     public PageResponse<BuyerRequestListItem> list(
             @RequestParam(required = false) BuyerRequestStatus status,
             @Parameter(description = "Part of the request code, the buyer's name or phone number")
@@ -46,7 +47,8 @@ public class BuyerRequestController {
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "One request, with the buyer's contact details")
+    @Operation(summary = "One request, with the buyer's contact details and how they want to be contacted "
+            + "(contactMethod CALL or WHATSAPP, and whatsappNumber)")
     public BuyerRequestDetail get(@PathVariable Long id) {
         return requestService.get(id);
     }

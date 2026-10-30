@@ -5,7 +5,8 @@ import java.time.Instant;
 
 /**
  * One purchase request for the manager. publicMessage is what the buyer can read; buyerId is set once the manager
- * has turned the request into a buyer record.
+ * has turned the request into a buyer record. contactMethod is how the buyer wants to be contacted; whatsappNumber is
+ * the number to use for WHATSAPP and empty for CALL (then buyerPhone is the number to call).
  */
 public record BuyerRequestDetail(
         Long id,
@@ -17,6 +18,8 @@ public record BuyerRequestDetail(
         String buyerName,
         String buyerPhone,
         String buyerEmail,
+        BuyerContactMethod contactMethod,
+        String whatsappNumber,
         String note,
         String publicMessage,
         Long buyerId,
@@ -31,7 +34,7 @@ public record BuyerRequestDetail(
                 contactOnRequest ? request.getRequesterName() : buyer.getName(),
                 contactOnRequest ? request.getRequesterPhone() : buyer.getPhone(),
                 contactOnRequest ? request.getRequesterEmail() : buyer.getEmail(),
-                request.getMessage(), request.getPublicMessage(), buyer == null ? null : buyer.getId(),
+                request.getContactMethod(), request.getWhatsappNumber(), request.getMessage(), request.getPublicMessage(), buyer == null ? null : buyer.getId(),
                 request.getCreatedAt(), request.getUpdatedAt());
     }
 }
