@@ -185,6 +185,9 @@ ERD: see `docs/erd.png`.
 - **After V32 only the new build may run.** A sale needs a `grade_id`, which older builds never set,
   and they do not know `SALE_CREDIT`. Rolling the code back does not undo a migration: to go back,
   restore a database backup (for example a Neon branch) taken before the migration.
+- **V33** adds `contact_method` (`CALL` or `WHATSAPP`, default `CALL`) and `whatsapp_number` to
+  `buyer_request`. Existing requests become `CALL`. It only adds columns, so it is safe to run
+  before or after the new build, but only the new build reads and writes the columns.
 - Applied migrations are never edited; a change is a new migration.
 
 ## API endpoints
@@ -221,10 +224,10 @@ ERD: see `docs/erd.png`.
 | POST | `/api/buyers` | JWT | Adds a buyer, returns `201` |
 | GET | `/api/public/grades` | None | Active grades `{code, name, nameRw, description, sizeInfo, packaging, availability}`. No prices or kilograms (see Public side for buyers) |
 | GET | `/api/public/info` | None | `{cooperativeName, location, cooperativeEmail, minOrderKg, cooperativePhone}` |
-| POST | `/api/public/requests` | None | A buyer's purchase request. Returns `201` `{code, status}`. Limited per IP address and phone number |
-| GET | `/api/public/requests/{code}?phone=` | None | `{code, status, message}`. `404` if the code or the phone is wrong |
-| GET | `/api/buyer-requests?status=&search=&page=0&size=15` | JWT | Buyers' requests, newest first (15 per page, max 100) |
-| GET | `/api/buyer-requests/{id}` | JWT | One request with the buyer's contact details |
+| POST | `/api/public/requests` | None | A buyer's purchase request, with an optional `contactMethod` (`CALL` or `WHATSAPP`) and `whatsappNumber`. Returns `201` `{code, status}`. Limited per IP address and phone number |
+| GET | `/api/public/requests/{code}?phone=` | None | `{code, status, message, contactMethod, contactNumber}`. `404` if the code or the phone is wrong |
+| GET | `/api/buyer-requests?status=&search=&page=0&size=15` | JWT | Buyers' requests, newest first (15 per page, max 100), with `contactMethod` and `whatsappNumber` |
+| GET | `/api/buyer-requests/{id}` | JWT | One request with the buyer's contact details and how to contact them |
 | PATCH | `/api/buyer-requests/{id}/status` | JWT | Body `{"status", "publicMessage"}` (message optional). Changes the status; kept in the change history |
 | POST | `/api/buyer-requests/{id}/buyer` | JWT | Turns the request into a buyer record, or links it to the buyer with the same phone |
 | POST | `/api/sales` | JWT | Records a sale of a grade from the oldest sellable batches and credits each batch's member (see Sales). `201` when new, `200` when the same `clientUuid` was already recorded |
@@ -598,17 +601,25 @@ open; everything else needs the manager's token. CORS allows only the frontend (
 
   ```json
   {"name": "Kalisa Traders", "phone": "0788123456", "email": "kalisa@example.com",
-   "gradeCode": "A", "quantityKg": 250, "note": "Pick up on Friday", "website": ""}
+   "gradeCode": "A", "quantityKg": 250, "note": "Pick up on Friday",
+   "contactMethod": "WHATSAPP", "whatsappNumber": "0788999999", "website": ""}
   ```
 
   `name`, `phone`, `gradeCode` and `quantityKg` are required. The phone is a Rwandan mobile
   number (`07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`, stored as `+2507XXXXXXXX`).
   `quantityKg` must be at least `minOrderKg` (otherwise `400` "The smallest order is 100 kg.") and the
   grade must be an active one. Sizes are limited (name 150, email 150, note 1000 characters).
+  `contactMethod` and `whatsappNumber` are optional. `contactMethod` is `CALL` (the default) or
+  `WHATSAPP`. `whatsappNumber` follows the same Rwandan phone rules as `phone` (an empty value counts
+  as not given) and is only used for `WHATSAPP`: when it is missing, the main `phone` is used. For
+  `CALL` it is ignored. Any other `contactMethod` returns `400`.
   It returns `201` `{code, status}` with a code like `BR-2026-7K2Q`: random, unique, and made
   without letters and digits that look alike (no 0, O, 1, I or L). The request starts as `PENDING`.
-- `GET /api/public/requests/{code}?phone=0788123456` returns `{code, status, message}`:
-  the status (`PENDING`, `ACCEPTED` or `REJECTED`) and the manager's public message. The phone must be
+- `GET /api/public/requests/{code}?phone=0788123456` returns `{code, status, message, contactMethod,
+  contactNumber}`: the status (`PENDING`, `ACCEPTED` or `REJECTED`), the manager's public message, and
+  how the cooperative will contact the buyer: `contactMethod` and the number it will use
+  (`contactNumber`: the WhatsApp number for `WHATSAPP`, otherwise the phone), both given by the buyer.
+  Requests made before this existed are `CALL`. The phone must be
   the one used for the request. A wrong phone, a missing phone and an unknown code all return the
   same `404` `{"message": "Request not found."}`, so a code cannot be tested without its phone.
 - **Protection:** at most 10 requests per hour per IP address and 3 per day per phone number
@@ -625,7 +636,9 @@ open; everything else needs the manager's token. CORS allows only the frontend (
 - `GET /api/buyer-requests` lists requests newest first, 15 per page. `status` filters by
   status; `search` matches the request code, the buyer's name or phone (`0788123456` finds
   `+250788123456`).
-- `GET /api/buyer-requests/{id}` shows one request with the buyer's contact details and note.
+- `GET /api/buyer-requests/{id}` shows one request with the buyer's contact details and note. The list
+  and the detail both show `contactMethod` (`CALL` or `WHATSAPP`) and `whatsappNumber` (the number to
+  use for `WHATSAPP`, empty for `CALL`, when `buyerPhone` is the number to call).
 - `PATCH /api/buyer-requests/{id}/status` with `{"status", "publicMessage"}` changes the status. The
   public message (at most 500 characters) is what the buyer reads; leaving it out keeps the earlier
   one. The same status without a new message returns `409`. Every change goes to the change
