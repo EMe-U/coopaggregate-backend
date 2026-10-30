@@ -20,6 +20,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 
+import com.coopaggregate.buyer.BuyerContactMethod;
 import com.coopaggregate.buyer.BuyerRequest;
 import com.coopaggregate.buyer.BuyerRequestService;
 import com.coopaggregate.buyer.BuyerRequestStatus;
@@ -39,7 +40,7 @@ class PublicRequestServiceTest {
         service = new PublicRequestService(requestService);
         BuyerRequest saved = new BuyerRequest();
         saved.setReferenceCode("BR-2026-7K2Q");
-        when(requestService.createFromPublic(anyString(), anyString(), any(), anyString(), any(), any()))
+        when(requestService.createFromPublic(anyString(), anyString(), any(), anyString(), any(), any(), any(), any()))
                 .thenReturn(saved);
     }
 
@@ -49,7 +50,28 @@ class PublicRequestServiceTest {
 
         assertEquals(new PublicRequestCreatedResponse("BR-2026-7K2Q", BuyerRequestStatus.PENDING), response);
         verify(requestService).createFromPublic("Kalisa Traders", "0788123456", "kalisa@example.com", "A",
-                new BigDecimal("250"), "Friday please");
+                new BigDecimal("250"), "Friday please", null, null);
+    }
+
+    @Test
+    void theContactChoiceIsPassedOn() {
+        service.submit(form("0788123456", null, BuyerContactMethod.WHATSAPP, "0788999999"), "203.0.113.5");
+
+        verify(requestService).createFromPublic("Kalisa Traders", "0788123456", "kalisa@example.com", "A",
+                new BigDecimal("250"), "Friday please", BuyerContactMethod.WHATSAPP, "0788999999");
+    }
+
+    @Test
+    void theContactChoiceDoesNotChangeTheLimits() {
+        // The limit is per phone number, whatever the WhatsApp number is.
+        for (int i = 0; i < 3; i++) {
+            service.submit(form("0788123456", null, BuyerContactMethod.WHATSAPP, "07889999" + (10 + i)),
+                    "198.51.100." + i);
+        }
+
+        assertThrows(TooManyRequestsException.class,
+                () -> service.submit(form("0788123456", null, BuyerContactMethod.WHATSAPP, "0788999990"),
+                        "198.51.100.9"));
     }
 
     @Test
@@ -59,7 +81,7 @@ class PublicRequestServiceTest {
 
         assertTrue(response.code().matches("BR-\\d{4}-[2-9A-HJKMNP-Z]{4}"), response.code());
         assertEquals(BuyerRequestStatus.PENDING, response.status());
-        verify(requestService, never()).createFromPublic(any(), any(), any(), any(), any(), any());
+        verify(requestService, never()).createFromPublic(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -70,7 +92,7 @@ class PublicRequestServiceTest {
 
         service.submit(form("0788123456", null), "203.0.113.5");
 
-        verify(requestService, times(1)).createFromPublic(any(), any(), any(), any(), any(), any());
+        verify(requestService, times(1)).createFromPublic(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -93,7 +115,7 @@ class PublicRequestServiceTest {
         service.submit(form("250788123456", null), "203.0.113.3");
 
         assertThrows(TooManyRequestsException.class, () -> service.submit(form("0788123456", null), "203.0.113.4"));
-        verify(requestService, times(3)).createFromPublic(any(), any(), any(), any(), any(), any());
+        verify(requestService, times(3)).createFromPublic(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -110,7 +132,7 @@ class PublicRequestServiceTest {
     }
 
     @Test
-    void statusShowsOnlyTheStatusAndThePublicMessage() {
+    void statusShowsOnlyTheStatusThePublicMessageAndHowTheyWillBeContacted() {
         BuyerRequest request = new BuyerRequest();
         request.setReferenceCode("BR-2026-7K2Q");
         request.setStatus(BuyerRequestStatus.ACCEPTED);
@@ -121,15 +143,43 @@ class PublicRequestServiceTest {
 
         PublicRequestStatusResponse response = service.status("BR-2026-7K2Q", "0788123456", "198.51.100.7");
 
+        // A request made before contact methods existed is CALL, on the phone it was sent with.
         assertEquals(new PublicRequestStatusResponse("BR-2026-7K2Q", BuyerRequestStatus.ACCEPTED,
-                "We will call you on Thursday."), response);
+                "We will call you on Thursday.", BuyerContactMethod.CALL, "+250788123456"), response);
+    }
+
+    @Test
+    void statusOfAWhatsappRequestShowsTheWhatsappNumber() {
+        BuyerRequest request = new BuyerRequest();
+        request.setReferenceCode("BR-2026-7K2Q");
+        request.setRequesterPhone("+250788123456");
+        request.setContactMethod(BuyerContactMethod.WHATSAPP);
+        request.setWhatsappNumber("+250788999999");
+        when(requestService.findForPublic("BR-2026-7K2Q", "0788123456")).thenReturn(request);
+
+        PublicRequestStatusResponse response = service.status("BR-2026-7K2Q", "0788123456", "198.51.100.7");
+
+        assertEquals(BuyerContactMethod.WHATSAPP, response.contactMethod());
+        assertEquals("+250788999999", response.contactNumber());
+    }
+
+    @Test
+    void statusOfAWhatsappRequestWithoutAnotherNumberShowsTheMainPhone() {
+        BuyerRequest request = new BuyerRequest();
+        request.setReferenceCode("BR-2026-7K2Q");
+        request.setRequesterPhone("+250788123456");
+        request.setContactMethod(BuyerContactMethod.WHATSAPP);
+        request.setWhatsappNumber("+250788123456");
+        when(requestService.findForPublic("BR-2026-7K2Q", "0788123456")).thenReturn(request);
+
+        assertEquals("+250788123456", service.status("BR-2026-7K2Q", "0788123456", "198.51.100.7").contactNumber());
     }
 
     @Test
     void noPersonalDataReachesTheLogs(CapturedOutput output) {
-        service.submit(form("0788123456", null), "203.0.113.5");
+        service.submit(form("0788123456", null, BuyerContactMethod.WHATSAPP, "0788999999"), "203.0.113.5");
         service.submit(form("0788123456", "bot"), "203.0.113.5");
-        when(requestService.createFromPublic(anyString(), anyString(), any(), anyString(), any(), any()))
+        when(requestService.createFromPublic(anyString(), anyString(), any(), anyString(), any(), any(), any(), any()))
                 .thenThrow(new BadRequestException("The smallest order is 100 kg."));
         assertThrows(BadRequestException.class, () -> service.submit(form("0788123457", null), "203.0.113.5"));
         for (int i = 0; i < 12; i++) {
@@ -145,6 +195,8 @@ class PublicRequestServiceTest {
         assertFalse(logs.contains("0788123456"));
         assertFalse(logs.contains("788123456"));
         assertFalse(logs.contains("kalisa@example.com"));
+        assertFalse(logs.contains("0788999999"));
+        assertFalse(logs.contains("788999999"));
         assertFalse(logs.contains("203.0.113.5"));
     }
 
@@ -158,8 +210,21 @@ class PublicRequestServiceTest {
         assertTrue(text.contains("gradeCode=A"));
     }
 
+    @Test
+    void formPrintsWithoutTheWhatsappNumber() {
+        String text = form("0788123456", null, BuyerContactMethod.WHATSAPP, "0788999999").toString();
+
+        assertFalse(text.contains("0788999999"));
+        assertFalse(text.contains("788999999"));
+    }
+
     private static PublicRequestForm form(String phone, String website) {
+        return form(phone, website, null, null);
+    }
+
+    private static PublicRequestForm form(String phone, String website, BuyerContactMethod contactMethod,
+                                          String whatsappNumber) {
         return new PublicRequestForm("Kalisa Traders", phone, "kalisa@example.com", "A", new BigDecimal("250"),
-                "Friday please", website);
+                "Friday please", contactMethod, whatsappNumber, website);
     }
 }

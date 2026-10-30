@@ -57,10 +57,15 @@ public class BuyerRequestService {
         this.auditLogRepository = auditLogRepository;
     }
 
-    /** Saves a request from the public page as PENDING, with a code like BR-2026-7K2Q. */
+    /**
+     * Saves a request from the public page as PENDING, with a code like BR-2026-7K2Q. contactMethod defaults to CALL.
+     * For WHATSAPP the number to use is whatsappNumber, or the main phone when none was given; for CALL a
+     * whatsappNumber is ignored.
+     */
     @Transactional
     public BuyerRequest createFromPublic(String name, String phone, String email, String gradeCode,
-                                         BigDecimal quantityKg, String note) {
+                                         BigDecimal quantityKg, String note, BuyerContactMethod contactMethod,
+                                         String whatsappNumber) {
         Grade grade = gradeRepository.findByCodeAndActiveTrue(gradeCode.trim().toUpperCase())
                 .orElseThrow(() -> new BadRequestException("Unknown grade. Choose one of the grades shown."));
         BigDecimal minOrderKg = settingRepository.findById(1L)
@@ -79,7 +84,23 @@ public class BuyerRequestService {
         request.setRequesterPhone(RwandanPhoneNumber.normalize(phone));
         request.setRequesterEmail(blankToNull(email));
         request.setMessage(blankToNull(note));
+        BuyerContactMethod method = contactMethod == null ? BuyerContactMethod.CALL : contactMethod;
+        request.setContactMethod(method);
+        request.setWhatsappNumber(method == BuyerContactMethod.WHATSAPP ? whatsappNumberToUse(phone, whatsappNumber)
+                : null);
         return requestRepository.save(request);
+    }
+
+    private static String whatsappNumberToUse(String phone, String whatsappNumber) {
+        String given = blankToNull(whatsappNumber);
+        if (given == null) {
+            return RwandanPhoneNumber.normalize(phone);
+        }
+        if (!RwandanPhoneNumber.isValid(given)) {
+            throw new BadRequestException("whatsappNumber must be a Rwandan mobile number: 07XXXXXXXX, 2507XXXXXXXX "
+                    + "or +2507XXXXXXXX");
+        }
+        return RwandanPhoneNumber.normalize(given);
     }
 
     /** The request, only if the phone is the one it was sent with. Otherwise the same 404 as an unknown code. */

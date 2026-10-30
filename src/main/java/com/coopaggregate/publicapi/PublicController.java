@@ -56,16 +56,19 @@ public class PublicController {
 
     @PostMapping("/requests")
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Send a purchase request. Returns a code like BR-2026-7K2Q to look it up later. Limited per "
-            + "IP address and per phone number (429). Leave `website` empty: it is a honeypot for bots")
+    @Operation(summary = "Send a purchase request. Returns a code like BR-2026-7K2Q to look it up later. Optional "
+            + "`contactMethod` (CALL, the default, or WHATSAPP) and `whatsappNumber` (only for WHATSAPP; the phone "
+            + "is used when empty). Limited per IP address and per phone number (429). Leave `website` empty: it is "
+            + "a honeypot for bots")
     public PublicRequestCreatedResponse submit(@Valid @RequestBody PublicRequestForm form,
                                                HttpServletRequest request) {
         return requestService.submit(form, request.getRemoteAddr());
     }
 
     @GetMapping("/requests/{code}")
-    @Operation(summary = "The status of a request and the manager's public message. The phone number must be the one "
-            + "the request was sent with; otherwise 404, the same as for an unknown code")
+    @Operation(summary = "The status of a request, the manager's public message, and how the cooperative will "
+            + "contact the buyer (`contactMethod`, `contactNumber`). The phone number must be the one the request "
+            + "was sent with; otherwise 404, the same as for an unknown code")
     public PublicRequestStatusResponse status(@PathVariable String code,
                                               @RequestParam(required = false) String phone,
                                               HttpServletRequest request) {

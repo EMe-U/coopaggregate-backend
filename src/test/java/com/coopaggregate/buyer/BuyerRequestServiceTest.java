@@ -19,6 +19,9 @@ import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.common.KigaliTime;
@@ -72,6 +75,59 @@ class BuyerRequestServiceTest {
         assertNull(request.getBuyer());
     }
 
+    // --- How the buyer wants to be contacted ---
+
+    @Test
+    void withoutAChoiceTheCooperativeCalls() {
+        BuyerRequest request = createWithContact(null, null);
+
+        assertEquals(BuyerContactMethod.CALL, request.getContactMethod());
+        assertNull(request.getWhatsappNumber());
+    }
+
+    @Test
+    void whatsappWithAnotherNumberStoresThatNumberInTheStoredFormat() {
+        BuyerRequest request = createWithContact(BuyerContactMethod.WHATSAPP, "0788999999");
+
+        assertEquals(BuyerContactMethod.WHATSAPP, request.getContactMethod());
+        assertEquals("+250788999999", request.getWhatsappNumber());
+        assertEquals("+250788123456", request.getRequesterPhone());
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   "})
+    void whatsappWithoutANumberUsesTheMainPhone(String whatsappNumber) {
+        BuyerRequest request = createWithContact(BuyerContactMethod.WHATSAPP, whatsappNumber);
+
+        assertEquals("+250788123456", request.getWhatsappNumber());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0788999999", "250788999999", "+250788999999"})
+    void whatsappNumberIsAcceptedInEveryAllowedFormat(String whatsappNumber) {
+        assertEquals("+250788999999", createWithContact(BuyerContactMethod.WHATSAPP, whatsappNumber).getWhatsappNumber());
+    }
+
+    @Test
+    void aWhatsappNumberIsIgnoredForACall() {
+        BuyerRequest request = createWithContact(BuyerContactMethod.CALL, "0788999999");
+
+        assertEquals(BuyerContactMethod.CALL, request.getContactMethod());
+        assertNull(request.getWhatsappNumber(), "a call request must not keep a WhatsApp number");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"12345", "0711111111", "+250188999999", "abc"})
+    void aWhatsappNumberThatIsNotRwandanIsRefusedAndNothingIsSaved(String whatsappNumber) {
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> createWithContact(BuyerContactMethod.WHATSAPP, whatsappNumber));
+
+        assertEquals("whatsappNumber must be a Rwandan mobile number: 07XXXXXXXX, 2507XXXXXXXX or +2507XXXXXXXX",
+                e.getMessage());
+        verify(requestRepository, never()).save(any());
+    }
+
     @Test
     void codeLooksLikeBrYearAndFourClearCharacters() {
         Set<String> codes = new HashSet<>();
@@ -114,7 +170,7 @@ class BuyerRequestServiceTest {
     @Test
     void unknownOrInactiveGradeIsRefused() {
         BadRequestException e = assertThrows(BadRequestException.class, () -> service.createFromPublic(
-                "Kalisa Traders", "0788123456", null, "Z", new BigDecimal("100"), null));
+                "Kalisa Traders", "0788123456", null, "Z", new BigDecimal("100"), null, null, null));
 
         assertEquals("Unknown grade. Choose one of the grades shown.", e.getMessage());
     }
@@ -122,7 +178,7 @@ class BuyerRequestServiceTest {
     @Test
     void gradeCodeIsNotCaseSensitive() {
         BuyerRequest request = service.createFromPublic("Kalisa Traders", "0788123456", "  ", " a ",
-                new BigDecimal("100"), " ");
+                new BigDecimal("100"), " ", null, null);
 
         assertEquals(big, request.getGrade());
         assertNull(request.getRequesterEmail());
@@ -171,6 +227,11 @@ class BuyerRequestServiceTest {
 
     private BuyerRequest create(String phone, BigDecimal quantityKg) {
         return service.createFromPublic(" Kalisa Traders ", phone, "kalisa@example.com", "A", quantityKg,
-                "Pick up on Friday");
+                "Pick up on Friday", null, null);
+    }
+
+    private BuyerRequest createWithContact(BuyerContactMethod contactMethod, String whatsappNumber) {
+        return service.createFromPublic("Kalisa Traders", "0788123456", "kalisa@example.com", "A",
+                new BigDecimal("250"), "Pick up on Friday", contactMethod, whatsappNumber);
     }
 }

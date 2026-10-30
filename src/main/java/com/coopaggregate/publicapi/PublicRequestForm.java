@@ -2,6 +2,7 @@ package com.coopaggregate.publicapi;
 
 import java.math.BigDecimal;
 
+import com.coopaggregate.buyer.BuyerContactMethod;
 import com.coopaggregate.common.RwandanPhoneNumber;
 
 import jakarta.validation.constraints.DecimalMax;
@@ -16,6 +17,7 @@ import jakarta.validation.constraints.Size;
 /**
  * A purchase request from the public page. `website` is a honeypot: it is hidden on the page, so only a bot fills
  * it in. The kilograms must reach the cooperative's minimum order, which is checked against the settings.
+ * contactMethod is CALL (the default) or WHATSAPP; whatsappNumber is only used for WHATSAPP.
  */
 public record PublicRequestForm(
         @NotBlank(message = "is required")
@@ -43,6 +45,14 @@ public record PublicRequestForm(
 
         @Size(max = 1000, message = "must be at most 1000 characters")
         String note,
+
+        // Optional. Without it the cooperative calls the phone number above.
+        BuyerContactMethod contactMethod,
+
+        // Optional, and only used for WHATSAPP: another number to reach the buyer on. Empty means the phone above.
+        @Pattern(regexp = "^$|" + RwandanPhoneNumber.PATTERN,
+                message = "must be a Rwandan mobile number: 07XXXXXXXX, 2507XXXXXXXX or +2507XXXXXXXX")
+        String whatsappNumber,
 
         @Size(max = 200, message = "must be at most 200 characters")
         String website) {
