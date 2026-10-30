@@ -55,6 +55,13 @@ public class BuyerRequest {
     // What the buyer may read when they look up the request. managerNote is private.
     private String publicMessage;
 
+    // How the cooperative contacts the buyer. For WHATSAPP, whatsappNumber is the number to use (the main phone when
+    // the buyer gave no other one); for CALL it is empty and the requester phone is used.
+    @Enumerated(EnumType.STRING)
+    private BuyerContactMethod contactMethod = BuyerContactMethod.CALL;
+
+    private String whatsappNumber;
+
     private Instant updatedAt;
 
     @CreationTimestamp
@@ -159,6 +166,22 @@ public class BuyerRequest {
 
     public void setPublicMessage(String publicMessage) {
         this.publicMessage = publicMessage;
+    }
+
+    public BuyerContactMethod getContactMethod() {
+        return contactMethod;
+    }
+
+    public void setContactMethod(BuyerContactMethod contactMethod) {
+        this.contactMethod = contactMethod;
+    }
+
+    public String getWhatsappNumber() {
+        return whatsappNumber;
+    }
+
+    public void setWhatsappNumber(String whatsappNumber) {
+        this.whatsappNumber = whatsappNumber;
     }
 
     public Instant getUpdatedAt() {
