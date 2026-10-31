@@ -40,5 +40,7 @@ public record SettingsRequest(
         // Optional: a Rwandan mobile number, or empty for none. Stored as +2507XXXXXXXX and shown on the public pages.
         @Pattern(regexp = "^$|" + RwandanPhoneNumber.PATTERN,
                 message = "must be a Rwandan mobile number: 07XXXXXXXX, 2507XXXXXXXX or +2507XXXXXXXX")
-        String cooperativePhone) {
+        String cooperativePhone,
+        // Optional: when it is left out the current value is kept. Refused while verification is not available.
+        Boolean requireIdentityVerification) {
 }

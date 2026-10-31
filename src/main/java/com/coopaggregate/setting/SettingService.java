@@ -11,6 +11,8 @@ import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.audit.ChangeList;
 import com.coopaggregate.common.RwandanPhoneNumber;
+import com.coopaggregate.error.BadRequestException;
+import com.coopaggregate.identity.IdentityAvailability;
 import com.coopaggregate.manager.Manager;
 
 @Service
@@ -19,14 +21,18 @@ public class SettingService {
     private final SettingRepository settingRepository;
     private final AuditLogRepository auditLogRepository;
 
-    public SettingService(SettingRepository settingRepository, AuditLogRepository auditLogRepository) {
+    private final IdentityAvailability identityAvailability;
+
+    public SettingService(SettingRepository settingRepository, AuditLogRepository auditLogRepository,
+                          IdentityAvailability identityAvailability) {
         this.settingRepository = settingRepository;
         this.auditLogRepository = auditLogRepository;
+        this.identityAvailability = identityAvailability;
     }
 
     @Transactional(readOnly = true)
     public SettingsResponse get() {
-        return SettingsResponse.from(setting());
+        return SettingsResponse.from(setting(), identityAvailability.isAvailable());
     }
 
     /** Saves the settings and writes the fields that changed to the change history. */
@@ -48,6 +54,15 @@ public class SettingService {
                 ? null
                 : RwandanPhoneNumber.normalize(blankToNull(request.cooperativePhone()));
 
+        boolean requireIdentityVerification = request.requireIdentityVerification() != null
+                ? request.requireIdentityVerification()
+                : setting.isRequireIdentityVerification();
+        if (requireIdentityVerification && !setting.isRequireIdentityVerification()
+                && !identityAvailability.isAvailable()) {
+            throw new BadRequestException("Identity verification is not available, so it cannot be required. "
+                    + "Set up the identity provider first.");
+        }
+
         ChangeList changes = new ChangeList()
                 .add("cooperativeName", setting.getCooperativeName(), cooperativeName)
                 .add("smsEnabled", setting.isSmsEnabled(), request.smsEnabled())
@@ -55,7 +70,9 @@ public class SettingService {
                 .add("cooperativePhone", setting.getCooperativePhone(), cooperativePhone)
                 .add("location", setting.getLocation(), location)
                 .add("minOrderKg", setting.getMinOrderKg(), request.minOrderKg())
-                .add("committeeEmails", setting.getCommitteeEmailList(), committeeEmails);
+                .add("committeeEmails", setting.getCommitteeEmailList(), committeeEmails)
+                .add("requireIdentityVerification", setting.isRequireIdentityVerification(),
+                        requireIdentityVerification);
 
         setting.setSmsEnabled(request.smsEnabled());
         setting.setCooperativeEmail(cooperativeEmail);
@@ -64,11 +81,12 @@ public class SettingService {
         setting.setCommitteeEmailList(committeeEmails);
         setting.setCooperativeName(cooperativeName);
         setting.setCooperativePhone(cooperativePhone);
+        setting.setRequireIdentityVerification(requireIdentityVerification);
 
         if (!changes.isEmpty()) {
             auditLogRepository.save(AuditLog.of(AuditAction.SETTINGS_UPDATED, null, manager, changes.toString()));
         }
-        return SettingsResponse.from(setting);
+        return SettingsResponse.from(setting, identityAvailability.isAvailable());
     }
 
     private Setting setting() {
