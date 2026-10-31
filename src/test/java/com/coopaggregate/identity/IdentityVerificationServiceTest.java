@@ -17,6 +17,7 @@ import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +31,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.audit.AuditAction;
@@ -37,6 +39,7 @@ import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.manager.Manager;
+import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 
 @ExtendWith(OutputCaptureExtension.class)
@@ -64,6 +67,8 @@ class IdentityVerificationServiceTest {
             stored.put(verification.getStateHash(), verification);
             return verification;
         });
+        when(verificationRepository.findForUpdateById(9L))
+                .thenAnswer(invocation -> stored.values().stream().findFirst());
         when(verificationRepository.findForUpdateByStateHash(anyString()))
                 .thenAnswer(invocation -> Optional.ofNullable(stored.get(invocation.<String>getArgument(0))));
         memberRepository = mock(MemberRepository.class);
@@ -303,6 +308,243 @@ class IdentityVerificationServiceTest {
     }
 
     // --- Cleaning up
+
+    // --- Checking the details of the new member
+
+    @Test
+    void detailsThatMatchChangeNothing() {
+        Long id = verified();
+
+        service.checkDetails(id, "Uwimana Claudine", LocalDate.of(1990, 5, 17), "0788123456");
+
+        IdentityVerification verification = stored.values().iterator().next();
+        assertEquals(0, verification.getAttempts());
+        assertNotNull(verification.getSalt(), "the hashes stay until the member is saved");
+        verify(auditLogRepository, org.mockito.Mockito.times(1)).save(any());
+    }
+
+    @Test
+    void theNameIsMatchedWithoutCaseAccentsOrWordOrder() {
+        Long id = verified();
+
+        service.checkDetails(id, "  claudine   UWIMANA ", LocalDate.of(1990, 5, 17), "+250788123456");
+        service.checkDetails(id, "Ûwimana Claudiné", LocalDate.of(1990, 5, 17), "250788123456");
+    }
+
+    @Test
+    void aWrongNameIsRefusedAndNamesTheField() {
+        Long id = verified();
+
+        IdentityMismatchException e = assertThrows(IdentityMismatchException.class,
+                () -> service.checkDetails(id, "Uwimana Claudette", LocalDate.of(1990, 5, 17), "0788123456"));
+
+        assertEquals("The details do not match the person who verified: name. Correct them and try again "
+                + "(attempt 1 of 3).", e.getMessage());
+    }
+
+    @Test
+    void aWrongBirthDateIsRefused() {
+        Long id = verified();
+
+        IdentityMismatchException e = assertThrows(IdentityMismatchException.class,
+                () -> service.checkDetails(id, "Uwimana Claudine", LocalDate.of(1990, 5, 18), "0788123456"));
+
+        assertTrue(e.getMessage().contains("verified: birthDate."), e.getMessage());
+    }
+
+    @Test
+    void aWrongPhoneIsRefusedAndBlocksLikeTheOthers() {
+        Long id = verified();
+
+        IdentityMismatchException e = assertThrows(IdentityMismatchException.class,
+                () -> service.checkDetails(id, "Uwimana Claudine", LocalDate.of(1990, 5, 17), "0788999999"));
+
+        assertTrue(e.getMessage().contains("verified: phone."), e.getMessage());
+    }
+
+    @Test
+    void everyFieldThatDiffersIsNamed() {
+        Long id = verified();
+
+        IdentityMismatchException e = assertThrows(IdentityMismatchException.class,
+                () -> service.checkDetails(id, "Someone Else", LocalDate.of(2000, 1, 1), "0788999999"));
+
+        assertTrue(e.getMessage().contains("verified: name, birthDate, phone."), e.getMessage());
+    }
+
+    @Test
+    void aMismatchIsRecordedWithFieldNamesOnly() {
+        Long id = verified();
+
+        assertThrows(IdentityMismatchException.class,
+                () -> service.checkDetails(id, "Someone Else", LocalDate.of(2000, 1, 1), "0788999999"));
+
+        AuditLog audit = lastAudit();
+        assertEquals(AuditAction.IDENTITY_MISMATCH, audit.getAction());
+        assertEquals("Verification 9: details do not match: name, birthDate, phone (attempt 1 of 3)",
+                audit.getDetails());
+        assertNull(audit.getMember());
+        for (String value : new String[] {"Someone", "Else", "2000", "788999999", "Claudine", "Uwimana", "1990"}) {
+            assertFalse(audit.getDetails().contains(value), value);
+        }
+    }
+
+    @Test
+    void aMismatchIsNeverLogged(CapturedOutput output) {
+        Long id = verified();
+
+        assertThrows(IdentityMismatchException.class,
+                () -> service.checkDetails(id, "Someone Else", LocalDate.of(2000, 1, 1), "0788999999"));
+
+        String logs = output.getAll();
+        for (String value : new String[] {"Someone", "Else", "2000", "788999999", "Claudine", "Uwimana", "1990",
+                "788123456"}) {
+            assertFalse(logs.contains(value), value);
+        }
+        assertTrue(logs.contains("name, birthDate, phone"), "the field names are logged");
+    }
+
+    @Test
+    void theVerificationCanBeTriedAgainAfterAMismatchUpToThreeTimes() {
+        Long id = verified();
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            int shown = attempt;
+            IdentityMismatchException e = assertThrows(IdentityMismatchException.class,
+                    () -> service.checkDetails(id, "Wrong Name", LocalDate.of(1990, 5, 17), "0788123456"));
+            assertTrue(e.getMessage().endsWith("(attempt " + shown + " of 3)."), e.getMessage());
+        }
+
+        service.checkDetails(id, "Uwimana Claudine", LocalDate.of(1990, 5, 17), "0788123456");
+        assertEquals(2, stored.values().iterator().next().getAttempts());
+    }
+
+    @Test
+    void theThirdMismatchUsesTheVerificationUp() {
+        Long id = verified();
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            assertThrows(IdentityMismatchException.class,
+                    () -> service.checkDetails(id, "Wrong Name", LocalDate.of(1990, 5, 17), "0788123456"));
+        }
+
+        IdentityMismatchException third = assertThrows(IdentityMismatchException.class,
+                () -> service.checkDetails(id, "Wrong Name", LocalDate.of(1990, 5, 17), "0788123456"));
+
+        assertEquals("The details do not match the person who verified: name. This verification has been used up. "
+                + "Verify the person again.", third.getMessage());
+        IdentityVerification verification = stored.values().iterator().next();
+        assertEquals(3, verification.getAttempts());
+        assertNull(verification.getSalt(), "the hashes are gone");
+        assertNull(verification.getNameHash());
+        BadRequestException after = assertThrows(BadRequestException.class,
+                () -> service.checkDetails(id, "Uwimana Claudine", LocalDate.of(1990, 5, 17), "0788123456"));
+        assertTrue(after.getMessage().contains("Verify the person again"), after.getMessage());
+    }
+
+    @Test
+    void theAttemptIsKeptEvenThoughTheRegistrationRollsBack() throws Exception {
+        Transactional transactional = IdentityVerificationService.class
+                .getMethod("checkDetails", Long.class, String.class, LocalDate.class, String.class)
+                .getAnnotation(Transactional.class);
+
+        assertEquals(Propagation.REQUIRES_NEW, transactional.propagation());
+        assertEquals(List.of(IdentityMismatchException.class), List.of(transactional.noRollbackFor()));
+    }
+
+    @Test
+    void anUnknownVerificationIsRefused() {
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> service.checkDetails(99L, "Uwimana Claudine", LocalDate.of(1990, 5, 17), "0788123456"));
+
+        assertEquals("Verification 99 does not exist.", e.getMessage());
+    }
+
+    @Test
+    void aVerificationThatDidNotVerifyAnyoneIsRefused() {
+        service.start(manager);
+
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> service.checkDetails(9L, "Uwimana Claudine", LocalDate.of(1990, 5, 17), "0788123456"));
+
+        assertEquals("Verification 9 did not verify anyone.", e.getMessage());
+    }
+
+    @Test
+    void anOldVerificationIsRefused() {
+        Long id = verified();
+        ReflectionTestUtils.setField(stored.values().iterator().next(), "verifiedAt",
+                Instant.now().minus(Duration.ofMinutes(31)));
+
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> service.checkDetails(id, "Uwimana Claudine", LocalDate.of(1990, 5, 17), "0788123456"));
+
+        assertTrue(e.getMessage().contains("more than 30 minutes old"), e.getMessage());
+    }
+
+    @Test
+    void aVerificationWhoseHashesWereClearedIsRefused() {
+        Long id = verified();
+        stored.values().iterator().next().clearFingerprints();
+
+        assertThrows(BadRequestException.class,
+                () -> service.checkDetails(id, "Uwimana Claudine", LocalDate.of(1990, 5, 17), "0788123456"));
+    }
+
+    // --- Registering the member with the verification
+
+    @Test
+    void attachMarksTheNewMemberVerifiedAndClearsTheHashes() {
+        Long id = verified();
+        Member member = new Member();
+
+        service.attach(id, member);
+
+        assertTrue(member.isIdentityVerified());
+        assertEquals(VerificationMethod.PASSWORD, member.getVerificationMethod());
+        assertEquals("pairwise-sub", member.getIdentityToken());
+        assertNotNull(member.getVerifiedAt());
+        IdentityVerification verification = stored.values().iterator().next();
+        assertEquals(member, verification.getMember());
+        assertNull(verification.getSalt());
+        assertNull(verification.getNameHash());
+        assertNull(verification.getBirthHash());
+        assertNull(verification.getPhoneHash());
+    }
+
+    @Test
+    void aVerificationRegistersOnlyOneMember() {
+        Long id = verified();
+        service.attach(id, new Member());
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.attach(id, new Member()));
+
+        assertEquals("Verification 9 was already used to register a member.", e.getMessage());
+    }
+
+    @Test
+    void aPersonWhoBecameAMemberInTheMeantimeIsRefused() {
+        Long id = verified();
+        when(memberRepository.existsByIdentityToken("pairwise-sub")).thenReturn(true);
+        Member member = new Member();
+
+        assertThrows(DuplicateIdentityException.class, () -> service.attach(id, member));
+
+        assertFalse(member.isIdentityVerified());
+    }
+
+    @Test
+    void attachRefusesAVerificationThatIsTooOldOrNotVerified() {
+        Long id = verified();
+        ReflectionTestUtils.setField(stored.values().iterator().next(), "verifiedAt",
+                Instant.now().minus(Duration.ofMinutes(31)));
+
+        assertThrows(BadRequestException.class, () -> service.attach(id, new Member()));
+    }
+
+    private Long verified() {
+        String state = service.start(manager).state();
+        return service.complete("the-code", state, manager).verificationId();
+    }
 
     @Test
     void clearExpiredDropsOldVerifiersAndFingerprints() {

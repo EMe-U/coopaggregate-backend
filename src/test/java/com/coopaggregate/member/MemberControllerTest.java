@@ -1,7 +1,9 @@
 package com.coopaggregate.member;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -17,6 +19,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -35,6 +38,10 @@ import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.config.SecurityConfig;
+import com.coopaggregate.identity.DuplicateIdentityException;
+import com.coopaggregate.identity.IdentityMismatchException;
+import com.coopaggregate.identity.IdentityProviderException;
+import com.coopaggregate.identity.VerificationMethod;
 
 import jakarta.persistence.EntityNotFoundException;
 
@@ -131,6 +138,97 @@ class MemberControllerTest {
                 .andExpect(jsonPath("$.memberCode").value("M-0001"))
                 .andExpect(jsonPath("$.phone").value("+250788123456"))
                 .andExpect(jsonPath("$.status").value("ACTIVE"));
+    }
+
+    @Test
+    void createPassesTheVerificationAndTheBirthDateOnAndShowsTheMemberVerified() throws Exception {
+        when(memberService.create(any(MemberRequest.class))).thenReturn(new MemberResponse(
+                1L, "M-0001", "Uwimana Claudine", "+250788123456", null, null,
+                LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), true,
+                VerificationMethod.PASSWORD, Instant.parse("2026-10-08T09:55:00Z")));
+
+        mockMvc.perform(post("/api/members")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName": "Uwimana Claudine", "phone": "0788123456", "verificationId": 9,
+                                 "birthDate": "1990-05-17"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.verified").value(true))
+                .andExpect(jsonPath("$.verificationMethod").value("PASSWORD"))
+                .andExpect(jsonPath("$.birthDate").doesNotExist())
+                .andExpect(jsonPath("$.identityToken").doesNotExist());
+
+        ArgumentCaptor<MemberRequest> request = ArgumentCaptor.forClass(MemberRequest.class);
+        verify(memberService).create(request.capture());
+        assertEquals(9L, request.getValue().verificationId());
+        assertEquals(LocalDate.of(1990, 5, 17), request.getValue().birthDate());
+    }
+
+    @Test
+    void aBirthDateInTheFutureIs400() throws Exception {
+        mockMvc.perform(post("/api/members")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName": "Uwimana Claudine", "phone": "0788123456", "verificationId": 9,
+                                 "birthDate": "2999-01-01"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("birthDate: cannot be in the future"));
+
+        verifyNoInteractions(memberService);
+    }
+
+    @Test
+    void aMismatchIs400WithTheFieldsThatDiffer() throws Exception {
+        when(memberService.create(any(MemberRequest.class))).thenThrow(new IdentityMismatchException(
+                "The details do not match the person who verified: name, phone. Correct them and try again "
+                        + "(attempt 1 of 3)."));
+
+        mockMvc.perform(post("/api/members")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName": "Uwimana Claudine", "phone": "0788123456", "verificationId": 9,
+                                 "birthDate": "1990-05-17"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("The details do not match the person who verified: name, "
+                        + "phone. Correct them and try again (attempt 1 of 3)."));
+    }
+
+    @Test
+    void aPersonWhoIsAlreadyAMemberIs409() throws Exception {
+        when(memberService.create(any(MemberRequest.class))).thenThrow(new DuplicateIdentityException());
+
+        mockMvc.perform(post("/api/members")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName": "Uwimana Claudine", "phone": "0788123456", "verificationId": 9,
+                                 "birthDate": "1990-05-17"}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("This person is already a member."));
+    }
+
+    @Test
+    void registrationThatNeedsAnUnavailableVerificationIs503WithAClearMessage() throws Exception {
+        when(memberService.create(any(MemberRequest.class))).thenThrow(IdentityProviderException.notConfigured(
+                "Identity verification is required but not available. Set up the identity provider, or switch the "
+                        + "requirement off in the settings."));
+
+        mockMvc.perform(post("/api/members")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName": "Uwimana Claudine", "phone": "0788123456"}
+                                """))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message").value("Identity verification is required but not available. Set up "
+                        + "the identity provider, or switch the requirement off in the settings."));
     }
 
     @Test

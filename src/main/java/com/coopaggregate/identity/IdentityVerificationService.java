@@ -6,6 +6,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -16,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.audit.AuditAction;
@@ -23,6 +25,7 @@ import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.manager.Manager;
+import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 
 /**
@@ -38,6 +41,7 @@ public class IdentityVerificationService {
     static final String PROVIDER = "MOSIP";
     static final Duration STATE_VALIDITY = Duration.ofMinutes(10);
     static final Duration USE_WITHIN = Duration.ofMinutes(30);
+    static final int MAX_MISMATCHES = 3;
 
     private final SecureRandom random = new SecureRandom();
     private final IdentityVerificationRepository verificationRepository;
@@ -137,6 +141,91 @@ public class IdentityVerificationService {
         record(AuditAction.IDENTITY_VERIFIED, manager,
                 "Provider " + PROVIDER + ", method " + VerificationMethod.PASSWORD);
         return new VerifyResultResponse(verification.getId(), true, VerificationMethod.PASSWORD, now.plus(USE_WITHIN));
+    }
+
+    /**
+     * Checks the details typed for a new member against the person who verified: name, birth date and phone must all
+     * match, or the registration is refused. Runs in its own transaction so a mismatch is counted even though the
+     * registration then rolls back: after three the verification is used up. Nothing is changed when they match.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = IdentityMismatchException.class)
+    public void checkDetails(Long verificationId, String fullName, LocalDate birthDate, String phone) {
+        IdentityVerification verification = usableVerification(verificationId);
+        if (verification.getAttempts() >= MAX_MISMATCHES) {
+            throw new BadRequestException("This verification has been used up. Verify the person again.");
+        }
+        String salt = verification.getSalt();
+        List<String> wrong = new ArrayList<>();
+        if (!matches(salt, ClaimFingerprints.NAME, verification.getNameHash(),
+                ClaimFingerprints.normalizeName(fullName))) {
+            wrong.add("name");
+        }
+        if (!matches(salt, ClaimFingerprints.BIRTH, verification.getBirthHash(),
+                ClaimFingerprints.normalizeBirth(birthDate))) {
+            wrong.add("birthDate");
+        }
+        if (!matches(salt, ClaimFingerprints.PHONE, verification.getPhoneHash(),
+                ClaimFingerprints.normalizePhone(phone))) {
+            wrong.add("phone");
+        }
+        if (wrong.isEmpty()) {
+            return;
+        }
+
+        verification.countFailedAttempt();
+        int attempt = verification.getAttempts();
+        String fields = String.join(", ", wrong);
+        log.warn("Identity verification {} did not match the member details ({} of {}): {}", verification.getId(),
+                attempt, MAX_MISMATCHES, fields);
+        record(AuditAction.IDENTITY_MISMATCH, verification.getManager(), "Verification " + verification.getId()
+                + ": details do not match: " + fields + " (attempt " + attempt + " of " + MAX_MISMATCHES + ")");
+        String message = "The details do not match the person who verified: " + fields + ".";
+        if (attempt >= MAX_MISMATCHES) {
+            verification.clearFingerprints();
+            throw new IdentityMismatchException(message + " This verification has been used up. Verify the person "
+                    + "again.");
+        }
+        throw new IdentityMismatchException(message + " Correct them and try again (attempt " + attempt + " of "
+                + MAX_MISMATCHES + ").");
+    }
+
+    /**
+     * Marks a newly registered member as verified with a completed verification, after checkDetails passed. A
+     * verification gives one member only, must be used within 30 minutes, and is refused if the person became a member
+     * in the meantime. The fingerprints are cleared: they have done their job.
+     */
+    @Transactional
+    public void attach(Long verificationId, Member member) {
+        IdentityVerification verification = usableVerification(verificationId);
+        if (memberRepository.existsByIdentityToken(verification.getIdentityToken())) {
+            throw new DuplicateIdentityException();
+        }
+        member.markIdentityVerified(verification.getVerificationMethod(), verification.getVerifiedAt(),
+                verification.getIdentityToken());
+        verification.setMember(member);
+        verification.clearFingerprints();
+    }
+
+    // The verification, locked, when it can still be used to register a member.
+    private IdentityVerification usableVerification(Long verificationId) {
+        IdentityVerification verification = verificationRepository.findForUpdateById(verificationId)
+                .orElseThrow(() -> new BadRequestException("Verification " + verificationId + " does not exist."));
+        if (!verification.isVerified()) {
+            throw new BadRequestException("Verification " + verificationId + " did not verify anyone.");
+        }
+        if (verification.getMember() != null) {
+            throw new IllegalStateException("Verification " + verificationId
+                    + " was already used to register a member.");
+        }
+        if (Instant.now().isAfter(verification.getVerifiedAt().plus(USE_WITHIN)) || verification.getSalt() == null) {
+            throw new BadRequestException("Verification " + verificationId
+                    + " is more than 30 minutes old or used up. Verify the person again.");
+        }
+        return verification;
+    }
+
+    private static boolean matches(String salt, String kind, String storedHash, String normalized) {
+        return normalized != null && ClaimFingerprints.same(storedHash, ClaimFingerprints.hash(salt, kind, normalized));
     }
 
     /**
