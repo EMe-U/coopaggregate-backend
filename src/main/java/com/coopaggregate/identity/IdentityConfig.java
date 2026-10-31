@@ -1,12 +1,15 @@
 package com.coopaggregate.identity;
 
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.client.RestClient;
 
 @Configuration
 @EnableConfigurationProperties(MosipProperties.class)
@@ -32,5 +35,14 @@ public class IdentityConfig {
                     + ". Set them as environment variables, or set MOSIP_ENABLED=false.");
         }
         return new MosipSigningKey(MosipKeyLoader.load(properties.privateKeyPath()), properties.keyId().trim());
+    }
+
+    // The timeouts come from spring.http.client.* in application.properties, like for the SMS provider.
+    @Bean
+    @ConditionalOnProperty(name = "app.identity.mosip.enabled", havingValue = "true")
+    MosipClient mosipClient(MosipProperties properties, MosipSigningKey signingKey, RestClient.Builder restClientBuilder,
+                            RestTemplateBuilder restTemplateBuilder) {
+        return new MosipClient(properties, signingKey, restClientBuilder.build(), restTemplateBuilder.build(),
+                Clock.systemUTC());
     }
 }

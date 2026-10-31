@@ -21,6 +21,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.web.client.RestClient;
 
 import com.nimbusds.jose.jwk.RSAKey;
 
@@ -32,7 +34,9 @@ class MosipSettingsTest {
     Path directory;
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withUserConfiguration(IdentityConfig.class);
+            .withUserConfiguration(IdentityConfig.class)
+            .withBean(RestClient.Builder.class, RestClient::builder)
+            .withBean(RestTemplateBuilder.class, RestTemplateBuilder::new);
 
     @BeforeAll
     static void createKey() throws Exception {
@@ -192,6 +196,7 @@ class MosipSettingsTest {
         runner.run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).doesNotHaveBean(MosipSigningKey.class);
+            assertThat(context).doesNotHaveBean(MosipClient.class);
         });
     }
 
@@ -238,6 +243,7 @@ class MosipSettingsTest {
         runner.withPropertyValues(allSettings(file.toString())).run(context -> {
             assertThat(context).hasNotFailed();
             assertEquals("coopaggregate-key", context.getBean(MosipSigningKey.class).keyId());
+            assertThat(context).hasSingleBean(MosipClient.class);
         });
     }
 
