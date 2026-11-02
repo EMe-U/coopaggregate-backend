@@ -201,6 +201,9 @@ ERD: see `docs/erd.png`.
   provider's name, birth date and phone, and an attempts counter, and adds `PASSWORD` to the allowed
   verification methods (the one thing it replaces is that list). No row is changed, so it is safe to run
   before or after the new build.
+- **V35** gives each `sms_log` row a `message_type`: `DELIVERY_CODE` (every existing row) or
+  `RECEIPT`, and makes the unique index one message per delivery, type and send number. No row is
+  changed. Run it before the new build starts: the new build reads and writes the column.
 - Applied migrations are never edited; a change is a new migration.
 
 ## API endpoints
@@ -403,6 +406,21 @@ up to 5 attempts. Because only the code's hash is kept, each attempt sends a **n
 the member never got the earlier one. A code message that is no longer needed (the delivery
 was confirmed, disputed or reversed, or a newer code was asked for) is `CANCELLED` instead
 of sent. No SMS are sent when SMS are turned off in the settings.
+
+**Receipt.** Once a delivery becomes `CONFIRMED` (with the code, by an SMS reply, by the
+manager's review of a pending delivery, or when a dispute is resolved as correct), the member gets
+one receipt in their language, for example:
+
+"Koperative Intagamburuzwa: delivery RCT-7K2Q confirmed. 300 kg Big, 21/10. Thank you."
+
+It holds the cooperative's name, the receipt code, kg, grade and day; never money, a balance or
+the member's name. Names are written in plain characters, and a long cooperative name is shortened
+so the receipt fits in one SMS. It is sent in the background after the confirmation is committed,
+so a failed receipt never undoes or holds up the confirmation; it is retried like any other SMS.
+It is saved in `sms_log` with `message_type` `RECEIPT`, at most once per delivery: confirming again
+later (for example after a dispute is resolved) sends no second receipt. An unsent receipt is
+`CANCELLED` if the delivery is disputed or reversed first. Deliveries recorded before confirmation
+existed get none unless they are confirmed later. No receipt is sent while SMS are turned off.
 
 `SMS_PROVIDER=log` (default) sends nothing. The messages are in `sms_log`, but the codes
 are masked there. To test codes locally, set `SMS_LOG_SHOW_CODES=true`: the log provider
