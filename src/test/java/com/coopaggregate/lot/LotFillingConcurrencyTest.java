@@ -36,6 +36,9 @@ import com.coopaggregate.delivery.DeliveryService;
 import com.coopaggregate.delivery.DisputeReason;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.ledger.LedgerService;
+import com.coopaggregate.loss.LossReason;
+import com.coopaggregate.loss.LossRequest;
+import com.coopaggregate.loss.LossService;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.manager.ManagerInitializer;
 import com.coopaggregate.manager.ManagerRepository;
@@ -77,6 +80,8 @@ class LotFillingConcurrencyTest {
     InboundSmsService inboundSmsService;
     @Autowired
     SaleService saleService;
+    @Autowired
+    LossService lossService;
     @Autowired
     LedgerService ledgerService;
     @Autowired
@@ -160,12 +165,13 @@ class LotFillingConcurrencyTest {
                     manager));
             work.add(() -> saleService.record(new SaleRequest(UUID.randomUUID(), grade, 1L, new BigDecimal("5"),
                     300L, null, List.of(), null, null), manager));
+            work.add(() -> recordLoss(grade));
         }
         Collections.shuffle(work, random);
 
         List<Throwable> failures = runAllAtOnce(work);
 
-        // Sales may be refused for lack of sellable kg (stage 2 sells from lots); nothing else may fail.
+        // A sale or a loss may be refused for lack of kg at that moment; nothing else may fail.
         List<Throwable> unexpected = failures.stream().filter(e -> !(e instanceof BadRequestException)).toList();
         assertEquals(List.of(), unexpected.stream().map(LotFillingConcurrencyTest::describe).toList());
         assertLotsAreConsistent();
@@ -190,7 +196,8 @@ class LotFillingConcurrencyTest {
             BigDecimal capacity = (BigDecimal) lot.get("capacity_kg");
             String status = (String) lot.get("status");
             assertTrue(filled.compareTo(capacity) <= 0, "lot " + lot + " is over capacity");
-            assertEquals(filled.compareTo(capacity) == 0, "FULL".equals(status), "lot " + lot);
+            // A full lot is FULL, or SOLD once nothing is left in it; a lot that is not full is still FILLING.
+            assertEquals(filled.compareTo(capacity) == 0, "FULL".equals(status) || "SOLD".equals(status), "lot " + lot);
             boolean newestOfGrade = i == lots.size() - 1 || !lots.get(i + 1).get("grade_id").equals(lot.get("grade_id"));
             if ("FILLING".equals(status)) {
                 assertTrue(newestOfGrade, "only the newest lot of a grade may be filling: " + lot);
@@ -210,6 +217,35 @@ class LotFillingConcurrencyTest {
                 SELECT COUNT(*) FROM delivery d JOIN lot_portion p ON p.delivery_id = d.id
                 WHERE d.lot_id IS NULL AND d.confirmation_status = 'PENDING'
                 """, Long.class), "a waiting delivery is in no lot");
+        // The kg sold and lost of every delivery are those of its portions, and of its sale and loss allocations.
+        assertEquals(0L, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM delivery d
+                WHERE d.sold_kg <> (SELECT COALESCE(SUM(p.sold_kg), 0) FROM lot_portion p WHERE p.delivery_id = d.id)
+                   OR d.lost_kg <> (SELECT COALESCE(SUM(p.lost_kg), 0) FROM lot_portion p WHERE p.delivery_id = d.id)
+                   OR d.sold_kg <> (SELECT COALESCE(SUM(a.quantity_kg), 0) FROM sale_allocation a
+                                    WHERE a.delivery_id = d.id)
+                   OR d.lost_kg <> (SELECT COALESCE(SUM(a.quantity_kg), 0) FROM loss_allocation a
+                                    WHERE a.delivery_id = d.id)
+                """, Long.class), "a delivery agrees with its portions and its allocations");
+        // Every loss is carried in full by the portions of its lot that are not reversed, and nothing more.
+        assertEquals(0L, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM lot l
+                WHERE (SELECT COALESCE(SUM(x.quantity_kg), 0) FROM loss x WHERE x.lot_id = l.id)
+                   <> (SELECT COALESCE(SUM(p.lost_kg), 0) FROM lot_portion p JOIN delivery d ON d.id = p.delivery_id
+                       WHERE p.lot_id = l.id AND d.reversed_at IS NULL)
+                """, Long.class), "a lot's losses are carried by its portions");
+        // Every sale's allocations add up to its kg and its amount; the credits to the amount less the deduction.
+        assertEquals(0L, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM sale s
+                WHERE s.quantity_kg <> (SELECT SUM(a.quantity_kg) FROM sale_allocation a WHERE a.sale_id = s.id)
+                   OR s.total_amount <> (SELECT SUM(a.gross_rwf) FROM sale_allocation a WHERE a.sale_id = s.id)
+                   OR s.total_amount <> (SELECT SUM(e.amount) FROM ledger_entry e JOIN sale_allocation a
+                                         ON e.related_entity_type = 'SALE_ALLOCATION' AND e.related_entity_id = a.id
+                                         WHERE a.sale_id = s.id)
+                                        + (SELECT SUM(a.deduction_rwf) FROM sale_allocation a WHERE a.sale_id = s.id)
+                """, Long.class), "a sale's allocations and credits add up to it");
+        // Kg already sold never carry a loss: no portion holds more sold and lost kg than it received.
+        assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM lot_portion WHERE remaining_kg < 0", Long.class));
     }
 
     private List<Throwable> runAllAtOnce(List<Callable<Object>> work) throws Exception {
@@ -234,6 +270,29 @@ class LotFillingConcurrencyTest {
         }
         pool.shutdown();
         return new ArrayList<>(failures);
+    }
+
+    // A small loss on a lot of the grade that holds kg when the task runs. None yet: nothing to do. A lot sold out
+    // between the look-up and the loss refuses it, which is expected; any other failure is not.
+    private Object recordLoss(long grade) {
+        List<Long> lots = jdbc.queryForList("SELECT id FROM lot WHERE grade_id = ? AND status IN ('FILLING', 'FULL')",
+                Long.class, grade);
+        if (lots.isEmpty()) {
+            return null;
+        }
+        long lot;
+        synchronized (random) {
+            lot = lots.get(random.nextInt(lots.size()));
+        }
+        try {
+            return lossService.record(lot, new LossRequest(new BigDecimal("0.37"), LossReason.ROT, null,
+                    "Rot in the store"), manager);
+        } catch (IllegalStateException e) {
+            if (e.getMessage() != null && e.getMessage().contains("Losses can only be recorded")) {
+                return null;
+            }
+            throw e;
+        }
     }
 
     private long record(long member, long grade, BigDecimal kg) {

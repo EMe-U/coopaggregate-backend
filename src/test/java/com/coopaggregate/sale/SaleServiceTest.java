@@ -517,24 +517,21 @@ class SaleServiceTest {
         sell("120.00", 300L);
         // The sale took 70 kg from batch 1 (lot A-1) and all of batch 2 (lot A-2).
         LossAllocationRepository lossAllocations = mock(LossAllocationRepository.class);
-        when(f.batchRepository.lockBatchesWithKgLeft(3L)).thenAnswer(invocation -> f.deliveries.stream()
-                .filter(d -> d.getLot() == f.lotA1 && d.unallocatedKg().signum() > 0)
-                .sorted(java.util.Comparator.comparing(Delivery::getDeliveredAt).thenComparing(Delivery::getId))
-                .toList());
         Loss loss = new Loss();
         ReflectionTestUtils.setField(loss, "id", 1L);
         loss.setLot(f.lotA1);
         loss.setQuantityKg(new BigDecimal("40.00"));
 
-        new BatchAllocator(f.batchRepository, lossAllocations, f.lotPortionRepository).allocateLoss(loss);
+        new BatchAllocator(f.lotPortionRepository, lossAllocations, f.deliveryRepository).allocateLoss(loss);
 
+        // Batch 1 has 30 kg left and batch 3 has 100: the 40 kg are shared 30 to 100, the sold kg carry none.
         Delivery first = f.deliveries.get(0);
         Delivery third = f.deliveries.get(2);
         assertEquals(new BigDecimal("70.00"), first.getSoldKg());
-        assertEquals(new BigDecimal("30.00"), first.getLostKg());
-        assertEquals(new BigDecimal("10.00"), third.getLostKg());
-        assertEquals(0, first.unallocatedKg().signum());
-        assertEquals(new BigDecimal("90.00"), third.unallocatedKg());
+        assertEquals(new BigDecimal("9.23"), first.getLostKg());
+        assertEquals(new BigDecimal("30.77"), third.getLostKg());
+        assertEquals(new BigDecimal("20.77"), first.unallocatedKg());
+        assertEquals(new BigDecimal("69.23"), third.unallocatedKg());
         verify(lossAllocations, times(2)).save(any(LossAllocation.class));
         // The lot has 200 kg: 70 sold, 40 lost, 90 left; the portions say the same.
         assertEquals(new BigDecimal("90.00"), f.lotPortionRepository.remainingKg(3L));

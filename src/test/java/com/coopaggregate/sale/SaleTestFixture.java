@@ -128,9 +128,10 @@ class SaleTestFixture {
             Collection<Long> ids = invocation.getArgument(0);
             return deliveries.stream().filter(d -> ids.contains(d.getId())).toList();
         });
-        when(lotPortionRepository.findByLotIdAndDeliveryId(anyLong(), anyLong())).thenAnswer(invocation -> portions
-                .stream().filter(p -> p.getLot().getId().equals(invocation.getArgument(0))
-                        && p.getDelivery().getId().equals(invocation.getArgument(1))).findFirst());
+        when(lotPortionRepository.findLossCarriers(anyLong())).thenAnswer(invocation -> portions.stream()
+                .filter(p -> p.getLot().getId().equals(invocation.getArgument(0)) && !p.getDelivery().isReversed()
+                        && p.unallocatedKg().signum() > 0)
+                .toList());
         // What a lot still holds, from the portions in memory.
         when(lotPortionRepository.remainingKg(anyLong())).thenAnswer(invocation -> portions.stream()
                 .filter(p -> p.getLot().getId().equals(invocation.getArgument(0)) && !p.getDelivery().isReversed())

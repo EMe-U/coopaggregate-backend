@@ -3,7 +3,6 @@ package com.coopaggregate.lot;
 import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
-import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -17,7 +16,15 @@ public interface LotPortionRepository extends JpaRepository<LotPortion, Long> {
 
     List<LotPortion> findByDeliveryIdOrderById(Long deliveryId);
 
-    Optional<LotPortion> findByLotIdAndDeliveryId(Long lotId, Long deliveryId);
+    // The portions of a lot that can carry a loss: of confirmed or disputed deliveries that are not reversed, with kg
+    // left. Not locked: the caller holds the grade's lock and the lot's.
+    @Query("""
+            SELECT p FROM LotPortion p JOIN FETCH p.delivery d JOIN FETCH d.member
+            WHERE p.lot.id = :lotId AND p.remainingKg > 0 AND d.reversedAt IS NULL
+              AND d.confirmationStatus IN (com.coopaggregate.delivery.ConfirmationStatus.CONFIRMED,
+                                           com.coopaggregate.delivery.ConfirmationStatus.DISPUTED)
+            """)
+    List<LotPortion> findLossCarriers(Long lotId);
 
     // The portions a sale of the grade may take kg from: of confirmed, not reversed deliveries, with kg left, in any lot
     // (older lots too). Not locked: the caller holds the grade's lock, under which none of this can change.
