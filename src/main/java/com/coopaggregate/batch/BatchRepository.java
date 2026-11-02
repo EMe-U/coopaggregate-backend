@@ -29,7 +29,7 @@ public interface BatchRepository extends Repository<Delivery, Long> {
             """)
     List<Delivery> lockBatchesWithKgLeft(Long lotId);
 
-    @EntityGraph(attributePaths = {"member", "lot", "lot.grade"})
+    @EntityGraph(attributePaths = {"member", "lot", "grade"})
     @Query(value = """
             SELECT d FROM Delivery d
             WHERE d.member.id = :memberId AND d.reversedAt IS NULL AND (:unsoldOnly = false OR d.remainingKg > 0)
@@ -49,18 +49,18 @@ public interface BatchRepository extends Repository<Delivery, Long> {
     BatchTotals memberTotals(Long memberId);
 
     // FIFO order: the order sales and losses take kg in.
-    @EntityGraph(attributePaths = {"member", "lot", "lot.grade"})
+    @EntityGraph(attributePaths = {"member", "lot", "grade"})
     @Query(value = """
             SELECT d FROM Delivery d
-            WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL AND d.remainingKg > 0
+            WHERE d.grade.id = :gradeId AND d.reversedAt IS NULL AND d.remainingKg > 0
             ORDER BY d.deliveredAt, d.id
             """, countQuery = """
             SELECT COUNT(d) FROM Delivery d
-            WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL AND d.remainingKg > 0
+            WHERE d.grade.id = :gradeId AND d.reversedAt IS NULL AND d.remainingKg > 0
             """)
     Page<Delivery> findGradeBatchesWithKgLeft(Long gradeId, Pageable pageable);
 
-    @Query("SELECT COALESCE(SUM(d.remainingKg), 0) FROM Delivery d WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL")
+    @Query("SELECT COALESCE(SUM(d.remainingKg), 0) FROM Delivery d WHERE d.grade.id = :gradeId AND d.reversedAt IS NULL")
     BigDecimal gradeRemainingKg(Long gradeId);
 
     // The batches a sale of the grade may use, in the order it uses them: confirmed (by the member, by the manager or
@@ -68,7 +68,7 @@ public interface BatchRepository extends Repository<Delivery, Long> {
     @EntityGraph(attributePaths = {"member", "lot"})
     @Query("""
             SELECT d FROM Delivery d
-            WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL AND d.remainingKg > 0
+            WHERE d.grade.id = :gradeId AND d.reversedAt IS NULL AND d.remainingKg > 0
               AND d.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.CONFIRMED
             ORDER BY d.deliveredAt, d.id
             """)
@@ -76,14 +76,14 @@ public interface BatchRepository extends Repository<Delivery, Long> {
 
     @Query("""
             SELECT COALESCE(SUM(d.remainingKg), 0) FROM Delivery d
-            WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL AND d.confirmationStatus = :status
+            WHERE d.grade.id = :gradeId AND d.reversedAt IS NULL AND d.confirmationStatus = :status
             """)
     BigDecimal gradeRemainingKgWithStatus(Long gradeId, ConfirmationStatus status);
 
     // The lots a sale of the grade may take kg from, in id order: the order the sale locks them in.
     @Query("""
             SELECT DISTINCT d.lot.id FROM Delivery d
-            WHERE d.lot.grade.id = :gradeId AND d.reversedAt IS NULL AND d.remainingKg > 0
+            WHERE d.grade.id = :gradeId AND d.reversedAt IS NULL AND d.remainingKg > 0
               AND d.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.CONFIRMED
             ORDER BY d.lot.id
             """)

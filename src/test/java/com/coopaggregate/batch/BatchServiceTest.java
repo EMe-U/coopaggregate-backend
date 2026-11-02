@@ -210,6 +210,7 @@ class BatchServiceTest {
         delivery.setReceiptCode(receiptCode);
         delivery.setMember(member);
         delivery.setLot(lot);
+        delivery.setGrade(lot.getGrade());
         delivery.setDeliveredAt(Instant.parse("2026-10-19T08:00:00Z"));
         delivery.setQuantityKg(new BigDecimal(received));
         ReflectionTestUtils.setField(delivery, "soldKg", new BigDecimal(sold).setScale(2));

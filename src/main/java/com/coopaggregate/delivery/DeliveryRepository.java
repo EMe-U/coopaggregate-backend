@@ -28,7 +28,7 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
 
     // Loads member, lot and grade in the same query, so listing a page does not run one query per row.
     @Override
-    @EntityGraph(attributePaths = {"member", "lot", "lot.grade"})
+    @EntityGraph(attributePaths = {"member", "lot", "grade"})
     Page<Delivery> findAll(Specification<Delivery> spec, Pageable pageable);
 
     @EntityGraph(attributePaths = {"member", "lot"})
@@ -36,7 +36,7 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
 
     @Query("""
             SELECT new com.coopaggregate.delivery.GradeDeliveredKg(g.name, SUM(d.quantityKg))
-            FROM Delivery d JOIN d.lot l JOIN l.grade g
+            FROM Delivery d JOIN d.grade g
             WHERE d.deliveredAt >= :from AND d.deliveredAt < :to AND d.reversedAt IS NULL
             GROUP BY g.name
             """)

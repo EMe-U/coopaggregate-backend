@@ -268,6 +268,7 @@ class DisputeServiceTest {
         delivery.setReceiptCode(receiptCode);
         delivery.setMember(member);
         delivery.setLot(lot);
+        delivery.setGrade(lot.getGrade());
         delivery.setQuantityKg(new BigDecimal("120.50"));
         delivery.dispute(DisputeReason.WRONG_KG, "It was 100 kg", disputedAt);
         return delivery;

@@ -71,7 +71,7 @@ public class SmsService {
         sms.setSendNumber(sendNumber);
         sms.setPhone(member.getPhone());
         sms.setMessage(SmsMessages.deliveryCode(member.getPreferredLanguage(), delivery.getReceiptCode(),
-                delivery.getQuantityKg(), delivery.getLot().getGrade().getName(), delivery.getDeliveredAt(),
+                delivery.getQuantityKg(), delivery.getGrade().getName(), delivery.getDeliveredAt(),
                 SmsMessages.CODE_MASK, smsSender.supportsInboundReplies()));
         return Optional.of(smsLogRepository.save(sms).getId());
     }
@@ -102,7 +102,7 @@ public class SmsService {
         sms.setSendNumber(0);
         sms.setPhone(member.getPhone());
         sms.setMessage(SmsMessages.receipt(member.getPreferredLanguage(), setting.getCooperativeName(),
-                delivery.getReceiptCode(), delivery.getQuantityKg(), delivery.getLot().getGrade().getName(),
+                delivery.getReceiptCode(), delivery.getQuantityKg(), delivery.getGrade().getName(),
                 delivery.getDeliveredAt()));
         return Optional.of(smsLogRepository.save(sms).getId());
     }

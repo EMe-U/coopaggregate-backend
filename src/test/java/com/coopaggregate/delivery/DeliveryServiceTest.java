@@ -688,6 +688,17 @@ class DeliveryServiceTest {
     }
 
     @Test
+    void aNewDeliveryKeepsItsOwnGrade() {
+        givenOpenLot();
+
+        record("100");
+
+        ArgumentCaptor<Delivery> saved = ArgumentCaptor.forClass(Delivery.class);
+        verify(deliveryRepository).save(saved.capture());
+        assertEquals(grade, saved.getValue().getGrade());
+    }
+
+    @Test
     void correctCodeConfirmsTheDelivery() {
         Delivery delivery = givenDeliveryWithCode();
         String code = confirmationCodes.issue(delivery, Instant.now());

@@ -119,6 +119,17 @@ class SmsServiceTest {
     }
 
     @Test
+    void aDeliveryInNoLotYetStillNamesItsOwnGrade() {
+        delivery.setLot(null);
+
+        service.queueCodeMessage(42L, 0);
+
+        ArgumentCaptor<SmsLog> sms = ArgumentCaptor.forClass(SmsLog.class);
+        verify(smsLogRepository).save(sms.capture());
+        assertEquals(MASKED, sms.getValue().getMessage());
+    }
+
+    @Test
     void noCodeIsQueuedWhenSmsAreTurnedOff() {
         setting.setSmsEnabled(false);
 
@@ -511,6 +522,7 @@ class SmsServiceTest {
         ReflectionTestUtils.setField(delivery, "id", 42L);
         delivery.setMember(member);
         delivery.setLot(lot);
+        delivery.setGrade(lot.getGrade());
         delivery.setReceiptCode("RCT-7K2Q");
         delivery.setQuantityKg(new BigDecimal("300.00"));
         delivery.setDeliveredAt(Instant.parse("2026-10-19T07:30:00Z"));

@@ -19,7 +19,7 @@ public interface ReportRepository extends Repository<Delivery, Long> {
 
     @Query("""
             SELECT new com.coopaggregate.report.GradeCount(g.name, COUNT(d))
-            FROM Delivery d JOIN d.lot l JOIN l.grade g
+            FROM Delivery d JOIN d.grade g
             WHERE d.deliveredAt >= :from AND d.deliveredAt < :to AND d.reversedAt IS NULL
             GROUP BY g.name
             """)
@@ -27,7 +27,7 @@ public interface ReportRepository extends Repository<Delivery, Long> {
 
     @Query("""
             SELECT new com.coopaggregate.report.MemberGradeKg(m.id, m.memberCode, m.fullName, g.name, SUM(d.quantityKg))
-            FROM Delivery d JOIN d.member m JOIN d.lot l JOIN l.grade g
+            FROM Delivery d JOIN d.member m JOIN d.grade g
             WHERE d.deliveredAt >= :from AND d.deliveredAt < :to AND d.reversedAt IS NULL
             GROUP BY m.id, m.memberCode, m.fullName, g.name
             """)

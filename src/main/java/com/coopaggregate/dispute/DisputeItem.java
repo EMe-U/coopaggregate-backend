@@ -43,7 +43,7 @@ public record DisputeItem(
                 delivery.getMember().getId(),
                 delivery.getMember().getFullName(),
                 delivery.getMember().getMemberCode(),
-                delivery.getLot().getGrade().getName(),
+                delivery.getGrade().getName(),
                 delivery.getLot().getLotCode(),
                 delivery.getQuantityKg(),
                 delivery.getDisputeReason(),
