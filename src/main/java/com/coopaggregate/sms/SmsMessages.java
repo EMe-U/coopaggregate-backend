@@ -18,22 +18,25 @@ public final class SmsMessages {
     }
 
     /**
-     * The message for a new delivery, with the one-time code the member gives the manager if it is correct.
-     * Members can still reply "1 <receipt>" to confirm or "2 <receipt>" to dispute it.
+     * The message for a new delivery, with the one-time code the member gives the manager if it is correct. With
+     * replies (the provider passes them on to the webhook), the member is told to reply "2 <receipt>" when it is
+     * wrong; without them, to tell the manager.
      */
     public static String deliveryCode(String language, String receiptCode, BigDecimal quantityKg, String gradeName,
-                                      Instant deliveredAt, String code) {
+                                      Instant deliveredAt, String code, boolean replies) {
         String kg = quantityKg.stripTrailingZeros().toPlainString();
         String day = DAY_MONTH.format(deliveredAt.atZone(KigaliTime.ZONE));
 
         if ("en".equals(language)) {
             return "CoopAggregate: " + receiptCode + ", " + kg + " kg " + gradeName + ", " + day
-                    + ". If correct, give the manager code " + code + ". If wrong, don't give the code, reply 2 "
-                    + receiptCode + ".";
+                    + ". If correct, give the manager code " + code + ". "
+                    + (replies ? "If wrong, don't give the code, reply 2 " + receiptCode + "."
+                            : "If the code is wrong, tell the manager.");
         }
         // Kinyarwanda: to be checked by a native speaker.
         return "CoopAggregate: " + receiptCode + ", kg " + kg + " " + gradeName + ", " + day
-                + ". Niba ari ukuri, ha umuyobozi kode " + code + ". Niba atari ukuri, ntutange kode, subiza 2 "
-                + receiptCode + ".";
+                + ". Niba ari ukuri, ha umuyobozi kode " + code + ". "
+                + (replies ? "Niba atari ukuri, ntutange kode, subiza 2 " + receiptCode + "."
+                        : "Niba kode atari yo, bwira umuyobozi.");
     }
 }

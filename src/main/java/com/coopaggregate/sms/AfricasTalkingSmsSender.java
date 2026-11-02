@@ -80,4 +80,10 @@ public class AfricasTalkingSmsSender implements SmsSender {
     public String name() {
         return "africastalking";
     }
+
+    // Replies come back through the SMS callback URL set in the Africa's Talking dashboard.
+    @Override
+    public boolean supportsInboundReplies() {
+        return true;
+    }
 }

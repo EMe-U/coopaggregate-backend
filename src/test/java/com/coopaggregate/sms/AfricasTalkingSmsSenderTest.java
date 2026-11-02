@@ -2,6 +2,7 @@ package com.coopaggregate.sms;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
@@ -65,6 +66,11 @@ class AfricasTalkingSmsSenderTest {
         server.expect(requestTo(SANDBOX_URL)).andRespond(withServerError());
 
         assertThrows(SmsSendException.class, () -> sender.send("+250788123456", "Hello"));
+    }
+
+    @Test
+    void passesRepliesOn() {
+        assertTrue(sender.supportsInboundReplies());
     }
 
     @Test

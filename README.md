@@ -390,6 +390,10 @@ After a delivery is saved, the member gets one SMS in their language (`rw` or `e
 "CoopAggregate: RCT-7K2Q, 300 kg Big, 21/10. If correct, give the manager code 482193.
 If wrong, don't give the code, reply 2 RCT-7K2Q."
 
+The reply instruction is only there when the provider passes replies on to the webhook
+(`africastalking`). With `log` and `traccar` the last sentence is instead
+"If the code is wrong, tell the manager."
+
 The Kinyarwanda text still needs a check by a native speaker.
 
 The SMS is sent in the background after the delivery is committed, so a failed SMS never

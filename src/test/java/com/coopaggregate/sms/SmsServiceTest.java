@@ -66,6 +66,7 @@ class SmsServiceTest {
         SettingRepository settingRepository = mock(SettingRepository.class);
         smsSender = mock(SmsSender.class);
         when(smsSender.name()).thenReturn("test");
+        when(smsSender.supportsInboundReplies()).thenReturn(true);
 
         setting = new Setting();
         when(settingRepository.findById(1L)).thenReturn(Optional.of(setting));
@@ -96,6 +97,18 @@ class SmsServiceTest {
         assertEquals(0, sms.getValue().getSendNumber());
         assertEquals(MASKED, sms.getValue().getMessage());
         assertNull(delivery.getConfirmationCodeHash());
+    }
+
+    @Test
+    void withAProviderThatCannotPassOnRepliesTheMessageDoesNotAskForOne() {
+        when(smsSender.supportsInboundReplies()).thenReturn(false);
+
+        service.queueCodeMessage(42L, 0);
+
+        ArgumentCaptor<SmsLog> sms = ArgumentCaptor.forClass(SmsLog.class);
+        verify(smsLogRepository).save(sms.capture());
+        assertEquals("CoopAggregate: RCT-7K2Q, 300 kg Big, 19/10. If correct, give the manager code ******. "
+                + "If the code is wrong, tell the manager.", sms.getValue().getMessage());
     }
 
     @Test

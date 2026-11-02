@@ -147,4 +147,10 @@ public class TraccarSmsSender implements SmsSender {
     public String name() {
         return "traccar";
     }
+
+    // The gateway only sends; nothing forwards replies to the webhook.
+    @Override
+    public boolean supportsInboundReplies() {
+        return false;
+    }
 }

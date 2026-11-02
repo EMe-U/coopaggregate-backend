@@ -36,4 +36,9 @@ public class LogSmsSender implements SmsSender {
     public String name() {
         return "log";
     }
+
+    @Override
+    public boolean supportsInboundReplies() {
+        return false;
+    }
 }

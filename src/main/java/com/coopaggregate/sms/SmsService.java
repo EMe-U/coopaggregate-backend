@@ -68,7 +68,7 @@ public class SmsService {
         sms.setPhone(member.getPhone());
         sms.setMessage(SmsMessages.deliveryCode(member.getPreferredLanguage(), delivery.getReceiptCode(),
                 delivery.getQuantityKg(), delivery.getLot().getGrade().getName(), delivery.getDeliveredAt(),
-                SmsMessages.CODE_MASK));
+                SmsMessages.CODE_MASK, smsSender.supportsInboundReplies()));
         return Optional.of(smsLogRepository.save(sms).getId());
     }
 

@@ -182,6 +182,11 @@ class TraccarSmsSenderTest {
         assertEquals("traccar", sender.name());
     }
 
+    @Test
+    void doesNotPassRepliesOn() {
+        assertFalse(sender.supportsInboundReplies());
+    }
+
     // ---- configuration
 
     @Test
