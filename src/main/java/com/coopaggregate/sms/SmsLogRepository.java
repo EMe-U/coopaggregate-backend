@@ -7,9 +7,11 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface SmsLogRepository extends JpaRepository<SmsLog, Long> {
 
-    boolean existsByDeliveryIdAndSendNumber(Long deliveryId, int sendNumber);
+    boolean existsByDeliveryIdAndMessageTypeAndSendNumber(Long deliveryId, SmsMessageType messageType,
+                                                          int sendNumber);
 
-    boolean existsByDeliveryIdAndSendNumberGreaterThan(Long deliveryId, int sendNumber);
+    boolean existsByDeliveryIdAndMessageTypeAndSendNumberGreaterThan(Long deliveryId, SmsMessageType messageType,
+                                                                     int sendNumber);
 
     List<SmsLog> findTop50ByStatusAndAttemptsLessThanOrderByIdAsc(SmsStatus status, int attempts);
 

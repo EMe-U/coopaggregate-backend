@@ -95,6 +95,7 @@ class SmsServiceTest {
         assertEquals("+250788123456", sms.getValue().getPhone());
         assertEquals(SmsStatus.QUEUED, sms.getValue().getStatus());
         assertEquals(0, sms.getValue().getSendNumber());
+        assertEquals(SmsMessageType.DELIVERY_CODE, sms.getValue().getMessageType());
         assertEquals(MASKED, sms.getValue().getMessage());
         assertNull(delivery.getConfirmationCodeHash());
     }
@@ -121,7 +122,8 @@ class SmsServiceTest {
 
     @Test
     void theSameMessageIsQueuedOnlyOnce() {
-        when(smsLogRepository.existsByDeliveryIdAndSendNumber(42L, 0)).thenReturn(true);
+        when(smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumber(42L, SmsMessageType.DELIVERY_CODE, 0))
+                .thenReturn(true);
 
         assertTrue(service.queueCodeMessage(42L, 0).isEmpty());
         verify(smsLogRepository, never()).save(any());
@@ -218,7 +220,8 @@ class SmsServiceTest {
     @Test
     void olderCodeIsNotSentOnceANewerOneWasRequested() {
         SmsLog sms = queuedCodeMessage(0);
-        when(smsLogRepository.existsByDeliveryIdAndSendNumberGreaterThan(42L, 0)).thenReturn(true);
+        when(smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumberGreaterThan(42L,
+                SmsMessageType.DELIVERY_CODE, 0)).thenReturn(true);
 
         service.trySend(7L);
 

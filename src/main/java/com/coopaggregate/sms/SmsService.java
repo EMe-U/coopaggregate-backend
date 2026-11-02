@@ -55,7 +55,8 @@ public class SmsService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Optional<Long> queueCodeMessage(Long deliveryId, int sendNumber) {
         boolean smsEnabled = settingRepository.findById(1L).map(setting -> setting.isSmsEnabled()).orElse(false);
-        if (!smsEnabled || smsLogRepository.existsByDeliveryIdAndSendNumber(deliveryId, sendNumber)) {
+        if (!smsEnabled || smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumber(deliveryId,
+                SmsMessageType.DELIVERY_CODE, sendNumber)) {
             return Optional.empty();
         }
         Delivery delivery = deliveryRepository.findById(deliveryId).orElseThrow();
@@ -64,6 +65,7 @@ public class SmsService {
         SmsLog sms = new SmsLog();
         sms.setMember(member);
         sms.setDelivery(delivery);
+        sms.setMessageType(SmsMessageType.DELIVERY_CODE);
         sms.setSendNumber(sendNumber);
         sms.setPhone(member.getPhone());
         sms.setMessage(SmsMessages.deliveryCode(member.getPreferredLanguage(), delivery.getReceiptCode(),
@@ -120,7 +122,8 @@ public class SmsService {
         if (delivery.getConfirmationStatus() != ConfirmationStatus.PENDING) {
             return "The delivery is already " + delivery.getConfirmationStatus() + ".";
         }
-        if (smsLogRepository.existsByDeliveryIdAndSendNumberGreaterThan(delivery.getId(), sms.getSendNumber())) {
+        if (smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumberGreaterThan(delivery.getId(),
+                SmsMessageType.DELIVERY_CODE, sms.getSendNumber())) {
             return "A newer code was requested.";
         }
         return null;
