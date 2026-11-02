@@ -78,7 +78,7 @@ public class StatementService {
 
     private static StatementResponse.SaleCreditLine creditLine(SaleAllocation credit) {
         return new StatementResponse.SaleCreditLine(credit.getSale().getSaleCode(), credit.getSale().getSaleDate(),
-                credit.getDelivery().getReceiptCode(), credit.getDelivery().getLot().getLotCode(),
+                credit.getDelivery().getReceiptCode(), credit.getDelivery().ownLotCode(),
                 credit.getQuantityKg(), credit.getSale().getPricePerKg(), credit.getGrossRwf(),
                 credit.getDeductionRwf(), credit.netRwf());
     }

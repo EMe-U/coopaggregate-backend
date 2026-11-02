@@ -18,8 +18,8 @@ public record SellableBatch(
         BigDecimal remainingKg) {
 
     public static SellableBatch from(Delivery batch) {
-        return new SellableBatch(batch.getId(), batch.getReceiptCode(), batch.getLot().getId(),
-                batch.getLot().getLotCode(), batch.getMember().getId(), batch.getMember().getMemberCode(),
+        return new SellableBatch(batch.getId(), batch.getReceiptCode(), batch.ownLotId(),
+                batch.ownLotCode(), batch.getMember().getId(), batch.getMember().getMemberCode(),
                 batch.getMember().getFullName(), batch.getDeliveredAt(), batch.getRemainingKg());
     }
 }

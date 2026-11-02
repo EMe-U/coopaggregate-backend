@@ -143,6 +143,16 @@ public class Delivery {
         this.lot = lot;
     }
 
+    /** The id of the delivery's own lot, or null: only deliveries from before fixed-size lots have one. */
+    public Long ownLotId() {
+        return lot == null ? null : lot.getId();
+    }
+
+    /** The code of the delivery's own lot, or null: only deliveries from before fixed-size lots have one. */
+    public String ownLotCode() {
+        return lot == null ? null : lot.getLotCode();
+    }
+
     public Instant getDeliveredAt() {
         return deliveredAt;
     }

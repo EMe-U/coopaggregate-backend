@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 import com.coopaggregate.grade.Grade;
-import com.coopaggregate.lot.Lot;
 import com.coopaggregate.member.Member;
 
 /**
@@ -46,8 +45,7 @@ public record DeliveryResponse(
     /** correctedById is the delivery that replaced this one, if it was corrected. */
     public static DeliveryResponse from(Delivery delivery, Long correctedById) {
         Member member = delivery.getMember();
-        Lot lot = delivery.getLot();
-        Grade grade = lot.getGrade();
+        Grade grade = delivery.getGrade();
         return new DeliveryResponse(
                 delivery.getId(),
                 delivery.getReceiptCode(),
@@ -56,8 +54,8 @@ public record DeliveryResponse(
                 member.getMemberCode(),
                 grade.getId(),
                 grade.getName(),
-                lot.getId(),
-                lot.getLotCode(),
+                delivery.ownLotId(),
+                delivery.ownLotCode(),
                 delivery.getQuantityKg(),
                 delivery.getDeductionAmount(),
                 delivery.getDeliveredAt(),

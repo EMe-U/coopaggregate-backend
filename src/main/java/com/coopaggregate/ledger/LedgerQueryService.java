@@ -156,7 +156,7 @@ public class LedgerQueryService {
         idsByType.forEach((type, ids) -> references.put(type, switch (type) {
             case "DELIVERY" -> deliveryRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     Delivery::getId, d -> new LedgerReference(d.getReceiptCode(), d.getMember().getId(),
-                            d.getMember().getFullName(), d.getLot().getId(), d.getLot().getLotCode(), null)));
+                            d.getMember().getFullName(), d.ownLotId(), d.ownLotCode(), null)));
             case "LOSS" -> lossRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     Loss::getId, loss -> new LedgerReference(null, null, null, loss.getLot().getId(),
                             loss.getLot().getLotCode(), null)));
@@ -168,7 +168,7 @@ public class LedgerQueryService {
             case "SALE_ALLOCATION" -> saleAllocationRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     SaleAllocation::getId, a -> new LedgerReference(a.getSale().getSaleCode(),
                             a.getDelivery().getMember().getId(), a.getDelivery().getMember().getFullName(),
-                            a.getDelivery().getLot().getId(), a.getDelivery().getLot().getLotCode(),
+                            a.getDelivery().ownLotId(), a.getDelivery().ownLotCode(),
                             a.getSale().getBuyer().getName())));
             case "LOT_SHARE" -> lotShareRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     LotShare::getId, share -> new LedgerReference(null, share.getMember().getId(),

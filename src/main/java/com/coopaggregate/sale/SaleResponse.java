@@ -50,7 +50,7 @@ public record SaleResponse(
 
         static BatchLine from(SaleAllocation allocation) {
             return new BatchLine(allocation.getDelivery().getId(), allocation.getDelivery().getReceiptCode(),
-                    allocation.getDelivery().getLot().getId(), allocation.getDelivery().getLot().getLotCode(),
+                    allocation.getDelivery().ownLotId(), allocation.getDelivery().ownLotCode(),
                     allocation.getDelivery().getMember().getId(), allocation.getDelivery().getMember().getMemberCode(),
                     allocation.getDelivery().getMember().getFullName(), allocation.getQuantityKg(),
                     allocation.getGrossRwf(), allocation.getDeductionRwf(), allocation.netRwf());

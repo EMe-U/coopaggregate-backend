@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -28,38 +29,50 @@ import jakarta.persistence.EntityNotFoundException;
 class LotServiceTest {
 
     private LotRepository lotRepository;
+    private LotPortionRepository lotPortionRepository;
     private GradeRepository gradeRepository;
     private LotService service;
 
     @BeforeEach
     void setUp() {
         lotRepository = mock(LotRepository.class);
+        lotPortionRepository = mock(LotPortionRepository.class);
         gradeRepository = mock(GradeRepository.class);
-        service = new LotService(lotRepository, gradeRepository);
+        service = new LotService(lotRepository, lotPortionRepository, gradeRepository);
         when(gradeRepository.existsById(1L)).thenReturn(true);
     }
 
     @Test
-    void openLotIsReturnedWithTotalKg() {
+    void theLotBeingFilledIsReturnedWithItsKgAndCapacity() {
         Grade grade = new Grade();
         grade.setName("Big");
         Lot lot = new Lot();
         ReflectionTestUtils.setField(lot, "id", 3L);
         lot.setLotCode("A-2026-01");
         lot.setGrade(grade);
-        when(lotRepository.findFirstByGradeIdAndStatus(1L, LotStatus.OPEN)).thenReturn(Optional.of(lot));
-        when(lotRepository.totalDeliveredKg(3L)).thenReturn(new BigDecimal("1250.50"));
+        lot.setCapacityKg(new BigDecimal("100.00"));
+        when(lotRepository.findFirstByGradeIdAndStatus(1L, LotStatus.FILLING)).thenReturn(Optional.of(lot));
+        when(lotPortionRepository.filledKg(3L)).thenReturn(new BigDecimal("72.50"));
 
         OpenLotResponse response = service.findOpenLot(1L).orElseThrow();
 
-        assertEquals(new OpenLotResponse(3L, "A-2026-01", "Big", new BigDecimal("1250.50")), response);
+        assertEquals(new OpenLotResponse(3L, "A-2026-01", "Big", new BigDecimal("72.50"), new BigDecimal("100.00")),
+                response);
     }
 
     @Test
-    void noOpenLotGivesEmptyResult() {
-        when(lotRepository.findFirstByGradeIdAndStatus(1L, LotStatus.OPEN)).thenReturn(Optional.empty());
+    void noLotBeingFilledGivesEmptyResult() {
+        when(lotRepository.findFirstByGradeIdAndStatus(1L, LotStatus.FILLING)).thenReturn(Optional.empty());
 
         assertTrue(service.findOpenLot(1L).isEmpty());
+    }
+
+    @Test
+    void anOldOpenLotIsNotTheLotBeingFilled() {
+        when(lotRepository.findFirstByGradeIdAndStatus(1L, LotStatus.FILLING)).thenReturn(Optional.empty());
+
+        assertTrue(service.findOpenLot(1L).isEmpty());
+        verify(lotRepository, never()).findFirstByGradeIdAndStatus(1L, LotStatus.OPEN);
     }
 
     @Test
@@ -67,45 +80,6 @@ class LotServiceTest {
         EntityNotFoundException e = assertThrows(EntityNotFoundException.class, () -> service.findOpenLot(9L));
 
         assertEquals("Grade 9 does not exist.", e.getMessage());
-    }
-
-    @Test
-    void openLotCanBeClosed() {
-        Lot lot = lot(3L, "A-2026-01", "A", "Big", LotStatus.OPEN);
-        givenLot(lot);
-
-        LotResponse response = service.close(3L);
-
-        assertEquals(LotStatus.CLOSED, lot.getStatus());
-        assertEquals(KigaliTime.today(), lot.getCloseDate());
-        assertEquals(LotStatus.CLOSED, response.status());
-        assertEquals(KigaliTime.today(), response.closedAt());
-        verify(gradeRepository).findForUpdateById(1L);
-    }
-
-    @Test
-    void closedLotCannotBeClosedAgain() {
-        givenLot(lot(3L, "A-2026-01", "A", "Big", LotStatus.CLOSED));
-
-        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.close(3L));
-
-        assertEquals("Lot A-2026-01 is CLOSED. Only an open lot can be closed.", e.getMessage());
-    }
-
-    @Test
-    void soldLotCannotBeClosed() {
-        givenLot(lot(3L, "A-2026-01", "A", "Big", LotStatus.SOLD));
-
-        assertThrows(IllegalStateException.class, () -> service.close(3L));
-    }
-
-    @Test
-    void closingUnknownLotIsNotFound() {
-        when(lotRepository.findGradeIdById(99L)).thenReturn(Optional.empty());
-
-        EntityNotFoundException e = assertThrows(EntityNotFoundException.class, () -> service.close(99L));
-
-        assertEquals("Lot 99 does not exist.", e.getMessage());
     }
 
     @Test

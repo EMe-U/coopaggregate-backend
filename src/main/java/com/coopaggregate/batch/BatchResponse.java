@@ -37,8 +37,9 @@ public record BatchResponse(
         BigDecimal creditedKg = credit == null ? BigDecimal.ZERO : credit.creditedKg();
         return new BatchResponse(delivery.getId(), delivery.getReceiptCode(), delivery.getMember().getId(),
                 delivery.getMember().getMemberCode(), delivery.getMember().getFullName(),
-                delivery.getGrade().getName(), delivery.getLot().getId(), delivery.getLot().getLotCode(),
-                delivery.getLot().getStatus(), delivery.getDeliveredAt(), delivery.getQuantityKg(),
+                delivery.getGrade().getName(), delivery.ownLotId(), delivery.ownLotCode(),
+                delivery.getLot() == null ? null : delivery.getLot().getStatus(), delivery.getDeliveredAt(),
+                delivery.getQuantityKg(),
                 delivery.getSoldKg(), delivery.getLostKg(), delivery.getRemainingKg(),
                 delivery.getConfirmationStatus(),
                 credit == null ? 0 : credit.grossRwf(),

@@ -3,6 +3,7 @@ package com.coopaggregate.batch;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -76,9 +77,10 @@ public class BatchService {
                 .findCreditsOfBatches(content.stream().map(Delivery::getId).toList()).stream()
                 .collect(Collectors.toMap(BatchCredit::deliveryId, Function.identity()));
         Set<MemberLot> shared = new HashSet<>(lotShareRepository
-                .findSharedMemberLots(content.stream().map(batch -> batch.getLot().getId()).distinct().toList()));
+                .findSharedMemberLots(content.stream().map(Delivery::ownLotId).filter(Objects::nonNull)
+                        .distinct().toList()));
         return PageResponse.from(batches.map(batch -> BatchResponse.from(batch, credits.get(batch.getId()),
-                shared.contains(new MemberLot(batch.getMember().getId(), batch.getLot().getId())))));
+                shared.contains(new MemberLot(batch.getMember().getId(), batch.ownLotId())))));
     }
 
     private static PageRequest pageOf(int page, int size) {

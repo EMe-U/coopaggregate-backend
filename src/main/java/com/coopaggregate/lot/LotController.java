@@ -2,7 +2,6 @@ package com.coopaggregate.lot;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -17,7 +16,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 
 @RestController
 @RequestMapping("/api/lots")
-@Tag(name = "Lots", description = "Lots group the deliveries of one grade. A lot does not have to be closed to be sold")
+@Tag(name = "Lots", description = "Fixed-size lots of one grade, filled by the system with confirmed deliveries in "
+        + "the order they are confirmed. There is no manual opening or closing")
 @SecurityRequirement(name = "bearerAuth")
 public class LotController {
 
@@ -50,17 +50,11 @@ public class LotController {
         return lotService.get(id);
     }
 
-    @PatchMapping("/{id}/close")
-    @Operation(summary = "Close an open lot (optional; sales do not need it). The next delivery of its grade starts "
-            + "a new lot")
-    public LotResponse close(@PathVariable Long id) {
-        return lotService.close(id);
-    }
-
     @GetMapping("/open")
-    @Operation(summary = "Get the open lot for a grade with the kilograms delivered to it so far")
-    @ApiResponse(responseCode = "200", description = "The open lot")
-    @ApiResponse(responseCode = "204", description = "No lot is open; one is opened by the next delivery of this grade")
+    @Operation(summary = "Get the lot being filled for a grade, with the kg in it so far (totalKg) and its capacity")
+    @ApiResponse(responseCode = "200", description = "The lot being filled")
+    @ApiResponse(responseCode = "204", description = "No lot is being filled; the next confirmed delivery of this grade "
+            + "starts one")
     @ApiResponse(responseCode = "404", description = "The grade does not exist")
     public ResponseEntity<OpenLotResponse> findOpenLot(@RequestParam Long gradeId) {
         return lotService.findOpenLot(gradeId)

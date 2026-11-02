@@ -42,6 +42,13 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
             """)
     List<GradeDeliveredKg> findKgByGradeBetween(Instant from, Instant to);
 
+    @Query("SELECT d.grade.id FROM Delivery d WHERE d.id = :id")
+    Optional<Long> findGradeIdById(Long id);
+
+    @Query("SELECT d.id FROM Delivery d WHERE d.receiptCode = :receiptCode")
+    Optional<Long> findIdByReceiptCode(String receiptCode);
+
+    // Only deliveries from before fixed-size lots have a lot of their own; empty for the others.
     @Query("SELECT d.lot.id FROM Delivery d WHERE d.id = :id")
     Optional<Long> findLotIdById(Long id);
 

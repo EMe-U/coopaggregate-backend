@@ -15,13 +15,9 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
-import com.coopaggregate.grade.Grade;
-
 import jakarta.persistence.LockModeType;
 
 public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificationExecutor<Lot> {
-
-    Optional<Lot> findFirstByGradeAndStatus(Grade grade, LotStatus status);
 
     Optional<Lot> findFirstByGradeIdAndStatus(Long gradeId, LotStatus status);
 
@@ -31,6 +27,14 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<Lot> findForUpdateById(Long id);
+
+    // SELECT ... FOR UPDATE on the grade's lot being filled; there is at most one (unique index).
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT l FROM Lot l WHERE l.grade.id = :gradeId AND l.status = com.coopaggregate.lot.LotStatus.FILLING")
+    Optional<Lot> findFillingForUpdate(Long gradeId);
+
+    // Once a fixed-size lot exists, the lot size can no longer change.
+    boolean existsByCapacityKgIsNotNull();
 
     @Query("SELECT l.grade.id FROM Lot l WHERE l.id = :id")
     Optional<Long> findGradeIdById(Long id);

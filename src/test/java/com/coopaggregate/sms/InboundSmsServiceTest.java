@@ -2,6 +2,7 @@ package com.coopaggregate.sms;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InOrder;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -23,6 +25,8 @@ import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryConfirmedEvent;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.delivery.DisputeReason;
+import com.coopaggregate.grade.GradeRepository;
+import com.coopaggregate.lot.LotFiller;
 import com.coopaggregate.ledger.LedgerEntry;
 import com.coopaggregate.member.Member;
 
@@ -31,12 +35,15 @@ class InboundSmsServiceTest {
     private static final String OWNER_PHONE = "+250788123456";
 
     private Delivery delivery;
+    private DeliveryRepository deliveryRepository;
     private ApplicationEventPublisher eventPublisher;
+    private LotFiller lotFiller;
+    private GradeRepository gradeRepository;
     private InboundSmsService service;
 
     @BeforeEach
     void setUp() {
-        DeliveryRepository deliveryRepository = mock(DeliveryRepository.class);
+        deliveryRepository = mock(DeliveryRepository.class);
         Member member = new Member();
         member.setPhone(OWNER_PHONE);
         delivery = new Delivery();
@@ -46,7 +53,12 @@ class InboundSmsServiceTest {
         when(deliveryRepository.findByReceiptCode("RCT-7K2Q")).thenReturn(Optional.of(delivery));
         when(deliveryRepository.findByReceiptCode("RCT-ZZZZ")).thenReturn(Optional.empty());
         eventPublisher = mock(ApplicationEventPublisher.class);
-        service = new InboundSmsService(deliveryRepository, eventPublisher);
+        lotFiller = mock(LotFiller.class);
+        when(deliveryRepository.findIdByReceiptCode("RCT-7K2Q")).thenReturn(Optional.of(42L));
+        when(deliveryRepository.findGradeIdById(42L)).thenReturn(Optional.of(1L));
+        when(deliveryRepository.findForUpdateById(42L)).thenReturn(Optional.of(delivery));
+        gradeRepository = mock(GradeRepository.class);
+        service = new InboundSmsService(deliveryRepository, gradeRepository, lotFiller, eventPublisher);
     }
 
     @ParameterizedTest
@@ -57,6 +69,11 @@ class InboundSmsServiceTest {
         assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
         assertEquals(ConfirmationMethod.SMS, delivery.getConfirmationMethod());
         verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
+        InOrder order = inOrder(gradeRepository, lotFiller, deliveryRepository);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(lotFiller).lockFillingLot(1L);
+        order.verify(deliveryRepository).findForUpdateById(42L);
+        order.verify(lotFiller).place(delivery);
     }
 
     @Test
@@ -67,6 +84,7 @@ class InboundSmsServiceTest {
         assertEquals(DisputeReason.OTHER, delivery.getDisputeReason());
         assertEquals("it was 250 kg", delivery.getDisputeNote());
         verify(eventPublisher, never()).publishEvent(any());
+        verify(lotFiller, never()).place(any());
     }
 
     @Test
