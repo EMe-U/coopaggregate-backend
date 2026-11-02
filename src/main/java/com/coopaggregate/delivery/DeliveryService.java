@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -37,7 +39,8 @@ import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotFiller;
-import com.coopaggregate.lot.LotService;
+import com.coopaggregate.lot.LotPortion;
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
@@ -59,7 +62,6 @@ public class DeliveryService {
     private final MemberRepository memberRepository;
     private final GradeRepository gradeRepository;
     private final SettingRepository settingRepository;
-    private final LotService lotService;
     private final LedgerService ledgerService;
     private final LotRepository lotRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
@@ -67,20 +69,21 @@ public class DeliveryService {
     private final AuditLogRepository auditLogRepository;
     private final BatchAllocator batchAllocator;
     private final LotFiller lotFiller;
+    private final LotPortionRepository lotPortionRepository;
     private final ApplicationEventPublisher eventPublisher;
 
     public DeliveryService(DeliveryRepository deliveryRepository, MemberRepository memberRepository,
                            GradeRepository gradeRepository, SettingRepository settingRepository,
-                           LotService lotService, LedgerService ledgerService, LotRepository lotRepository,
+                           LedgerService ledgerService, LotRepository lotRepository,
                            LedgerEntryRepository ledgerEntryRepository,
                            ConfirmationCodes confirmationCodes, AuditLogRepository auditLogRepository,
                            BatchAllocator batchAllocator, LotFiller lotFiller,
+                           LotPortionRepository lotPortionRepository,
                            ApplicationEventPublisher eventPublisher) {
         this.deliveryRepository = deliveryRepository;
         this.memberRepository = memberRepository;
         this.gradeRepository = gradeRepository;
         this.settingRepository = settingRepository;
-        this.lotService = lotService;
         this.ledgerService = ledgerService;
         this.lotRepository = lotRepository;
         this.ledgerEntryRepository = ledgerEntryRepository;
@@ -88,6 +91,7 @@ public class DeliveryService {
         this.auditLogRepository = auditLogRepository;
         this.batchAllocator = batchAllocator;
         this.lotFiller = lotFiller;
+        this.lotPortionRepository = lotPortionRepository;
         this.eventPublisher = eventPublisher;
     }
 
@@ -144,16 +148,17 @@ public class DeliveryService {
 
     /**
      * Cancels a delivery: it gets a REVERSAL ledger entry and is no longer counted anywhere. Only allowed while
-     * none of its kg are sold, because the money for sold kg was already credited to its member.
+     * none of its kg are sold, because the money for sold kg was already credited to its member. A delivery that is in
+     * lots leaves them: its lost kg go to the other portions of each lot, a lot being filled gets the space back, and a
+     * full lot keeps the shortfall (it is never filled again).
      */
     @Transactional
     public Delivery reverse(Long deliveryId, String reason, Manager manager) {
-        // The same lock order as a sale of the grade: the grade first, then the lot.
-        Lot lot = lockGradeAndLotOf(deliveryId);
-        Delivery delivery = findDelivery(deliveryId);
-        checkCanChange(delivery, lot);
+        Delivery delivery = lockForChange(deliveryId, null).delivery();
+        checkCanChange(delivery);
         Delivery reversed = markReversed(delivery, reason, manager);
         batchAllocator.releaseLosses(reversed);
+        markSoldOutLots(reversed);
         return reversed;
     }
 
@@ -170,14 +175,13 @@ public class DeliveryService {
      */
     @Transactional
     public DeliveryResponse correct(Long deliveryId, CorrectDeliveryRequest request, Manager manager) {
-        // Same lock order as a new delivery and closing a lot: the grade first, then the lot.
-        Grade grade = gradeRepository.findForUpdateById(request.gradeId())
+        Locked locked = lockForChange(deliveryId, request.gradeId());
+        Delivery original = locked.delivery();
+        Grade grade = locked.otherGrade()
                 .orElseThrow(() -> new BadRequestException("Grade " + request.gradeId() + " does not exist."));
-        Lot originalLot = lockLotOf(deliveryId);
-        Delivery original = findDelivery(deliveryId);
         Member member = activeMember(request.memberId());
 
-        checkCanChange(original, originalLot);
+        checkCanChange(original);
         markReversed(original, request.reason(), manager);
 
         Delivery corrected = new Delivery();
@@ -191,6 +195,7 @@ public class DeliveryService {
         corrected.setReceiptCode(ShortCodes.unique("RCT-", deliveryRepository::existsByReceiptCode));
         Delivery saved = deliveryRepository.save(corrected);
         batchAllocator.releaseLosses(original);
+        markSoldOutLots(original);
         if (original.getConfirmationStatus() == ConfirmationStatus.DISPUTED) {
             original.setResolutionNote("Corrected by " + saved.getReceiptCode() + ": " + request.reason());
         }
@@ -270,10 +275,14 @@ public class DeliveryService {
         return toResponse(delivery);
     }
 
-    /** Records a member's complaint about a delivery, made in person or by SMS. */
+    /**
+     * Records a member's complaint about a delivery, made in person or by SMS. A delivery disputed after it went into a
+     * lot keeps its kg there, but they are held back from sales until the dispute is settled.
+     */
     @Transactional
     public DeliveryResponse dispute(Long deliveryId, DisputeReason reason, String note) {
-        Delivery delivery = findDelivery(deliveryId);
+        // The same locks as a confirmation: sales of the grade wait, so none can sell kg that are being disputed.
+        Delivery delivery = lockForConfirmation(deliveryId);
         if (delivery.isReversed()) {
             throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has been reversed.");
         }
@@ -361,22 +370,46 @@ public class DeliveryService {
         return deliveryRepository.findForUpdateById(deliveryId).orElseThrow();
     }
 
-    // Sales lock the grade and then the lots, so a reversal that waits for them sees the kg they sold. Null when the
-    // delivery has no lot of its own (only deliveries from before fixed-size lots have one).
-    private Lot lockGradeAndLotOf(Long deliveryId) {
+    /**
+     * A reversal or correction takes the locks in the same order as sales and losses, so a sale that ran first is
+     * seen with the kg it sold: the grade (and a correction's new grade, both in id order), every lot the delivery is
+     * in (its own lot from before fixed-size lots, or the lots of its portions, in id order), then the delivery. The
+     * allocator locks the other portions it hands lost kg to next.
+     */
+    private Locked lockForChange(Long deliveryId, Long otherGradeId) {
         Long gradeId = deliveryRepository.findGradeIdById(deliveryId)
                 .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
-        gradeRepository.findForUpdateById(gradeId);
-        return deliveryRepository.findLotIdById(deliveryId).flatMap(lotRepository::findForUpdateById).orElse(null);
+        Set<Long> gradeIds = new TreeSet<>(List.of(gradeId));
+        if (otherGradeId != null) {
+            gradeIds.add(otherGradeId);
+        }
+        Optional<Grade> otherGrade = Optional.empty();
+        for (Long id : gradeIds) {
+            Optional<Grade> grade = gradeRepository.findForUpdateById(id);
+            if (id.equals(otherGradeId)) {
+                otherGrade = grade;
+            }
+        }
+        Set<Long> lotIds = new TreeSet<>();
+        deliveryRepository.findLotIdById(deliveryId).ifPresent(lotIds::add);
+        lotPortionRepository.findByDeliveryIdOrderById(deliveryId)
+                .forEach(portion -> lotIds.add(portion.getLot().getId()));
+        lotIds.forEach(lotRepository::findForUpdateById);
+        return new Locked(deliveryRepository.findForUpdateById(deliveryId).orElseThrow(), otherGrade);
     }
 
-    // Sales and losses lock the lot too, so the checks below cannot be passed by two requests at once. Null when the
-    // delivery has no lot of its own.
-    private Lot lockLotOf(Long deliveryId) {
-        if (deliveryRepository.findGradeIdById(deliveryId).isEmpty()) {
-            throw new EntityNotFoundException("Delivery " + deliveryId + " does not exist.");
+    /** The delivery being reversed or corrected, and a correction's new grade (empty when it does not exist). */
+    private record Locked(Delivery delivery, Optional<Grade> otherGrade) {
+    }
+
+    // A full lot that the reversal left with nothing to sell is sold out. A lot being filled stays FILLING.
+    private void markSoldOutLots(Delivery reversed) {
+        for (LotPortion portion : lotPortionRepository.findByDeliveryIdOrderById(reversed.getId())) {
+            Lot lot = portion.getLot();
+            if (lot.getStatus() == LotStatus.FULL && lotPortionRepository.remainingKg(lot.getId()).signum() == 0) {
+                lot.setStatus(LotStatus.SOLD);
+            }
         }
-        return deliveryRepository.findLotIdById(deliveryId).flatMap(lotRepository::findForUpdateById).orElse(null);
     }
 
     private Delivery findDelivery(Long deliveryId) {
@@ -384,8 +417,9 @@ public class DeliveryService {
                 .orElseThrow(() -> new EntityNotFoundException("Delivery " + deliveryId + " does not exist."));
     }
 
-    // lot is the delivery's own lot, or null for a delivery from fixed-size lots.
-    private void checkCanChange(Delivery delivery, Lot lot) {
+    // Any kg sold already paid their member, so the delivery can no longer change. Its lost kg must find room in the
+    // other portions of each lot it is in. A waiting delivery, or one disputed before it was confirmed, is in no lot.
+    private void checkCanChange(Delivery delivery) {
         if (delivery.isReversed()) {
             throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " has already been reversed.");
         }
@@ -393,23 +427,18 @@ public class DeliveryService {
             throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " already has "
                     + delivery.getSoldKg().toPlainString() + " kg sold, so it can no longer be reversed or corrected.");
         }
-        if (lot == null) {
-            // Waiting or disputed before confirmation: in no lot, nothing else to check.
-            if (lotFiller.isInLots(delivery)) {
-                throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is already in a lot. "
-                        + "Reversing or correcting it is not available yet.");
-            }
-            return;
-        }
-        // The money of a shared lot was divided by the kg of all its deliveries.
-        if (lot.getStatus() == LotStatus.SHARED) {
-            throw new IllegalStateException("Lot " + lot.getLotCode()
+        // The money of a shared lot (from before fixed-size lots) was divided by the kg of all its deliveries.
+        Lot ownLot = delivery.getLot();
+        if (ownLot != null && ownLot.getStatus() == LotStatus.SHARED) {
+            throw new IllegalStateException("Lot " + ownLot.getLotCode()
                     + " has already been shared, so its deliveries can no longer be reversed or corrected.");
         }
-        BigDecimal remainingAfter = lotService.quantitiesOf(lot).remainingKg().subtract(delivery.getQuantityKg());
-        if (remainingAfter.signum() < 0) {
-            throw new IllegalStateException("Lot " + lot.getLotCode() + " would have less than 0 kg left, because "
-                    + "some of its potatoes were already recorded as lost.");
+        for (LotPortion portion : lotPortionRepository.findByDeliveryIdOrderById(delivery.getId())) {
+            if (portion.getLostKg().signum() > 0
+                    && batchAllocator.lossCarryingKg(portion.getLot(), delivery).compareTo(portion.getLostKg()) < 0) {
+                throw new IllegalStateException("Lot " + portion.getLot().getLotCode() + " would have less than 0 kg "
+                        + "left, because some of its potatoes were already recorded as lost.");
+            }
         }
     }
 

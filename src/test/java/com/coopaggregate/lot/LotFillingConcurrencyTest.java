@@ -166,13 +166,31 @@ class LotFillingConcurrencyTest {
             work.add(() -> saleService.record(new SaleRequest(UUID.randomUUID(), grade, 1L, new BigDecimal("5"),
                     300L, null, List.of(), null, null), manager));
             work.add(() -> recordLoss(grade));
+
+            // Deliveries already in lots: reversed, corrected, or disputed and then found correct.
+            long inLots = confirmed(member, grade);
+            work.add(() -> deliveryService.reverse(inLots, "Recorded for the wrong member", manager));
+            long toCorrect = confirmed(member, grade);
+            work.add(() -> deliveryService.correct(toCorrect,
+                    new CorrectDeliveryRequest("Weighed again", member, grade, kg()), manager));
+            long contested = confirmed(member, grade);
+            work.add(() -> deliveryService.dispute(contested, DisputeReason.WRONG_KG, "Says it was more"));
+            work.add(() -> deliveryService.resolveDispute(contested, "Scale receipt checked"));
         }
         Collections.shuffle(work, random);
 
         List<Throwable> failures = runAllAtOnce(work);
 
-        // A sale or a loss may be refused for lack of kg at that moment; nothing else may fail.
-        List<Throwable> unexpected = failures.stream().filter(e -> !(e instanceof BadRequestException)).toList();
+        // A sale or a loss may be refused for lack of kg at that moment, a delivery whose kg a sale took first can no
+        // longer be reversed or corrected, and a dispute can only be resolved once it was recorded. Nothing else may
+        // fail.
+        List<Throwable> unexpected = failures.stream()
+                .filter(e -> !(e instanceof BadRequestException))
+                .filter(e -> !(e instanceof IllegalStateException && e.getMessage() != null
+                        && (e.getMessage().contains("so it can no longer be reversed or corrected")
+                                || e.getMessage().contains("would have less than 0 kg left")
+                                || e.getMessage().contains("is not disputed"))))
+                .toList();
         assertEquals(List.of(), unexpected.stream().map(LotFillingConcurrencyTest::describe).toList());
         assertLotsAreConsistent();
         assertTrue(ledgerService.verify().valid(), "the ledger hash chain must still verify");
@@ -182,9 +200,11 @@ class LotFillingConcurrencyTest {
     // grade may still be filling. Every confirmed delivery from these tests is in lots for all of its kg; a delivery
     // that was never confirmed is in none.
     private void assertLotsAreConsistent() {
+        // placed: every portion the lot was given; filled: those of deliveries that are not reversed.
         List<Map<String, Object>> lots = jdbc.queryForList("""
-                SELECT l.id, l.grade_id, l.status, l.capacity_kg, COALESCE(SUM(p.quantity_kg), 0) AS filled
-                FROM lot l LEFT JOIN lot_portion p ON p.lot_id = l.id
+                SELECT l.id, l.grade_id, l.status, l.capacity_kg, COALESCE(SUM(p.quantity_kg), 0) AS placed,
+                       COALESCE(SUM(p.quantity_kg) FILTER (WHERE d.reversed_at IS NULL), 0) AS filled
+                FROM lot l LEFT JOIN lot_portion p ON p.lot_id = l.id LEFT JOIN delivery d ON d.id = p.delivery_id
                 WHERE l.capacity_kg IS NOT NULL
                 GROUP BY l.id, l.grade_id, l.status, l.capacity_kg
                 ORDER BY l.grade_id, l.id
@@ -192,12 +212,18 @@ class LotFillingConcurrencyTest {
         assertTrue(!lots.isEmpty());
         for (int i = 0; i < lots.size(); i++) {
             Map<String, Object> lot = lots.get(i);
+            BigDecimal placed = (BigDecimal) lot.get("placed");
             BigDecimal filled = (BigDecimal) lot.get("filled");
             BigDecimal capacity = (BigDecimal) lot.get("capacity_kg");
             String status = (String) lot.get("status");
             assertTrue(filled.compareTo(capacity) <= 0, "lot " + lot + " is over capacity");
-            // A full lot is FULL, or SOLD once nothing is left in it; a lot that is not full is still FILLING.
-            assertEquals(filled.compareTo(capacity) == 0, "FULL".equals(status) || "SOLD".equals(status), "lot " + lot);
+            // A lot being filled is not full yet (a reversal gave it space back). A FULL or SOLD lot was filled up to
+            // its capacity once; a reversal since leaves it short, and it is never filled again.
+            if ("FILLING".equals(status)) {
+                assertTrue(filled.compareTo(capacity) < 0, "lot " + lot);
+            } else {
+                assertTrue(List.of("FULL", "SOLD").contains(status) && placed.compareTo(capacity) >= 0, "lot " + lot);
+            }
             boolean newestOfGrade = i == lots.size() - 1 || !lots.get(i + 1).get("grade_id").equals(lot.get("grade_id"));
             if ("FILLING".equals(status)) {
                 assertTrue(newestOfGrade, "only the newest lot of a grade may be filling: " + lot);
@@ -293,6 +319,13 @@ class LotFillingConcurrencyTest {
             }
             throw e;
         }
+    }
+
+    // A delivery confirmed by the manager before the work starts, so it is in lots.
+    private long confirmed(long member, long grade) {
+        long id = record(member, grade, kg());
+        deliveryService.reviewPending(id, "Checked with the member", manager);
+        return id;
     }
 
     private long record(long member, long grade, BigDecimal kg) {

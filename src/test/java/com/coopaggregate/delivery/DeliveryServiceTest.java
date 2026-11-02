@@ -59,7 +59,7 @@ import com.coopaggregate.ledger.ReverseRequest;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotQuantities;
-import com.coopaggregate.lot.LotService;
+import com.coopaggregate.lot.LotPortion;
 import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.lot.LotFiller;
 import com.coopaggregate.lot.LotStatus;
@@ -96,6 +96,7 @@ class DeliveryServiceTest {
     private Member member;
     private Manager manager;
     private LotFiller lotFiller;
+    private LotPortionRepository lotPortionRepository;
     private DeliveryService service;
 
     @BeforeEach
@@ -138,10 +139,10 @@ class DeliveryServiceTest {
         auditLogRepository = mock(AuditLogRepository.class);
         batchAllocator = mock(BatchAllocator.class);
         lotFiller = mock(LotFiller.class);
+        lotPortionRepository = mock(LotPortionRepository.class);
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
-                new LotService(lotRepository, mock(LotPortionRepository.class), gradeRepository), ledgerService,
-                lotRepository, ledgerEntryRepository, confirmationCodes, auditLogRepository, batchAllocator, lotFiller,
-                eventPublisher);
+                ledgerService, lotRepository, ledgerEntryRepository, confirmationCodes, auditLogRepository,
+                batchAllocator, lotFiller, lotPortionRepository, eventPublisher);
     }
 
     @ParameterizedTest
@@ -515,16 +516,19 @@ class DeliveryServiceTest {
 
     @Test
     void reversalThatWouldLeaveLessThanZeroKgIsRefused() {
-        givenStoredDelivery("100.00");
-        // The lot holds 150 kg, of which 80 kg were lost: only 70 kg remain, less than the 100 kg delivery.
-        when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
-                new BigDecimal("150.00"), new BigDecimal("80.00"), null, null, null)));
+        Delivery delivery = givenStoredDelivery("100.00");
+        // 30 kg of the delivery were lost, and the lot's other portions have only 20 kg left to take them.
+        LotPortion portion = givenPortion(delivery, delivery.getLot(), "100.00", 5L);
+        portion.addLostKg(new BigDecimal("30.00"));
+        when(batchAllocator.lossCarryingKg(delivery.getLot(), delivery)).thenReturn(new BigDecimal("20.00"));
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> service.reverse(42L, "Weighed twice", manager));
 
         assertEquals("Lot A-2026-01 would have less than 0 kg left, because some of its potatoes were already "
                 + "recorded as lost.", e.getMessage());
+        assertFalse(delivery.isReversed());
+        verify(ledgerService, never()).reverse(any(), any(), any());
     }
 
     @Test
@@ -540,19 +544,104 @@ class DeliveryServiceTest {
         verify(gradeRepository).findForUpdateById(1L);
     }
 
+    // --- A delivery in fixed-size lots ---
+
     @Test
-    void aDeliveryAlreadyInFixedSizeLotsCannotBeReversedYet() {
+    void aDeliverySplitAcrossTwoLotsIsReversedWithTheLocksInOrderAndItsLossesHandedOn() {
         Delivery delivery = givenStoredDelivery("100.00");
         delivery.setLot(null);
         when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.empty());
-        when(lotFiller.isInLots(delivery)).thenReturn(true);
+        Lot full = fixedLot(7L, "A-2026-05", LotStatus.FULL);
+        Lot filling = fixedLot(6L, "A-2026-04", LotStatus.FILLING);
+        LotPortion inFull = givenPortion(delivery, full, "40.00", 70L);
+        givenPortion(delivery, filling, "60.00", 71L);
+        inFull.addLostKg(new BigDecimal("4.00"));
+        when(batchAllocator.lossCarryingKg(full, delivery)).thenReturn(new BigDecimal("50.00"));
+        when(lotPortionRepository.remainingKg(7L)).thenReturn(new BigDecimal("46.00"));
+        when(ledgerService.reverse(77L, "Wrong member", manager)).thenReturn(reversalEntry("Wrong member"));
+
+        service.reverse(42L, "Wrong member", manager);
+
+        assertTrue(delivery.isReversed());
+        InOrder order = inOrder(gradeRepository, lotRepository, deliveryRepository, batchAllocator, ledgerService);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(lotRepository).findForUpdateById(6L);
+        order.verify(lotRepository).findForUpdateById(7L);
+        order.verify(deliveryRepository).findForUpdateById(42L);
+        order.verify(ledgerService).reverse(77L, "Wrong member", manager);
+        order.verify(batchAllocator).releaseLosses(delivery);
+        // The full lot keeps its shortfall and is never filled again; the lot being filled gets the space back.
+        assertEquals(LotStatus.FULL, full.getStatus());
+        assertEquals(LotStatus.FILLING, filling.getStatus());
+    }
+
+    @Test
+    void aFullLotThatTheReversalLeavesWithNothingToSellIsSoldOut() {
+        Delivery delivery = givenStoredDelivery("40.00");
+        delivery.setLot(null);
+        when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.empty());
+        Lot full = fixedLot(7L, "A-2026-05", LotStatus.FULL);
+        givenPortion(delivery, full, "40.00", 70L);
+        when(lotPortionRepository.remainingKg(7L)).thenReturn(BigDecimal.ZERO);
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Wrong"));
+
+        service.reverse(42L, "Wrong", manager);
+
+        assertEquals(LotStatus.SOLD, full.getStatus());
+    }
+
+    @Test
+    void aDeliveryInLotsWithSoldKgCannotBeReversedOrCorrected() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.setLot(null);
+        givenPortion(delivery, fixedLot(7L, "A-2026-05", LotStatus.FULL), "100.00", 70L).addSoldKg(BigDecimal.ONE);
+        delivery.addSoldKg(BigDecimal.ONE);
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> service.reverse(42L, "Weighed twice", manager));
+                () -> service.reverse(42L, "Wrong", manager));
+        assertThrows(IllegalStateException.class, () -> service.correct(42L,
+                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager));
 
-        assertEquals("Delivery RCT-7K2Q is already in a lot. Reversing or correcting it is not available yet.",
+        assertEquals("Delivery RCT-7K2Q already has 1 kg sold, so it can no longer be reversed or corrected.",
                 e.getMessage());
-        assertFalse(delivery.isReversed());
+        verify(ledgerService, never()).reverse(any(), any(), any());
+        verify(batchAllocator, never()).releaseLosses(any());
+    }
+
+    @Test
+    void aCorrectionToAnotherGradeLocksBothGradesInIdOrderThenTheLots() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        Grade normal = new Grade();
+        ReflectionTestUtils.setField(normal, "id", 2L);
+        normal.setCode("B");
+        normal.setName("Normal");
+        when(gradeRepository.findForUpdateById(2L)).thenReturn(Optional.of(normal));
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Wrong grade"));
+
+        service.correct(42L, new CorrectDeliveryRequest("Wrong grade", 5L, 2L, new BigDecimal("100.00")), manager);
+
+        InOrder order = inOrder(gradeRepository, lotRepository, deliveryRepository);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(gradeRepository).findForUpdateById(2L);
+        order.verify(lotRepository).findForUpdateById(3L);
+        order.verify(deliveryRepository).findForUpdateById(42L);
+        assertEquals(normal, lastSaved().getGrade());
+        assertTrue(delivery.isReversed());
+    }
+
+    @Test
+    void disputingADeliveryLocksTheGradeFirstSoNoSaleSellsItMeanwhile() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+
+        service.dispute(42L, DisputeReason.WRONG_KG, null);
+
+        InOrder order = inOrder(gradeRepository, deliveryRepository);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(deliveryRepository).findForUpdateById(42L);
+        assertEquals(ConfirmationStatus.DISPUTED, delivery.getConfirmationStatus());
+        // Its kg stay in their lot; a resolved dispute does not place it again.
+        verify(lotFiller, never()).place(any());
     }
 
     @Test
@@ -601,11 +690,11 @@ class DeliveryServiceTest {
 
     @Test
     void aCorrectionNoLongerPutsItsKilogramsBackIntoTheOldLot() {
-        givenStoredDelivery("100.00");
-        // 150 kg delivered and 80 kg lost: removing the 100 kg delivery goes below 0. The corrected 90 kg wait for
-        // the member's confirmation and then go into a fixed-size lot, not back into this one.
-        when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
-                new BigDecimal("150.00"), new BigDecimal("80.00"), null, null, null)));
+        Delivery delivery = givenStoredDelivery("100.00");
+        // 30 kg of the delivery were lost and the lot's others have only 20 kg left to take them. The corrected 90 kg
+        // wait for the member's confirmation and then go into a fixed-size lot, not back into this one.
+        givenPortion(delivery, delivery.getLot(), "100.00", 5L).addLostKg(new BigDecimal("30.00"));
+        when(batchAllocator.lossCarryingKg(delivery.getLot(), delivery)).thenReturn(new BigDecimal("20.00"));
 
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.correct(42L,
                 new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager));
@@ -1301,6 +1390,26 @@ class DeliveryServiceTest {
 
     private static Jwt jwt() {
         return Jwt.withTokenValue("token").header("alg", "HS256").subject("manager@example.com").build();
+    }
+
+    private LotPortion givenPortion(Delivery delivery, Lot lot, String kg, Long id) {
+        LotPortion portion = new LotPortion(lot, delivery, new BigDecimal(kg));
+        ReflectionTestUtils.setField(portion, "id", id);
+        List<LotPortion> portions = new java.util.ArrayList<>(lotPortionRepository.findByDeliveryIdOrderById(42L));
+        portions.add(portion);
+        when(lotPortionRepository.findByDeliveryIdOrderById(42L)).thenReturn(portions);
+        return portion;
+    }
+
+    private Lot fixedLot(Long id, String code, LotStatus status) {
+        Lot lot = new Lot();
+        ReflectionTestUtils.setField(lot, "id", id);
+        lot.setLotCode(code);
+        lot.setGrade(grade);
+        lot.setStatus(status);
+        lot.setCapacityKg(new BigDecimal("100.00"));
+        when(lotRepository.findForUpdateById(id)).thenReturn(Optional.of(lot));
+        return lot;
     }
 
     // A lot from before fixed-size lots, which deliveries of that time are in.

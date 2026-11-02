@@ -16,12 +16,12 @@ import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.lot.ProportionalKg;
 
 /**
- * Keeps the lot portions in step with the lot's losses. A loss belongs to the members whose potatoes are in the lot:
- * it is shared across the lot's portions in proportion to what each has left (see ProportionalKg), and each part is
- * recorded as a loss allocation of that portion. Only confirmed kg carry a loss, disputed ones included because they are
- * still in the lot; kg already sold never do, and neither do kg still waiting for their member (only lots from before
- * fixed-size lots hold any). The caller must hold the grade's lock and the lot's; this locks the portions and their
- * deliveries next, so the order stays grade, lot, portions, deliveries, ledger.
+ * Keeps the lot portions in step with the lot's losses. A loss belongs to the members whose potatoes are in the
+ * lot: it is shared across the lot's portions in proportion to what each has left (see ProportionalKg), and each part
+ * is recorded as a loss allocation of that portion. Only confirmed kg carry a loss, disputed ones included because
+ * they are still in the lot; kg already sold never do, and neither do kg still waiting for their member (only lots
+ * from before fixed-size lots hold any). The caller must hold the grade's lock and the lot's; this locks the portions
+ * and their deliveries next, so the order stays grade, lot, portions, deliveries, ledger.
  */
 @Component
 public class BatchAllocator {
@@ -44,7 +44,12 @@ public class BatchAllocator {
 
     /** The kg of the lot that a loss can be taken from now. */
     public BigDecimal lossCarryingKg(Lot lot) {
-        return carriers(lot, null).stream().map(LotPortion::unallocatedKg).reduce(BigDecimal.ZERO, BigDecimal::add);
+        return lossCarryingKg(lot, null);
+    }
+
+    /** The same, without the portions of leftOut: what would carry its lost kg if it were reversed. */
+    public BigDecimal lossCarryingKg(Lot lot, Delivery leftOut) {
+        return carriers(lot, leftOut).stream().map(LotPortion::unallocatedKg).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     public void allocateLoss(Loss loss) {
@@ -52,9 +57,9 @@ public class BatchAllocator {
     }
 
     /**
-     * A reversed delivery is no batch any more. Its lost kg go to the other portions of the same lots, in proportion to
-     * what each has left, so each lot's lost kg stay the same. It cannot hold sold kg: a delivery with sold kg cannot be
-     * reversed.
+     * A reversed delivery is no batch any more. Its lost kg go to the other portions of the same lots, in proportion
+     * to what each has left, so each lot's lost kg stay the same. It cannot hold sold kg: a delivery with sold kg
+     * cannot be reversed.
      */
     public void releaseLosses(Delivery reversed) {
         if (reversed.getLostKg().signum() == 0) {

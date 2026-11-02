@@ -53,8 +53,8 @@ public class LotController {
     @GetMapping("/open")
     @Operation(summary = "Get the lot being filled for a grade, with the kg in it so far (totalKg) and its capacity")
     @ApiResponse(responseCode = "200", description = "The lot being filled")
-    @ApiResponse(responseCode = "204", description = "No lot is being filled; the next confirmed delivery of this grade "
-            + "starts one")
+    @ApiResponse(responseCode = "204", description = "No lot is being filled; the next confirmed delivery of this "
+            + "grade starts one")
     @ApiResponse(responseCode = "404", description = "The grade does not exist")
     public ResponseEntity<OpenLotResponse> findOpenLot(@RequestParam Long gradeId) {
         return lotService.findOpenLot(gradeId)

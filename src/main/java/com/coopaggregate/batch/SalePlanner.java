@@ -32,7 +32,7 @@ public final class SalePlanner {
     private SalePlanner() {
     }
 
-    /** What the sale takes from in turn: one portion of an older lot, or the sellable portions of one fixed-size lot. */
+    /** What a sale takes from in turn: one portion of an older lot, or the sellable portions of a fixed-size lot. */
     private record Unit(Long lotId, String lotCode, List<SellableBatch> portions) {
 
         BigDecimal kg() {
@@ -41,8 +41,8 @@ public final class SalePlanner {
     }
 
     /**
-     * skipLotIds are lots the manager chose not to sell from. Each must be a lot of this grade with sellable kg that the
-     * sale would otherwise have reached; the reason for skipping is the caller's to check and record.
+     * skipLotIds are lots the manager chose not to sell from. Each must be a lot of this grade with sellable kg that
+     * the sale would otherwise have reached; the reason for skipping is the caller's to check and record.
      */
     public static SalePlan plan(List<SellableBatch> sellable, BigDecimal quantityKg, long pricePerKg,
                                 long deductionPerKg, Collection<Long> skipLotIds) {

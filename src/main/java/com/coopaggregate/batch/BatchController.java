@@ -30,9 +30,9 @@ public class BatchController {
 
     @GetMapping("/api/grades/{gradeId}/sale-preview")
     @Operation(summary = "Which portions a sale of this grade would use, first in first out by lot (older lots "
-            + "first, then fixed-size lots in fill order, each shared in proportion to what its portions have left), and "
-            + "what each member would be credited. Only confirmed kg are sold. Nothing is saved; when there are not "
-            + "enough kg, enough is false and message says why")
+            + "first, then fixed-size lots in fill order, each shared in proportion to what its portions have left), "
+            + "and what each member would be credited. Only confirmed kg are sold. Nothing is saved; when there are "
+            + "not enough kg, enough is false and message says why")
     public SalePreviewResponse salePreview(
             @PathVariable Long gradeId,
             @RequestParam(required = false) BigDecimal quantityKg,
