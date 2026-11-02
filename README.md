@@ -85,10 +85,12 @@ cd coopaggregate-backend
 | `MANAGER_NAME` | First start | Name of the manager account |
 | `MANAGER_EMAIL` | First start | Login email of the manager account |
 | `MANAGER_PASSWORD` | First start | Login password of the manager account |
-| `SMS_PROVIDER` | No | `log` (default: SMS are only saved in `sms_log`) or `africastalking` |
+| `SMS_PROVIDER` | No | `log` (default: SMS are only saved in `sms_log`), `africastalking` or `traccar` |
 | `AT_USERNAME` | With Africa's Talking | Africa's Talking username; `sandbox` for their sandbox |
 | `AT_API_KEY` | With Africa's Talking | Africa's Talking API key |
 | `AT_SENDER_ID` | No | Sender name shown on members' phones, if your account has one |
+| `SMS_TRACCAR_TOKEN` | With Traccar | Token of the Traccar SMS Gateway app. The app does not start without it |
+| `SMS_TRACCAR_URL` | No | Gateway URL with Traccar. Default `https://www.traccar.org/sms/`. Must be `https` (`http` only for localhost) |
 | `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
 | `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
 | `MOSIP_ENABLED` | To register members | `true` switches member identity verification on. Registering a member needs it, so with the default `false` no member can be registered (see Identity verification) |
@@ -404,6 +406,30 @@ then prints each SMS, real code included, in the console (`sms_log` stays masked
 **for development only**: with any other provider the app refuses to start while it is
 `true`. Without it, use the Africa's Talking sandbox and its simulator to see the codes. `SMS_PROVIDER=africastalking` sends them with Africa's Talking
 (`AT_USERNAME=sandbox` uses their sandbox and simulator).
+
+**Traccar SMS Gateway** (`SMS_PROVIDER=traccar`) sends through an Android phone with a SIM
+card that runs the Traccar SMS Gateway app. Set `SMS_PROVIDER=traccar` and `SMS_TRACCAR_TOKEN`
+(the token shown in the app); `SMS_TRACCAR_URL` is only needed for a different gateway address.
+The app does not start if the token is missing or the URL is not `https` (`http` is accepted only
+for `localhost`); the message names the variable, never its value.
+
+- Each number is turned into `+2507XXXXXXXX` first; anything that is not a Rwandan mobile number
+  is not sent and counts as a failed send.
+- Timeouts are 3 seconds to connect and 10 seconds to read. The provider does not retry and does
+  not follow redirects. A non-`2xx` answer or an exception is a failed send, so the usual
+  resend limits, the 48-hour review and "Checked by the manager" work as with any provider.
+- The log gets one `WARN` line per failure with the HTTP status or the exception class and the
+  number masked to its last 3 digits. The token, the `Authorization` header, the message and
+  the code are never logged. The same short text (no number, no message) is kept as the error of
+  the message in `sms_log`. `SMS_LOG_SHOW_CODES` still works only with `SMS_PROVIDER=log`.
+- **The SIM and the phone must stay on, charged and online.** The phone sends the SMS, so
+  when it is off or has no signal, messages fail or wait.
+- **"Accepted" does not mean "delivered".** `SENT` in `sms_log` means the gateway accepted the
+  message; the provider cannot tell whether it reached the member's phone.
+- The text of the messages is unchanged. This provider only sends: nothing forwards replies to
+  the SMS reply webhook below.
+- A different provider, for example Africa's Talking with a sender ID, can replace it later by
+  changing `SMS_PROVIDER` and its settings. Nothing else changes.
 
 **Replies:** in the Africa's Talking dashboard, set the SMS callback URL to
 `https://<api-host>/api/sms/inbound?token=<SMS_INBOUND_SECRET>`. The secret can also be sent
@@ -929,11 +955,12 @@ Environment variables to set in Render:
 | `JAVA_TOOL_OPTIONS` | `-XX:MaxRAMPercentage=75 -XX:+UseSerialGC` |
 | `SMS_PROVIDER` | `africastalking` to send real SMS, otherwise leave it unset |
 | `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
+| `SMS_TRACCAR_TOKEN`, `SMS_TRACCAR_URL` | Only with `SMS_PROVIDER=traccar`: the gateway token and, if different, its `https` URL |
 | `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
 | `MOSIP_*` | To register members, with a real eSignet over `https`: `MOSIP_ENABLED`, `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY_PATH` (a secret file mounted on the service) and `MOSIP_KEY_ID` |
 
 Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app
-refuses to start if it is `true` with `SMS_PROVIDER=africastalking`.
+refuses to start if it is `true` with any provider but `log`.
 
 Do not set `PORT`; Render sets it. `JAVA_TOOL_OPTIONS` keeps the JVM within the
 512 MB memory limit of the free plan.
