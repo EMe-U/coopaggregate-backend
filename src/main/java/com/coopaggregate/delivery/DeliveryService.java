@@ -229,6 +229,7 @@ public class DeliveryService {
 
         if (confirmationCodes.matches(delivery, code)) {
             delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+            eventPublisher.publishEvent(new DeliveryConfirmedEvent(delivery.getId()));
             return toResponse(delivery);
         }
         delivery.recordWrongCode();
@@ -298,6 +299,7 @@ public class DeliveryService {
             throw new IllegalStateException("Delivery " + delivery.getReceiptCode() + " is not disputed.");
         }
         delivery.confirmByManagerReview(note.trim(), Instant.now());
+        eventPublisher.publishEvent(new DeliveryConfirmedEvent(delivery.getId()));
         return toResponse(delivery);
     }
 
@@ -331,6 +333,7 @@ public class DeliveryService {
         delivery.confirmByManagerReview(note.trim(), Instant.now());
         auditLogRepository.save(AuditLog.of(AuditAction.DELIVERY_REVIEWED, delivery.getMember(), manager,
                 "Delivery " + delivery.getReceiptCode() + ": " + note.trim()));
+        eventPublisher.publishEvent(new DeliveryConfirmedEvent(delivery.getId()));
         return toResponse(delivery);
     }
 

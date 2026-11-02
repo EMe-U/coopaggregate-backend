@@ -698,6 +698,7 @@ class DeliveryServiceTest {
         assertEquals(ConfirmationMethod.OTP, delivery.getConfirmationMethod());
         assertEquals("Confirmed by member with the SMS code", delivery.getConfirmationMethod().label());
         assertEquals(null, delivery.getConfirmationCodeHash());
+        verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
     }
 
     @Test
@@ -711,6 +712,7 @@ class DeliveryServiceTest {
         assertEquals("Wrong code. 2 tries left.", e.getMessage());
         assertEquals(1, delivery.getConfirmationCodeFailedAttempts());
         assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+        verify(eventPublisher, never()).publishEvent(any(DeliveryConfirmedEvent.class));
     }
 
     @Test
@@ -880,6 +882,7 @@ class DeliveryServiceTest {
         verify(auditLogRepository).save(audit.capture());
         assertEquals(AuditAction.DELIVERY_REVIEWED, audit.getValue().getAction());
         assertEquals("Delivery RCT-7K2Q: Weighed again with the member", audit.getValue().getDetails());
+        verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
     }
 
     @Test
@@ -913,6 +916,7 @@ class DeliveryServiceTest {
                 + "did not arrive (1 left), or review the delivery once it has been pending for 48 hours.",
                 e.getMessage());
         assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+        verify(eventPublisher, never()).publishEvent(any(DeliveryConfirmedEvent.class));
     }
 
     @Test
@@ -1036,6 +1040,7 @@ class DeliveryServiceTest {
         assertEquals(ConfirmationMethod.MANAGER_REVIEW, delivery.getConfirmationMethod());
         assertEquals("Scale receipt shows 100 kg", delivery.getResolutionNote());
         assertEquals(DisputeReason.WRONG_KG, delivery.getDisputeReason());
+        verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
     }
 
     @Test
@@ -1046,6 +1051,7 @@ class DeliveryServiceTest {
                 () -> service.resolveDispute(42L, "Checked"));
 
         assertEquals("Delivery RCT-7K2Q is not disputed.", e.getMessage());
+        verify(eventPublisher, never()).publishEvent(any(DeliveryConfirmedEvent.class));
     }
 
     @Test

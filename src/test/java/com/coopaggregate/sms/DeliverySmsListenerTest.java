@@ -18,6 +18,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import com.coopaggregate.delivery.ConfirmationCodeResentEvent;
+import com.coopaggregate.delivery.DeliveryConfirmedEvent;
 import com.coopaggregate.delivery.DeliveryRecordedEvent;
 
 class DeliverySmsListenerTest {
@@ -63,6 +64,39 @@ class DeliverySmsListenerTest {
         listener.onCodeResent(new ConfirmationCodeResentEvent(42L, 2));
 
         verify(smsService).trySend(8L);
+    }
+
+    @Test
+    void aConfirmedDeliveryGetsItsReceipt() {
+        when(smsService.queueReceipt(42L)).thenReturn(Optional.of(9L));
+
+        listener.onDeliveryConfirmed(new DeliveryConfirmedEvent(42L));
+
+        verify(smsService).trySend(9L);
+    }
+
+    @Test
+    void noReceiptIsSentWhenNoneWasQueued() {
+        when(smsService.queueReceipt(42L)).thenReturn(Optional.empty());
+
+        listener.onDeliveryConfirmed(new DeliveryConfirmedEvent(42L));
+
+        verify(smsService, never()).trySend(any());
+    }
+
+    @Test
+    void aReceiptThatFailsNeverReachesTheConfirmation() {
+        when(smsService.queueReceipt(42L)).thenThrow(new IllegalStateException("database is busy"));
+
+        listener.onDeliveryConfirmed(new DeliveryConfirmedEvent(42L));
+    }
+
+    @Test
+    void theReceiptIsOnlySentAfterTheConfirmationIsCommittedAndOnAnotherThread() throws Exception {
+        Method method = DeliverySmsListener.class.getMethod("onDeliveryConfirmed", DeliveryConfirmedEvent.class);
+
+        assertEquals(TransactionPhase.AFTER_COMMIT, method.getAnnotation(TransactionalEventListener.class).phase());
+        assertNotNull(method.getAnnotation(Async.class));
     }
 
     @Test

@@ -58,6 +58,64 @@ class SmsMessagesTest {
         }
     }
 
+    // --- Receipt ---
+
+    @Test
+    void receiptInEnglish() {
+        assertEquals("Koperative Intagamburuzwa: delivery RCT-7K2Q confirmed. 300 kg Big, 21/10. Thank you.",
+                SmsMessages.receipt("en", "Koperative Intagamburuzwa", "RCT-7K2Q", new BigDecimal("300.00"), "Big",
+                        OCT_21_MORNING));
+    }
+
+    @Test
+    void receiptInKinyarwanda() {
+        assertEquals("Koperative Intagamburuzwa: ibyo watanze RCT-7K2Q byemejwe. kg 300 Big, 21/10. Murakoze.",
+                SmsMessages.receipt("rw", "Koperative Intagamburuzwa", "RCT-7K2Q", new BigDecimal("300.00"), "Big",
+                        OCT_21_MORNING));
+    }
+
+    @Test
+    void receiptIsInKinyarwandaUnlessTheMemberChoseEnglish() {
+        assertTrue(SmsMessages.receipt(null, "Coop", "RCT-7K2Q", BigDecimal.ONE, "Big", OCT_21_MORNING)
+                .contains("Murakoze"));
+    }
+
+    @Test
+    void receiptHasNoMoneyAndUsesTheKigaliDay() {
+        String text = SmsMessages.receipt("en", "Coop", "RCT-7K2Q", new BigDecimal("120.50"), "Normal",
+                Instant.parse("2026-10-20T23:30:00Z"));
+
+        assertEquals("Coop: delivery RCT-7K2Q confirmed. 120.5 kg Normal, 21/10. Thank you.", text);
+        assertFalse(text.contains("RWF"));
+    }
+
+    @Test
+    void receiptIsWrittenInPlainCharacters() {
+        String text = SmsMessages.receipt("en", "Coop\u00e9rative  \u00c9lan\n[Kigali]", "RCT-7K2Q", BigDecimal.ONE,
+                "Gr\u00e2de~1", OCT_21_MORNING);
+
+        assertEquals("Cooperative Elan Kigali: delivery RCT-7K2Q confirmed. 1 kg Grade 1, 21/10. Thank you.", text);
+        assertTrue(text.chars().allMatch(c -> c >= 32 && c < 127), text);
+    }
+
+    @Test
+    void aLongCooperativeNameIsShortenedSoTheReceiptFitsInOneSms() {
+        for (String language : new String[] {"en", "rw"}) {
+            String text = SmsMessages.receipt(language, "A".repeat(150), "RCT-7K2Q", new BigDecimal("4999.99"),
+                    "G".repeat(50), OCT_21_MORNING);
+
+            assertTrue(text.length() <= 160, language + ": " + text.length() + " characters");
+            assertTrue(text.contains("RCT-7K2Q") && text.contains("4999.99") && text.contains("G".repeat(50))
+                    && text.contains("21/10"), text);
+        }
+    }
+
+    @Test
+    void aBlankCooperativeNameFallsBackToCoopAggregate() {
+        assertTrue(SmsMessages.receipt("en", "  ", "RCT-7K2Q", BigDecimal.ONE, "Big", OCT_21_MORNING)
+                .startsWith("CoopAggregate: delivery RCT-7K2Q"));
+    }
+
     @Test
     void anyLanguageOtherThanEnglishGetsKinyarwanda() {
         assertTrue(SmsMessages.deliveryCode(null, "RCT-7K2Q", new BigDecimal("1"), "Big", OCT_21_MORNING,

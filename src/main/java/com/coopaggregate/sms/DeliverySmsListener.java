@@ -8,11 +8,13 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import com.coopaggregate.delivery.ConfirmationCodeResentEvent;
+import com.coopaggregate.delivery.DeliveryConfirmedEvent;
 import com.coopaggregate.delivery.DeliveryRecordedEvent;
 
 /**
- * Sends the member the SMS with the delivery and its one-time code. It runs only after the delivery was committed
- * and on another thread, so the delivery is never slowed down, rolled back or failed by an SMS problem.
+ * Sends the member the SMS with the delivery and its one-time code, and the receipt once it is confirmed. It runs
+ * only after the delivery was committed and on another thread, so the delivery is never slowed down, rolled back
+ * or failed by an SMS problem.
  */
 @Component
 public class DeliverySmsListener {
@@ -43,6 +45,17 @@ public class DeliverySmsListener {
             smsService.queueCodeMessage(event.deliveryId(), event.sendNumber()).ifPresent(smsService::trySend);
         } catch (RuntimeException e) {
             log.error("New code SMS for delivery {} could not be queued", event.deliveryId(), e);
+        }
+    }
+
+    // The confirmation is already committed: nothing here can undo or hold it up.
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onDeliveryConfirmed(DeliveryConfirmedEvent event) {
+        try {
+            smsService.queueReceipt(event.deliveryId()).ifPresent(smsService::trySend);
+        } catch (RuntimeException e) {
+            log.error("Receipt SMS for delivery {} could not be queued", event.deliveryId(), e);
         }
     }
 }

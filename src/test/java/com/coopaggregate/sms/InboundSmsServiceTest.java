@@ -1,7 +1,10 @@
 package com.coopaggregate.sms;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -11,11 +14,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.delivery.ConfirmationMethod;
 import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.Delivery;
+import com.coopaggregate.delivery.DeliveryConfirmedEvent;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.delivery.DisputeReason;
 import com.coopaggregate.ledger.LedgerEntry;
@@ -26,6 +31,7 @@ class InboundSmsServiceTest {
     private static final String OWNER_PHONE = "+250788123456";
 
     private Delivery delivery;
+    private ApplicationEventPublisher eventPublisher;
     private InboundSmsService service;
 
     @BeforeEach
@@ -39,7 +45,8 @@ class InboundSmsServiceTest {
         delivery.setMember(member);
         when(deliveryRepository.findByReceiptCode("RCT-7K2Q")).thenReturn(Optional.of(delivery));
         when(deliveryRepository.findByReceiptCode("RCT-ZZZZ")).thenReturn(Optional.empty());
-        service = new InboundSmsService(deliveryRepository);
+        eventPublisher = mock(ApplicationEventPublisher.class);
+        service = new InboundSmsService(deliveryRepository, eventPublisher);
     }
 
     @ParameterizedTest
@@ -49,6 +56,7 @@ class InboundSmsServiceTest {
 
         assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
         assertEquals(ConfirmationMethod.SMS, delivery.getConfirmationMethod());
+        verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
     }
 
     @Test
@@ -58,6 +66,7 @@ class InboundSmsServiceTest {
         assertEquals(ConfirmationStatus.DISPUTED, delivery.getConfirmationStatus());
         assertEquals(DisputeReason.OTHER, delivery.getDisputeReason());
         assertEquals("it was 250 kg", delivery.getDisputeNote());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
