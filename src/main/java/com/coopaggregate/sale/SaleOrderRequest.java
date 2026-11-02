@@ -26,7 +26,7 @@ public record SaleOrderRequest(
         @NotEmpty(message = "must have at least one item")
         List<@Valid Item> items) {
 
-    /** One grade of the order. Each grade can appear once; skipDeliveryIds and skipReason work as in a sale. */
+    /** One grade of the order. Each grade can appear once; skipLotIds and skipReason work as in a sale. */
     public record Item(
             @NotNull(message = "is required")
             Long gradeId,
@@ -40,10 +40,13 @@ public record SaleOrderRequest(
             @Positive(message = "must be more than 0")
             Long pricePerKg,
 
-            @Size(max = 50, message = "can have at most 50 batches")
-            List<@NotNull(message = "must not be empty") Long> skipDeliveryIds,
+            @Size(max = 50, message = "can have at most 50 lots")
+            List<@NotNull(message = "must not be empty") Long> skipLotIds,
 
             @Size(max = 500, message = "must be at most 500 characters")
-            String skipReason) {
+            String skipReason,
+
+            // Refused when not empty: single batches can no longer be skipped.
+            List<Long> skipDeliveryIds) {
     }
 }

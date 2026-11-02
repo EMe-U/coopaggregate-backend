@@ -64,6 +64,11 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<Delivery> findForUpdateById(Long id);
 
+    // SELECT ... FOR UPDATE, in id order. Callers hold the grade, the lots and the portions first.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT d FROM Delivery d WHERE d.id IN :ids ORDER BY d.id")
+    List<Delivery> lockByIds(Collection<Long> ids);
+
     long countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus status);
 
     long countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(ConfirmationStatus status, Instant before);

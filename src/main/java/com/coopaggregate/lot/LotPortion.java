@@ -93,6 +93,21 @@ public class LotPortion {
         return quantityKg.subtract(soldKg).subtract(lostKg);
     }
 
+    public void addSoldKg(BigDecimal kg) {
+        this.soldKg = soldKg.add(kg);
+    }
+
+    public void addLostKg(BigDecimal kg) {
+        this.lostKg = lostKg.add(kg);
+    }
+
+    /** A portion of a reversed delivery hands its lost kg back, so the lot's other portions can take them. */
+    public BigDecimal releaseLostKg() {
+        BigDecimal released = lostKg;
+        this.lostKg = BigDecimal.ZERO;
+        return released;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }

@@ -8,6 +8,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.coopaggregate.error.BadRequestException;
+
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -27,17 +29,22 @@ public class BatchController {
     }
 
     @GetMapping("/api/grades/{gradeId}/sale-preview")
-    @Operation(summary = "Which batches a sale of this grade would use, oldest first whatever their lot, and what "
-            + "each member would be credited (their part of the sale amount, minus the deduction per kg). Only "
-            + "confirmed batches are sold. Nothing is saved; when there are not enough kg, enough is false and "
-            + "message says why")
+    @Operation(summary = "Which portions a sale of this grade would use, first in first out by lot (older lots "
+            + "first, then fixed-size lots in fill order, each shared in proportion to what its portions have left), and "
+            + "what each member would be credited. Only confirmed kg are sold. Nothing is saved; when there are not "
+            + "enough kg, enough is false and message says why")
     public SalePreviewResponse salePreview(
             @PathVariable Long gradeId,
             @RequestParam(required = false) BigDecimal quantityKg,
             @RequestParam(required = false) Long pricePerKg,
-            @Parameter(description = "Ids of batches (deliveries) to pass over, for example skip=12,15")
+            @Parameter(description = "Ids of whole lots to pass over, for example skipLots=12,15")
+            @RequestParam(required = false) List<Long> skipLots,
+            @Parameter(description = "No longer accepted: single batches cannot be skipped")
             @RequestParam(required = false) List<Long> skip) {
-        return salePreviewService.preview(gradeId, quantityKg, pricePerKg, skip);
+        if (skip != null && !skip.isEmpty()) {
+            throw new BadRequestException("Single batches can no longer be skipped. Skip whole lots with skipLots.");
+        }
+        return salePreviewService.preview(gradeId, quantityKg, pricePerKg, skipLots);
     }
 
     @GetMapping("/api/members/{memberId}/batches")

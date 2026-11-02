@@ -28,6 +28,8 @@ import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
 import com.coopaggregate.lot.Lot;
+import com.coopaggregate.lot.LotPortion;
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.setting.Setting;
 import com.coopaggregate.setting.SettingRepository;
@@ -37,6 +39,7 @@ import jakarta.persistence.EntityNotFoundException;
 class SalePreviewServiceTest {
 
     private BatchRepository batchRepository;
+    private LotPortionRepository lotPortionRepository;
     private GradeRepository gradeRepository;
     private Grade grade;
     private SalePreviewService service;
@@ -44,6 +47,7 @@ class SalePreviewServiceTest {
     @BeforeEach
     void setUp() {
         batchRepository = mock(BatchRepository.class);
+        lotPortionRepository = mock(LotPortionRepository.class);
         gradeRepository = mock(GradeRepository.class);
         SettingRepository settingRepository = mock(SettingRepository.class);
         grade = new Grade();
@@ -51,14 +55,14 @@ class SalePreviewServiceTest {
         grade.setName("Big");
         when(gradeRepository.findById(1L)).thenReturn(Optional.of(grade));
         when(settingRepository.findById(1L)).thenReturn(Optional.of(new Setting()));
-        when(batchRepository.findSellableBatches(1L)).thenReturn(List.of(
-                batch(42L, "RCT-0042", "A-2026-01", "Uwimana Claudine", "100.00"),
-                batch(43L, "RCT-0043", "A-2026-02", "Habimana Jean", "200.00")));
+        when(lotPortionRepository.findSellable(1L)).thenReturn(List.of(
+                portion(42L, "RCT-0042", 3L, "A-2026-01", "Uwimana Claudine", "100.00"),
+                portion(43L, "RCT-0043", 4L, "A-2026-02", "Habimana Jean", "200.00")));
         when(batchRepository.gradeRemainingKgWithStatus(1L, ConfirmationStatus.PENDING))
                 .thenReturn(new BigDecimal("80.00"));
         when(batchRepository.gradeRemainingKgWithStatus(1L, ConfirmationStatus.DISPUTED))
                 .thenReturn(new BigDecimal("20.00"));
-        service = new SalePreviewService(batchRepository, gradeRepository, settingRepository);
+        service = new SalePreviewService(batchRepository, lotPortionRepository, gradeRepository, settingRepository);
     }
 
     @Test
@@ -75,10 +79,10 @@ class SalePreviewServiceTest {
         assertEquals(750L, preview.totalDeductionRwf());
         assertEquals(44_250L, preview.totalNetRwf());
         assertEquals(List.of(
-                new SalePreviewResponse.Line(42L, "RCT-0042", 3L, "A-2026-01", 5L, "M-0005", "Uwimana Claudine",
+                new SalePreviewResponse.Line(42L, 42L, "RCT-0042", 3L, "A-2026-01", 5L, "M-0005", "Uwimana Claudine",
                         Instant.parse("2026-10-01T08:00:00Z"), new BigDecimal("100.00"), new BigDecimal("0.00"),
                         30_000L, 500L, 29_500L),
-                new SalePreviewResponse.Line(43L, "RCT-0043", 3L, "A-2026-02", 5L, "M-0005", "Habimana Jean",
+                new SalePreviewResponse.Line(43L, 43L, "RCT-0043", 4L, "A-2026-02", 5L, "M-0005", "Habimana Jean",
                         Instant.parse("2026-10-01T08:00:00Z"), new BigDecimal("50.00"), new BigDecimal("150.00"),
                         15_000L, 250L, 14_750L)), preview.batches());
     }
@@ -94,12 +98,12 @@ class SalePreviewServiceTest {
     }
 
     @Test
-    void skippedBatchesAreListed() {
-        SalePreviewResponse preview = service.preview(1L, new BigDecimal("150.00"), 300L, List.of(42L));
+    void skippedLotsAreListedWithTheirSellableKg() {
+        SalePreviewResponse preview = service.preview(1L, new BigDecimal("150.00"), 300L, List.of(3L));
 
         assertEquals(List.of(43L), preview.batches().stream().map(SalePreviewResponse.Line::deliveryId).toList());
-        assertEquals(List.of(new SalePreviewResponse.Skipped(42L, "RCT-0042", "A-2026-01", "Uwimana Claudine",
-                Instant.parse("2026-10-01T08:00:00Z"), new BigDecimal("100.00"))), preview.skipped());
+        assertEquals(List.of(new SalePreviewResponse.Skipped(3L, "A-2026-01", new BigDecimal("100.00"))),
+                preview.skipped());
     }
 
     @Test
@@ -123,7 +127,7 @@ class SalePreviewServiceTest {
                 () -> service.preview(1L, BigDecimal.TEN, null, null)).getMessage());
         assertEquals("pricePerKg is required and must be more than 0.", assertThrows(BadRequestException.class,
                 () -> service.preview(1L, BigDecimal.TEN, 0L, null)).getMessage());
-        verify(batchRepository, never()).findSellableBatches(anyLong());
+        verify(lotPortionRepository, never()).findSellable(anyLong());
     }
 
     @Test
@@ -140,7 +144,8 @@ class SalePreviewServiceTest {
     void previewOnlyReads() throws Exception {
         service.preview(1L, new BigDecimal("150.00"), 300L, null);
 
-        verify(batchRepository).findSellableBatches(1L);
+        verify(lotPortionRepository).findSellable(1L);
+        verifyNoMoreInteractions(lotPortionRepository);
         verify(batchRepository).gradeRemainingKgWithStatus(1L, ConfirmationStatus.PENDING);
         verify(batchRepository).gradeRemainingKgWithStatus(1L, ConfirmationStatus.DISPUTED);
         verifyNoMoreInteractions(batchRepository);
@@ -149,9 +154,11 @@ class SalePreviewServiceTest {
                 .getAnnotation(Transactional.class).readOnly());
     }
 
-    private static Delivery batch(Long id, String receiptCode, String lotCode, String memberName, String remaining) {
+    // The one portion of a batch of an older lot (no fixed size), with the batch's id.
+    private static LotPortion portion(Long id, String receiptCode, Long lotId, String lotCode, String memberName,
+                                      String remaining) {
         Lot lot = new Lot();
-        ReflectionTestUtils.setField(lot, "id", 3L);
+        ReflectionTestUtils.setField(lot, "id", lotId);
         lot.setLotCode(lotCode);
         Member member = new Member();
         ReflectionTestUtils.setField(member, "id", 5L);
@@ -164,7 +171,8 @@ class SalePreviewServiceTest {
         delivery.setMember(member);
         delivery.setDeliveredAt(Instant.parse("2026-10-01T08:00:00Z"));
         delivery.setQuantityKg(new BigDecimal(remaining));
-        ReflectionTestUtils.setField(delivery, "remainingKg", new BigDecimal(remaining));
-        return delivery;
+        LotPortion portion = new LotPortion(lot, delivery, new BigDecimal(remaining));
+        ReflectionTestUtils.setField(portion, "id", id);
+        return portion;
     }
 }

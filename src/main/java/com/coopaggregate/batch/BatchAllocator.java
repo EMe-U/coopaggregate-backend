@@ -2,6 +2,7 @@ package com.coopaggregate.batch;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.BiConsumer;
 
 import org.springframework.stereotype.Component;
@@ -9,6 +10,8 @@ import org.springframework.stereotype.Component;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.loss.Loss;
 import com.coopaggregate.lot.Lot;
+import com.coopaggregate.lot.LotPortion;
+import com.coopaggregate.lot.LotPortionRepository;
 
 /**
  * Keeps the batches (deliveries) in step with the lot's losses: a loss takes its kg from the lot's oldest batches
@@ -21,10 +24,13 @@ public class BatchAllocator {
 
     private final BatchRepository batchRepository;
     private final LossAllocationRepository lossAllocationRepository;
+    private final LotPortionRepository lotPortionRepository;
 
-    public BatchAllocator(BatchRepository batchRepository, LossAllocationRepository lossAllocationRepository) {
+    public BatchAllocator(BatchRepository batchRepository, LossAllocationRepository lossAllocationRepository,
+                          LotPortionRepository lotPortionRepository) {
         this.batchRepository = batchRepository;
         this.lossAllocationRepository = lossAllocationRepository;
+        this.lotPortionRepository = lotPortionRepository;
     }
 
     public void allocateLoss(Loss loss) {
@@ -41,6 +47,7 @@ public class BatchAllocator {
         }
         List<LossAllocation> held = lossAllocationRepository.findByDeliveryIdOrderById(reversed.getId());
         reversed.releaseLostKg();
+        portionOf(reversed).ifPresent(LotPortion::releaseLostKg);
         lossAllocationRepository.deleteAll(held);
         for (LossAllocation allocation : held) {
             take(reversed.getLot(), allocation.getQuantityKg(),
@@ -50,9 +57,15 @@ public class BatchAllocator {
 
     private void addLoss(Loss loss, Delivery batch, BigDecimal kg) {
         batch.addLostKg(kg);
+        // The batch's one portion, in its own lot, keeps the same lost kg: sales take kg from portions.
+        portionOf(batch).ifPresent(portion -> portion.addLostKg(kg));
         lossAllocationRepository.findByLossIdAndDeliveryId(loss.getId(), batch.getId())
                 .ifPresentOrElse(existing -> existing.addKg(kg),
                         () -> lossAllocationRepository.save(new LossAllocation(loss, batch, kg)));
+    }
+
+    private Optional<LotPortion> portionOf(Delivery batch) {
+        return lotPortionRepository.findByLotIdAndDeliveryId(batch.getLot().getId(), batch.getId());
     }
 
     // Oldest batch first, as much as each has left, until the kg are covered.

@@ -41,15 +41,16 @@ import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.ShortCodes;
 import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.Delivery;
+import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.lot.Lot;
-import com.coopaggregate.lot.LotQuantities;
+import com.coopaggregate.lot.LotPortion;
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.lot.LotRepository;
-import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.setting.SettingRepository;
@@ -62,10 +63,11 @@ import jakarta.persistence.criteria.Root;
 import jakarta.persistence.criteria.Subquery;
 
 /**
- * Sales are made by grade: the kg come from the oldest confirmed batches (deliveries) of the grade, whatever their
- * lot, and each batch's member is credited for the kg taken: their part of the sale amount minus the deduction per
- * kg. The locks are always taken in this order: the grade, every lot of the grade that has sellable batches (by id),
- * the batches (oldest first), and last the ledger.
+ * Sales are made by grade, first in, first out by lot: lots from before fixed-size lots first (oldest delivery first),
+ * then the fixed-size lots in the order they were filled, each lot shared across its portions in proportion to what
+ * each has left (see SalePlanner). Each portion's member is credited for the kg taken: their part of the sale amount
+ * minus their part of the deduction. The locks are always taken in this order: the grade, every lot of the grade with
+ * sellable kg (by id), their portions, the deliveries, and last the ledger.
  */
 @Service
 public class SaleService {
@@ -79,29 +81,32 @@ public class SaleService {
     private final GradeRepository gradeRepository;
     private final LotRepository lotRepository;
     private final BuyerRepository buyerRepository;
-    private final LotService lotService;
     private final LedgerService ledgerService;
     private final BatchRepository batchRepository;
     private final SaleAllocationRepository saleAllocationRepository;
     private final SettingRepository settingRepository;
     private final AuditLogRepository auditLogRepository;
+    private final LotPortionRepository lotPortionRepository;
+    private final DeliveryRepository deliveryRepository;
 
     public SaleService(SaleRepository saleRepository, SaleOrderRepository saleOrderRepository,
                        GradeRepository gradeRepository, LotRepository lotRepository, BuyerRepository buyerRepository,
-                       LotService lotService, LedgerService ledgerService, BatchRepository batchRepository,
+                       LedgerService ledgerService, BatchRepository batchRepository,
                        SaleAllocationRepository saleAllocationRepository, SettingRepository settingRepository,
-                       AuditLogRepository auditLogRepository) {
+                       AuditLogRepository auditLogRepository, LotPortionRepository lotPortionRepository,
+                       DeliveryRepository deliveryRepository) {
         this.saleRepository = saleRepository;
         this.saleOrderRepository = saleOrderRepository;
         this.gradeRepository = gradeRepository;
         this.lotRepository = lotRepository;
         this.buyerRepository = buyerRepository;
-        this.lotService = lotService;
         this.ledgerService = ledgerService;
         this.batchRepository = batchRepository;
         this.saleAllocationRepository = saleAllocationRepository;
         this.settingRepository = settingRepository;
         this.auditLogRepository = auditLogRepository;
+        this.lotPortionRepository = lotPortionRepository;
+        this.deliveryRepository = deliveryRepository;
     }
 
     /** What one sale of one grade asks for. */
@@ -109,14 +114,14 @@ public class SaleService {
                           String skipReason) {
     }
 
-    /** A sale worked out under the locks, with the locked batches it will take kg from. */
-    private record Planned(Wanted wanted, SalePlan plan, Map<Long, Delivery> batches) {
+    /** A sale worked out under the locks, with the locked portions it will take kg from. */
+    private record Planned(Wanted wanted, SalePlan plan, Map<Long, LotPortion> portions) {
     }
 
     @Transactional
     public RecordedSale record(SaleRequest request, Manager manager) {
-        Wanted asked = checkedWanted(request.quantityKg(), request.pricePerKg(), request.skipDeliveryIds(),
-                request.skipReason());
+        Wanted asked = checkedWanted(request.quantityKg(), request.pricePerKg(), request.skipLotIds(),
+                request.skipReason(), request.skipDeliveryIds());
 
         // The row lock makes sales of the same grade wait for each other, so two sales cannot both pass the check
         // for the same kg. It also makes a repeated client UUID wait for the first request.
@@ -142,8 +147,8 @@ public class SaleService {
             throw new BadRequestException("Each grade can appear only once in an order.");
         }
         List<Wanted> asked = request.items().stream()
-                .map(item -> checkedWanted(item.quantityKg(), item.pricePerKg(), item.skipDeliveryIds(),
-                        item.skipReason()))
+                .map(item -> checkedWanted(item.quantityKg(), item.pricePerKg(), item.skipLotIds(),
+                        item.skipReason(), item.skipDeliveryIds()))
                 .toList();
 
         // Locked in id order, so two orders that share grades always lock them in the same order and cannot
@@ -232,14 +237,17 @@ public class SaleService {
     }
 
     // Checks what can be checked without the database, before any lock is taken. The grade is added once locked.
-    private static Wanted checkedWanted(BigDecimal quantityKg, Long pricePerKg, List<Long> skipDeliveryIds,
-                                        String skipReason) {
-        List<Long> skipIds = skipDeliveryIds == null ? List.of() : skipDeliveryIds;
+    private static Wanted checkedWanted(BigDecimal quantityKg, Long pricePerKg, List<Long> skipLotIds,
+                                        String skipReason, List<Long> skipDeliveryIds) {
+        if (skipDeliveryIds != null && !skipDeliveryIds.isEmpty()) {
+            throw new BadRequestException("Single batches can no longer be skipped. Skip whole lots with skipLotIds.");
+        }
+        List<Long> skipIds = skipLotIds == null ? List.of() : skipLotIds;
         String reason = skipReason == null ? null : skipReason.trim();
         if (!skipIds.isEmpty() && (reason == null || reason.length() < MIN_SKIP_REASON
                 || reason.length() > MAX_SKIP_REASON)) {
             throw new BadRequestException("A reason of " + MIN_SKIP_REASON + " to " + MAX_SKIP_REASON
-                    + " characters is needed to skip a batch.");
+                    + " characters is needed to skip a lot.");
         }
         return new Wanted(null, quantityKg, pricePerKg, skipIds, skipIds.isEmpty() ? null : reason);
     }
@@ -258,8 +266,9 @@ public class SaleService {
     }
 
     /**
-     * Takes the lots and then the batches, and works out each sale from what is left once nothing can change. The
-     * result is the one that is saved. Throws, so nothing is saved, when a grade has too few sellable kg.
+     * Takes the lots, then the portions and their deliveries, and works out each sale from what is left once nothing
+     * can change. The result is the one that is saved. Throws, so nothing is saved, when a grade has too few sellable
+     * kg.
      */
     private List<Planned> planUnderLocks(List<Wanted> wanted) {
         long deductionPerKg = settingRepository.findById(1L)
@@ -270,7 +279,7 @@ public class SaleService {
         Map<Long, List<Long>> lotIdsByGrade = new LinkedHashMap<>();
         Set<Long> lotIds = new TreeSet<>();
         for (Wanted item : byGrade) {
-            List<Long> ids = batchRepository.findLotIdsWithSellableBatches(item.grade().getId());
+            List<Long> ids = lotPortionRepository.findLotIdsWithSellable(item.grade().getId());
             lotIdsByGrade.put(item.grade().getId(), ids);
             lotIds.addAll(ids);
         }
@@ -282,23 +291,35 @@ public class SaleService {
         Map<Long, Planned> plannedByGrade = new LinkedHashMap<>();
         for (Wanted item : byGrade) {
             Long gradeId = item.grade().getId();
-            List<Long> ids = lotIdsByGrade.get(gradeId);
-            List<Delivery> batches = ids.isEmpty() ? List.of() : batchRepository.lockSellableBatches(ids);
-            SalePlan plan = SalePlanner.plan(batches.stream().map(SellableBatch::from).toList(), item.quantityKg(),
+            List<LotPortion> portions = lotIdsByGrade.get(gradeId).isEmpty() ? List.of()
+                    : lotPortionRepository.findSellable(gradeId);
+            lockPortionsAndDeliveries(portions);
+            SalePlan plan = SalePlanner.plan(portions.stream().map(SellableBatch::from).toList(), item.quantityKg(),
                     item.pricePerKg(), deductionPerKg, item.skipIds());
             if (!plan.enough()) {
                 BigDecimal waitingKg = batchRepository.gradeRemainingKgWithStatus(gradeId, ConfirmationStatus.PENDING);
                 throw new BadRequestException(plan.shortageMessage(item.grade().getName(), waitingKg));
             }
             plannedByGrade.put(gradeId, new Planned(item, plan,
-                    batches.stream().collect(Collectors.toMap(Delivery::getId, Function.identity()))));
+                    portions.stream().collect(Collectors.toMap(LotPortion::getId, Function.identity()))));
         }
         // In the order of the request.
         return wanted.stream().map(item -> plannedByGrade.get(item.grade().getId())).toList();
     }
 
-    // Saves the sale, then for each batch used: its sold kg and allocation (with the money), then the ledger: the
-    // SALE entry and one SALE_CREDIT entry per allocation.
+    // The grade and its lots are already held, so what was read cannot change; these row locks keep the order of locks
+    // the same as everywhere else: portions, then their deliveries.
+    private void lockPortionsAndDeliveries(List<LotPortion> portions) {
+        if (portions.isEmpty()) {
+            return;
+        }
+        lotPortionRepository.lockByIds(portions.stream().map(LotPortion::getId).sorted().toList());
+        deliveryRepository.lockByIds(portions.stream().map(portion -> portion.getDelivery().getId())
+                .distinct().sorted().toList());
+    }
+
+    // Saves the sale, then for each portion used: its sold kg and its delivery's, and the allocation (with the money),
+    // then the ledger: the SALE entry and one SALE_CREDIT entry per allocation.
     private Sale saveSale(Planned planned, Buyer buyer, UUID clientUuid, SaleOrder order, LocalDate saleDate,
                           Manager manager) {
         Wanted wanted = planned.wanted();
@@ -319,10 +340,14 @@ public class SaleService {
 
         List<SaleAllocation> allocations = new ArrayList<>();
         for (SalePlan.Line line : plan.lines()) {
-            Delivery batch = planned.batches().get(line.batch().deliveryId());
+            LotPortion portion = planned.portions().get(line.batch().portionId());
+            Delivery batch = portion.getDelivery();
+            portion.addSoldKg(line.kg());
             batch.addSoldKg(line.kg());
-            allocations.add(saleAllocationRepository.save(
-                    new SaleAllocation(saved, batch, line.kg(), line.grossRwf(), line.deductionRwf())));
+            SaleAllocation allocation = new SaleAllocation(saved, batch, line.kg(), line.grossRwf(),
+                    line.deductionRwf());
+            allocation.setLotPortion(portion);
+            allocations.add(saleAllocationRepository.save(allocation));
         }
 
         ledgerService.record(LedgerEntryType.SALE, "SALE", saved.getId(), saved.getQuantityKg(),
@@ -338,28 +363,25 @@ public class SaleService {
 
         if (!plan.skipped().isEmpty()) {
             auditLogRepository.save(AuditLog.of(AuditAction.SALE_FIFO_SKIPPED, null, manager,
-                    "Sale " + saved.getSaleCode() + ": skipped "
-                            + String.join(", ", plan.skipped().stream().map(SellableBatch::receiptCode).toList())
+                    "Sale " + saved.getSaleCode() + ": skipped lots "
+                            + String.join(", ", plan.skipped().stream().map(SalePlan.SkippedLot::lotCode).toList())
                             + ". Reason: " + wanted.skipReason()));
         }
         return saved;
     }
 
-    // A lot is sold when nothing is left in it, whether or not it was closed.
+    // A full lot is sold when nothing is left in it; so is an older lot, whether or not it was closed. A lot still
+    // being filled stays FILLING: it can sell kg and keep filling.
     private void updateLotStatuses(List<Planned> planned) {
         List<Lot> touched = planned.stream()
                 .flatMap(item -> item.plan().lines().stream()
-                        .map(line -> item.batches().get(line.batch().deliveryId()).getLot()))
+                        .map(line -> item.portions().get(line.batch().portionId()).getLot()))
                 .distinct()
                 .toList();
-        if (touched.isEmpty()) {
-            return;
-        }
-        Map<Long, LotQuantities> quantities = lotService.quantitiesOf(touched);
         for (Lot lot : touched) {
-            LotQuantities lotQuantities = quantities.get(lot.getId());
-            boolean empty = lotQuantities != null && lotQuantities.remainingKg().signum() == 0;
-            if (empty && (lot.getStatus() == LotStatus.OPEN || lot.getStatus() == LotStatus.CLOSED)) {
+            boolean canBeSold = lot.getStatus() == LotStatus.FULL || lot.getStatus() == LotStatus.OPEN
+                    || lot.getStatus() == LotStatus.CLOSED;
+            if (canBeSold && lotPortionRepository.remainingKg(lot.getId()).signum() == 0) {
                 lot.setStatus(LotStatus.SOLD);
                 if (lot.getCloseDate() == null) {
                     lot.setCloseDate(KigaliTime.today());

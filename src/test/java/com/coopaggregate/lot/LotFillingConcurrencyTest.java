@@ -159,7 +159,7 @@ class LotFillingConcurrencyTest {
             work.add(() -> deliveryService.record(new DeliveryRequest(UUID.randomUUID(), member, grade, kg(), null),
                     manager));
             work.add(() -> saleService.record(new SaleRequest(UUID.randomUUID(), grade, 1L, new BigDecimal("5"),
-                    300L, null, List.of(), null), manager));
+                    300L, null, List.of(), null, null), manager));
         }
         Collections.shuffle(work, random);
 

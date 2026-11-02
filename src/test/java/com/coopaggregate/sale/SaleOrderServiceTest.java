@@ -103,15 +103,16 @@ class SaleOrderServiceTest {
         // The request lists Small first.
         service.recordOrder(order(item(2L, "150.00", 200L), item(1L, "120.00", 300L)), f.manager);
 
-        List<String> locks = f.calls.subList(0, 7);
-        assertEquals(List.of("grade:1", "grade:2", "lot:3", "lot:4", "lot:5", "batches", "batches"), locks);
+        List<String> locks = f.calls.subList(0, 9);
+        assertEquals(List.of("grade:1", "grade:2", "lot:3", "lot:4", "lot:5", "portions", "deliveries", "portions",
+                "deliveries"), locks);
         int firstWrite = f.calls.indexOf("sale");
-        assertEquals(7, firstWrite, "nothing is written before everything is locked and planned");
+        assertEquals(9, firstWrite, "nothing is written before everything is locked and planned");
         // Each sale writes its allocations before its own ledger entries.
         assertTrue(f.calls.indexOf("ledger:SALE") > f.calls.indexOf("allocation"));
         assertEquals(List.of("sale", "allocation", "allocation", "ledger:SALE", "ledger:SALE_CREDIT",
                 "ledger:SALE_CREDIT", "sale", "allocation", "allocation", "ledger:SALE", "ledger:SALE_CREDIT",
-                "ledger:SALE_CREDIT"), f.calls.subList(7, f.calls.size()));
+                "ledger:SALE_CREDIT"), f.calls.subList(9, f.calls.size()));
     }
 
     @Test
@@ -161,26 +162,29 @@ class SaleOrderServiceTest {
 
     @Test
     void aSkipInOneItemIsRecordedWithTheSaleCode() {
+        f.batch(9L, f.fixedLot(20L, "B-2026-02", f.small, LotStatus.FULL), f.bosco, "2026-10-04T08:00:00Z", "100.00");
+        f.batch(10L, f.lots.get(20L), f.alice, "2026-10-04T09:00:00Z", "100.00");
         SaleOrderRequest request = new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(
                 item(1L, "100.00", 300L),
-                new SaleOrderRequest.Item(2L, new BigDecimal("150.00"), 200L, List.of(7L),
-                        "The buyer wants the second delivery")));
+                new SaleOrderRequest.Item(2L, new BigDecimal("150.00"), 200L, List.of(5L),
+                        "The buyer wants the second lot", null)));
 
         SaleOrderResponse order = service.recordOrder(request, f.manager).order();
 
-        assertEquals(List.of(8L), order.sales().get(1).batches().stream()
+        // Lot B-2026-01 is passed over; the fixed-size lot is shared: 75 kg from each of its two batches.
+        assertEquals(List.of(9L, 10L), order.sales().get(1).batches().stream()
                 .map(SaleResponse.BatchLine::deliveryId).toList());
         assertEquals(1, f.audits.size());
         assertEquals(AuditAction.SALE_FIFO_SKIPPED, f.audits.get(0).getAction());
-        assertEquals("Sale " + order.sales().get(1).saleCode() + ": skipped RCT-0007. Reason: The buyer wants the "
-                + "second delivery", f.audits.get(0).getDetails());
+        assertEquals("Sale " + order.sales().get(1).saleCode() + ": skipped lots B-2026-01. Reason: The buyer wants the "
+                + "second lot", f.audits.get(0).getDetails());
     }
 
     @Test
     void aSkipWithoutAReasonSavesNothingAndLocksNothing() {
         SaleOrderRequest request = new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(
                 item(1L, "100.00", 300L),
-                new SaleOrderRequest.Item(2L, new BigDecimal("150.00"), 200L, List.of(7L), "short")));
+                new SaleOrderRequest.Item(2L, new BigDecimal("150.00"), 200L, List.of(5L), "short", null)));
 
         assertThrows(BadRequestException.class, () -> service.recordOrder(request, f.manager));
 
@@ -222,6 +226,6 @@ class SaleOrderServiceTest {
     }
 
     private static SaleOrderRequest.Item item(Long gradeId, String quantityKg, long pricePerKg) {
-        return new SaleOrderRequest.Item(gradeId, new BigDecimal(quantityKg), pricePerKg, null, null);
+        return new SaleOrderRequest.Item(gradeId, new BigDecimal(quantityKg), pricePerKg, null, null, null);
     }
 }

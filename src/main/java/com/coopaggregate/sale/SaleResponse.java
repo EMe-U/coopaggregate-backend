@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import com.coopaggregate.batch.SaleAllocation;
+import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotStatus;
 
 /**
@@ -48,9 +49,13 @@ public record SaleResponse(
             Long deductionRwf,
             Long netRwf) {
 
+        // The lot is the portion's; allocations from before fixed-size lots have no portion, and their delivery's
+        // own lot is the one they were sold from.
         static BatchLine from(SaleAllocation allocation) {
+            Lot lot = allocation.getLotPortion() != null ? allocation.getLotPortion().getLot()
+                    : allocation.getDelivery().getLot();
             return new BatchLine(allocation.getDelivery().getId(), allocation.getDelivery().getReceiptCode(),
-                    allocation.getDelivery().ownLotId(), allocation.getDelivery().ownLotCode(),
+                    lot == null ? null : lot.getId(), lot == null ? null : lot.getLotCode(),
                     allocation.getDelivery().getMember().getId(), allocation.getDelivery().getMember().getMemberCode(),
                     allocation.getDelivery().getMember().getFullName(), allocation.getQuantityKg(),
                     allocation.getGrossRwf(), allocation.getDeductionRwf(), allocation.netRwf());

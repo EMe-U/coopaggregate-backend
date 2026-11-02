@@ -11,7 +11,6 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,14 +28,15 @@ import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.buyer.BuyerRepository;
 import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.Delivery;
+import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.lot.Lot;
-import com.coopaggregate.lot.LotQuantities;
 import com.coopaggregate.lot.LotRepository;
-import com.coopaggregate.lot.LotService;
+import com.coopaggregate.lot.LotPortion;
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
@@ -44,9 +44,11 @@ import com.coopaggregate.setting.Setting;
 import com.coopaggregate.setting.SettingRepository;
 
 /**
- * Two grades, their lots and batches, and the repositories behind SaleService standing in for the database: the
- * batches are in memory, saved sales and allocations get ids, and every lock and ledger entry is noted in order.
- * Grade Big (id 1) has lots A-1 (closed, id 3) and A-2 (open, id 4); grade Small (id 2) has lot B-1 (open, id 5).
+ * Two grades, their lots, batches and lot portions, and the repositories behind SaleService standing in for the
+ * database: everything is in memory, saved sales and allocations get ids, and every lock and ledger entry is noted in
+ * order. Grade Big (id 1) has the older lots A-1 (closed, id 3) and A-2 (open, id 4); grade Small (id 2) has the older
+ * lot B-1 (open, id 5). Fixed-size lots are added by tests with fixedLot. Each batch of an older lot is one portion of
+ * it, with the delivery's id as the portion's id.
  */
 class SaleTestFixture {
 
@@ -60,8 +62,9 @@ class SaleTestFixture {
     final GradeRepository gradeRepository = mock(GradeRepository.class);
     final LotRepository lotRepository = mock(LotRepository.class);
     final BuyerRepository buyerRepository = mock(BuyerRepository.class);
-    final LotService lotService = mock(LotService.class);
     final LedgerService ledgerService = mock(LedgerService.class);
+    final LotPortionRepository lotPortionRepository = mock(LotPortionRepository.class);
+    final DeliveryRepository deliveryRepository = mock(DeliveryRepository.class);
     final BatchRepository batchRepository = mock(BatchRepository.class);
     final SaleAllocationRepository saleAllocationRepository = mock(SaleAllocationRepository.class);
     final SettingRepository settingRepository = mock(SettingRepository.class);
@@ -69,6 +72,7 @@ class SaleTestFixture {
 
     final Grade big = grade(1L, "Big");
     final Grade small = grade(2L, "Small");
+    final Map<Long, Lot> lots = new HashMap<>();
     final Lot lotA1 = lot(3L, "A-2026-01", big, LotStatus.CLOSED);
     final Lot lotA2 = lot(4L, "A-2026-02", big, LotStatus.OPEN);
     final Lot lotB1 = lot(5L, "B-2026-01", small, LotStatus.OPEN);
@@ -78,12 +82,13 @@ class SaleTestFixture {
     final Manager manager = new Manager();
 
     final List<Delivery> deliveries = new ArrayList<>();
+    final List<LotPortion> portions = new ArrayList<>();
     final List<Sale> savedSales = new ArrayList<>();
     final List<SaleAllocation> savedAllocations = new ArrayList<>();
     final List<SaleOrder> savedOrders = new ArrayList<>();
     final List<Ledgered> ledger = new ArrayList<>();
     final List<AuditLog> audits = new ArrayList<>();
-    /** What was locked and written, in order: grade:1, lot:3, batches, ledger:SALE ... */
+    /** What was locked and written, in order: grade:1, lot:3, portions, deliveries, ledger:SALE ... */
     final List<String> calls = new ArrayList<>();
 
     final SaleService service;
@@ -100,42 +105,40 @@ class SaleTestFixture {
             calls.add("grade:" + id);
             return Optional.ofNullable(grades.get(id));
         });
-        Map<Long, Lot> lots = Map.of(3L, lotA1, 4L, lotA2, 5L, lotB1);
+        lots.put(3L, lotA1);
+        lots.put(4L, lotA2);
+        lots.put(5L, lotB1);
         when(lotRepository.findForUpdateById(anyLong())).thenAnswer(invocation -> {
             Long id = invocation.getArgument(0);
             calls.add("lot:" + id);
             return Optional.ofNullable(lots.get(id));
         });
 
-        // The batches a sale may take from: confirmed, not reversed and with kg left.
-        when(batchRepository.findLotIdsWithSellableBatches(anyLong())).thenAnswer(invocation -> sellable().stream()
-                .filter(d -> d.getLot().getGrade().getId().equals(invocation.getArgument(0)))
-                .map(d -> d.getLot().getId()).distinct().sorted().toList());
-        when(batchRepository.lockSellableBatches(anyCollection())).thenAnswer(invocation -> {
-            Collection<Long> lotIds = invocation.getArgument(0);
-            calls.add("batches");
-            return sellable().stream()
-                    .filter(d -> lotIds.contains(d.getLot().getId()))
-                    .sorted(Comparator.comparing(Delivery::getDeliveredAt).thenComparing(Delivery::getId))
-                    .peek(d -> ReflectionTestUtils.setField(d, "remainingKg", d.unallocatedKg()))
-                    .toList();
+        // The portions a sale may take from: of confirmed, not reversed deliveries, with kg left.
+        when(lotPortionRepository.findLotIdsWithSellable(anyLong())).thenAnswer(invocation -> sellable(
+                invocation.getArgument(0)).stream().map(p -> p.getLot().getId()).distinct().sorted().toList());
+        when(lotPortionRepository.findSellable(anyLong())).thenAnswer(invocation -> sellable(invocation.getArgument(0)));
+        when(lotPortionRepository.lockByIds(anyCollection())).thenAnswer(invocation -> {
+            calls.add("portions");
+            Collection<Long> ids = invocation.getArgument(0);
+            return portions.stream().filter(p -> ids.contains(p.getId())).toList();
         });
+        when(deliveryRepository.lockByIds(anyCollection())).thenAnswer(invocation -> {
+            calls.add("deliveries");
+            Collection<Long> ids = invocation.getArgument(0);
+            return deliveries.stream().filter(d -> ids.contains(d.getId())).toList();
+        });
+        when(lotPortionRepository.findByLotIdAndDeliveryId(anyLong(), anyLong())).thenAnswer(invocation -> portions
+                .stream().filter(p -> p.getLot().getId().equals(invocation.getArgument(0))
+                        && p.getDelivery().getId().equals(invocation.getArgument(1))).findFirst());
+        // What a lot still holds, from the portions in memory.
+        when(lotPortionRepository.remainingKg(anyLong())).thenAnswer(invocation -> portions.stream()
+                .filter(p -> p.getLot().getId().equals(invocation.getArgument(0)) && !p.getDelivery().isReversed())
+                .map(LotPortion::unallocatedKg).reduce(BigDecimal.ZERO, BigDecimal::add));
         when(batchRepository.gradeRemainingKgWithStatus(anyLong(), any())).thenAnswer(invocation -> deliveries.stream()
-                .filter(d -> d.getLot().getGrade().getId().equals(invocation.getArgument(0)))
+                .filter(d -> d.getGrade().getId().equals(invocation.getArgument(0)))
                 .filter(d -> !d.isReversed() && d.getConfirmationStatus() == invocation.<ConfirmationStatus>getArgument(1))
                 .map(Delivery::unallocatedKg).reduce(BigDecimal.ZERO, BigDecimal::add));
-
-        // What the lot has left, from the batches in memory.
-        when(lotService.quantitiesOf(anyList())).thenAnswer(invocation -> {
-            Map<Long, LotQuantities> quantities = new HashMap<>();
-            for (Lot lot : invocation.<List<Lot>>getArgument(0)) {
-                List<Delivery> batches = deliveries.stream()
-                        .filter(d -> d.getLot() == lot && !d.isReversed()).toList();
-                quantities.put(lot.getId(), new LotQuantities(lot.getId(), sum(batches, Delivery::getQuantityKg),
-                        sum(batches, Delivery::getLostKg), sum(batches, Delivery::getSoldKg), 0L, 0L));
-            }
-            return quantities;
-        });
 
         AtomicLong saleIds = new AtomicLong(10);
         when(saleRepository.save(any(Sale.class))).thenAnswer(invocation -> {
@@ -181,16 +184,51 @@ class SaleTestFixture {
         });
 
         service = new SaleService(saleRepository, saleOrderRepository, gradeRepository, lotRepository,
-                buyerRepository, lotService, ledgerService, batchRepository, saleAllocationRepository,
-                settingRepository, auditLogRepository);
+                buyerRepository, ledgerService, batchRepository, saleAllocationRepository, settingRepository,
+                auditLogRepository, lotPortionRepository, deliveryRepository);
     }
 
-    /** A confirmed batch of a lot, delivered at the given time. */
+    /**
+     * A confirmed batch delivered at the given time. In an older lot it is that lot's batch; in a fixed-size lot it has
+     * no lot of its own and is in the lot through its portion. Either way it gets one portion, with its own id.
+     */
     Delivery batch(Long id, Lot lot, Member member, String deliveredAt, String kg) {
+        Delivery delivery = delivery(id, lot.getGrade(), member, deliveredAt, kg);
+        if (lot.getCapacityKg() == null) {
+            delivery.setLot(lot);
+        }
+        portion(id, lot, delivery, kg);
+        return delivery;
+    }
+
+    /** A confirmed delivery that filled the end of one fixed-size lot and started the next: portions id*10 and id*10+1. */
+    Delivery splitBatch(Long id, Member member, String deliveredAt, Lot first, String firstKg, Lot second,
+                        String secondKg) {
+        Delivery delivery = delivery(id, first.getGrade(), member, deliveredAt,
+                new BigDecimal(firstKg).add(new BigDecimal(secondKg)).toPlainString());
+        portion(id * 10, first, delivery, firstKg);
+        portion(id * 10 + 1, second, delivery, secondKg);
+        return delivery;
+    }
+
+    /** A fixed-size lot of 100 kg. */
+    Lot fixedLot(Long id, String code, Grade grade, LotStatus status) {
+        Lot lot = lot(id, code, grade, status);
+        lot.setCapacityKg(new BigDecimal("100.00"));
+        lots.put(id, lot);
+        return lot;
+    }
+
+    LotPortion portionOf(Delivery delivery, Lot lot) {
+        return portions.stream().filter(p -> p.getDelivery() == delivery && p.getLot() == lot).findFirst()
+                .orElseThrow();
+    }
+
+    private Delivery delivery(Long id, Grade grade, Member member, String deliveredAt, String kg) {
         Delivery delivery = new Delivery();
         ReflectionTestUtils.setField(delivery, "id", id);
         delivery.setReceiptCode("RCT-000" + id);
-        delivery.setLot(lot);
+        delivery.setGrade(grade);
         delivery.setMember(member);
         delivery.setDeliveredAt(Instant.parse(deliveredAt));
         delivery.setQuantityKg(new BigDecimal(kg));
@@ -198,6 +236,12 @@ class SaleTestFixture {
         ReflectionTestUtils.setField(delivery, "remainingKg", new BigDecimal(kg));
         deliveries.add(delivery);
         return delivery;
+    }
+
+    private void portion(Long id, Lot lot, Delivery delivery, String kg) {
+        LotPortion portion = new LotPortion(lot, delivery, new BigDecimal(kg));
+        ReflectionTestUtils.setField(portion, "id", id);
+        portions.add(portion);
     }
 
     /** A batch whose member has not confirmed it yet. */
@@ -218,15 +262,13 @@ class SaleTestFixture {
         return ledger.stream().filter(entry -> entry.type() == LedgerEntryType.SALE_CREDIT).toList();
     }
 
-    private List<Delivery> sellable() {
-        return deliveries.stream()
-                .filter(d -> !d.isReversed() && d.getConfirmationStatus() == ConfirmationStatus.CONFIRMED
-                        && d.unallocatedKg().signum() > 0)
+    private List<LotPortion> sellable(Long gradeId) {
+        return portions.stream()
+                .filter(p -> p.getLot().getGrade().getId().equals(gradeId))
+                .filter(p -> !p.getDelivery().isReversed()
+                        && p.getDelivery().getConfirmationStatus() == ConfirmationStatus.CONFIRMED
+                        && p.unallocatedKg().signum() > 0)
                 .toList();
-    }
-
-    private static BigDecimal sum(List<Delivery> batches, java.util.function.Function<Delivery, BigDecimal> kg) {
-        return batches.stream().map(kg).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private static Grade grade(Long id, String name) {
@@ -254,7 +296,4 @@ class SaleTestFixture {
         return member;
     }
 
-    private static <T> List<T> anyList() {
-        return org.mockito.ArgumentMatchers.anyList();
-    }
 }

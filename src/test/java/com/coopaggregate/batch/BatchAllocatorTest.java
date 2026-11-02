@@ -22,6 +22,7 @@ import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.ledger.LedgerEntry;
 import com.coopaggregate.loss.Loss;
 import com.coopaggregate.lot.Lot;
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.sale.Sale;
 
 /**
@@ -70,7 +71,7 @@ class BatchAllocatorTest {
             return null;
         }).when(lossAllocationRepository).deleteAll(any());
 
-        allocator = new BatchAllocator(batchRepository, lossAllocationRepository);
+        allocator = new BatchAllocator(batchRepository, lossAllocationRepository, mock(LotPortionRepository.class));
     }
 
     @Test
@@ -288,8 +289,8 @@ class BatchAllocatorTest {
                 .sorted(Comparator.comparing(Delivery::getDeliveredAt).thenComparing(Delivery::getId))
                 .toList();
         SalePlan plan = SalePlanner.plan(sellable.stream()
-                .map(d -> new SellableBatch(d.getId(), null, lot.getId(), lot.getLotCode(), null, null, null,
-                        d.getDeliveredAt(), d.unallocatedKg()))
+                .map(d -> new SellableBatch(d.getId(), d.getId(), null, lot.getId(), lot.getLotCode(), false, null,
+                        null, null, d.getDeliveredAt(), d.unallocatedKg()))
                 .toList(), new BigDecimal(kg), 300, 5, List.of());
         if (!plan.enough()) {
             throw new IllegalStateException("not enough kg");
