@@ -91,7 +91,7 @@ cd coopaggregate-backend
 | `AT_SENDER_ID` | No | Sender name shown on members' phones, if your account has one |
 | `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
 | `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
-| `MOSIP_ENABLED` | No | `true` switches member identity verification on (default `false`: members are registered without it, see Identity verification) |
+| `MOSIP_ENABLED` | To register members | `true` switches member identity verification on. Registering a member needs it, so with the default `false` no member can be registered (see Identity verification) |
 | `MOSIP_BASE_URL` | With `MOSIP_ENABLED` | The eSignet issuer, for example `http://localhost:8080`. Plain `http` only for localhost. The authorize, token, userinfo and JWKS URLs follow from it |
 | `MOSIP_CLIENT_ID` | With `MOSIP_ENABLED` | The client id registered with eSignet |
 | `MOSIP_REDIRECT_URI` | With `MOSIP_ENABLED` | The frontend page eSignet sends the member back to, exactly as registered, for example `http://localhost:5173/identity/callback` |
@@ -209,7 +209,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
 | POST | `/api/auth/change-password` | JWT | Body `{"currentPassword", "newPassword"}`. Returns `204` (see Authentication) |
-| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, cooperativeName, cooperativePhone, requireIdentityVerification, identityVerificationAvailable}` |
+| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, cooperativeName, cooperativePhone}` |
 | PUT | `/api/settings` | JWT | Saves the settings (see Settings and change history) |
 | GET | `/api/settings/history?page=0&size=20` | JWT | Change history, newest first (max 100 per page) |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
@@ -218,8 +218,8 @@ ERD: see `docs/erd.png`.
 | GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional. Without `nationalId` |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member, including `nationalId` |
-| POST | `/api/members` | JWT | Registers a member and returns it with `201`. With an identity verification: send `verificationId` and `birthDate` (see Identity verification) |
-| GET | `/api/members/verify/status` | JWT | `{available, required}`: verification is switched on and set up, and the cooperative requires it |
+| POST | `/api/members` | JWT | Registers a member and returns it with `201`. Needs a `verificationId` and a `birthDate` (see Identity verification); `503` when verification is not configured |
+| GET | `/api/members/verify/status` | JWT | `{available, required}`: both are `true` when `MOSIP_ENABLED=true`, both `false` otherwise (registering a member needs verification) |
 | POST | `/api/members/verify/start` | JWT | Starts a verification: `{provider, authorizationUrl, state, expiresAt}`. `503` if not available |
 | POST | `/api/members/verify/callback` | JWT | Body `{code, state}` from eSignet's redirect. Returns `{verificationId, verified, method, useBefore}` |
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
@@ -296,9 +296,6 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
   (`07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`), stored as `+2507XXXXXXXX`; empty clears it. `minOrderKg` (default 100) must be more than 0.
 - `cooperativeName` (default "Koperative Intagamburuzwa") is shown on the public pages. Optional
   in the request; left out or empty keeps the current name.
-- `requireIdentityVerification` (default `false`) makes a verified identity necessary to register a member.
-  Optional in the request; left out keeps the current value. It cannot be switched on while verification is
-  not available (`400`). `identityVerificationAvailable` in the response says whether it is.
 - `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
   duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
 - Every change to the settings or a grade, every password change, every new code sent for
@@ -465,8 +462,8 @@ Request body for `POST` and `PUT`:
 | `address` | Optional, at most 255 characters |
 | `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
-| `verificationId` | Optional. The `verificationId` from `POST /api/members/verify/callback`. Only used on create |
-| `birthDate` | Required with `verificationId`, not in the future. Only used to check the person who verified; never saved, never returned |
+| `verificationId` | Required on create: the `verificationId` from `POST /api/members/verify/callback`. Ignored on update |
+| `birthDate` | Required on create, not in the future. Only used to check the person who verified; never saved, never returned. Ignored on update |
 
 - The member code is generated on create as `M-` and 4 digits (`M-0001`, `M-0002`, ...):
   the highest existing number plus one. It never changes.
@@ -487,8 +484,8 @@ Request body for `POST` and `PUT`:
 
 ### Identity verification
 
-A new member can be checked against MOSIP eSignet before they are registered. It is off by default
-(`MOSIP_ENABLED=false`) and the rest of the system does not need it.
+Every new member is checked against MOSIP eSignet before they are registered; there is no setting to skip it.
+Existing members, updating members and every other feature do not depend on it.
 
 1. `POST /api/members/verify/start` returns `authorizationUrl`: eSignet's login page, with a one-use `state`
    (valid 10 minutes), a `nonce` and PKCE (S256). The frontend keeps the form values, sends the member there,
@@ -500,7 +497,7 @@ A new member can be checked against MOSIP eSignet before they are registered. It
    signed only. It returns `{verificationId, verified: true, method: "PASSWORD", useBefore}` (30 minutes).
    `400` unknown or expired state, `409` state already used or the person is already a member, `502` eSignet
    failed or its answer could not be trusted, `503` not available.
-3. `POST /api/members` with `verificationId` and `birthDate`. The name, birth date and phone typed for the member
+3. `POST /api/members` with `verificationId` and `birthDate` (both always required). The name, birth date and phone typed for the member
    must **all** match the person who verified. After normalising (no case, accents, punctuation or word order for
    the name; `yyyy/MM/dd` or `yyyy-MM-dd` for the date; `+2507XXXXXXXX` for the phone) they are compared exactly.
    On a mismatch the member is not created, the `400` message names the fields that differ (never their values)
@@ -514,9 +511,11 @@ gets `IDENTITY_VERIFIED`, `IDENTITY_MISMATCH` (field names only), `IDENTITY_DUPL
 `IDENTITY_VERIFICATION_FAILED` without any personal data. The email claim is requested but not used: the
 member form has no email field. Codes, states, tokens, assertions, claims and the key are never logged.
 
-If `requireIdentityVerification` is on and `MOSIP_ENABLED` is `false`, registration is refused with `503` and a
-clear message until the requirement is switched off in the settings. With `MOSIP_ENABLED=true` the app does not
-start if a setting is missing or the key file cannot be used (the message names settings only).
+With `MOSIP_ENABLED=false` (the default) the app starts and works as before, but `POST /api/members` is refused
+with `503` "Member registration needs identity verification, which is not configured." and the status endpoint
+says `{available: false, required: false}`. With `MOSIP_ENABLED=true` the app does not start if a setting is
+missing or the key file cannot be used (the message names settings only). The old `require_identity_verification`
+column of the `setting` table stays in the database, unused.
 
 The automatic tests use a fake eSignet. Only the real one can confirm the claim names and formats it returns
 (`name`, `birthdate`, `phone_number`), that it accepts the client assertion (`aud`, `exp`, PS256), the exact
@@ -931,7 +930,7 @@ Environment variables to set in Render:
 | `SMS_PROVIDER` | `africastalking` to send real SMS, otherwise leave it unset |
 | `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
 | `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
-| `MOSIP_*` | Only to use identity verification with a real eSignet over `https`: `MOSIP_ENABLED`, `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY_PATH` (a secret file mounted on the service) and `MOSIP_KEY_ID` |
+| `MOSIP_*` | To register members, with a real eSignet over `https`: `MOSIP_ENABLED`, `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY_PATH` (a secret file mounted on the service) and `MOSIP_KEY_ID` |
 
 Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app
 refuses to start if it is `true` with `SMS_PROVIDER=africastalking`.
