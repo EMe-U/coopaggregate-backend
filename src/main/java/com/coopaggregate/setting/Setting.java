@@ -34,9 +34,6 @@ public class Setting {
 
     private BigDecimal minOrderKg = new BigDecimal("100");
 
-    // When true, a member can only be registered with a completed identity verification.
-    private boolean requireIdentityVerification;
-
     public Long getId() {
         return id;
     }
@@ -82,14 +79,6 @@ public class Setting {
 
     public void setLocation(String location) {
         this.location = location;
-    }
-
-    public boolean isRequireIdentityVerification() {
-        return requireIdentityVerification;
-    }
-
-    public void setRequireIdentityVerification(boolean requireIdentityVerification) {
-        this.requireIdentityVerification = requireIdentityVerification;
     }
 
     public BigDecimal getMinOrderKg() {
