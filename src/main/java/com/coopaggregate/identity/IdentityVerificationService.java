@@ -100,7 +100,8 @@ public class IdentityVerificationService {
         try {
             claims = client().fetchClaims(code, codeVerifier, verification.getNonce());
         } catch (IdentityProviderException e) {
-            log.warn("Identity verification {} failed: {}", verification.getId(), e.getMessage());
+            log.warn("Identity verification {} failed: {}{}", verification.getId(), e.getMessage(),
+                    e.getDetail() == null ? "" : " [" + e.getDetail() + "]");
             record(AuditAction.IDENTITY_VERIFICATION_FAILED, manager, "Provider " + PROVIDER
                     + (e.isNotConfigured() ? ": not configured" : ": provider error"));
             throw e;

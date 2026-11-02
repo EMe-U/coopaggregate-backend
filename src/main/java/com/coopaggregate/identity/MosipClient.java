@@ -4,6 +4,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2Error;
@@ -33,6 +35,8 @@ import org.springframework.web.util.UriComponentsBuilder;
 public class MosipClient {
 
     static final Duration CLOCK_SKEW = Duration.ofSeconds(60);
+    private static final Logger log = LoggerFactory.getLogger(MosipClient.class);
+    private static final String UNTRUSTED = "The identity provider's answer could not be verified.";
     private static final String ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
     private final MosipProperties properties;
@@ -48,6 +52,8 @@ public class MosipClient {
         this.signingKey = signingKey;
         this.restClient = restClient;
         this.clock = clock;
+        log.info("Identity verification is on. Token: {}, userinfo: {}, JWKS: {}", Diagnostics.safeUrl(properties.tokenUrl()),
+                Diagnostics.safeUrl(properties.userinfoUrl()), Diagnostics.safeUrl(properties.jwksUrl()));
         this.decoder = NimbusJwtDecoder.withJwkSetUri(properties.jwksUrl())
                 .jwsAlgorithm(SignatureAlgorithm.PS256)
                 .restOperations(jwksOperations)
@@ -86,11 +92,11 @@ public class MosipClient {
         if (idToken == null || accessToken == null) {
             throw untrusted();
         }
-        Jwt id = verify(idToken);
+        Jwt id = verify(idToken, "id_token");
         if (nonce == null || !nonce.equals(id.getClaimAsString("nonce"))) {
             throw untrusted();
         }
-        Jwt userinfo = verify(userinfo(accessToken));
+        Jwt userinfo = verify(userinfo(accessToken), "userinfo");
         if (!id.getSubject().equals(userinfo.getSubject())) {
             throw untrusted();
         }
@@ -120,7 +126,7 @@ public class MosipClient {
             }
             return body;
         } catch (RestClientException e) {
-            throw failure(e, "token");
+            throw failure(e, "token", "POST", properties.tokenUrl());
         }
     }
 
@@ -138,31 +144,33 @@ public class MosipClient {
             }
             return body.trim();
         } catch (RestClientException e) {
-            throw failure(e, "userinfo");
+            throw failure(e, "userinfo", "GET", properties.userinfoUrl());
         }
     }
 
-    private Jwt verify(String token) {
+    private Jwt verify(String token, String what) {
         try {
             return decoder.decode(token);
         } catch (JwtException e) {
-            throw untrusted();
+            throw IdentityProviderException.failed(UNTRUSTED, Diagnostics.token(what, properties.jwksUrl(), e));
         }
     }
 
     // Not logged and not shown: the answer of the provider can hold the code or personal data.
-    private static IdentityProviderException failure(RestClientException e, String call) {
+    // The message goes to the client and stays the same; the detail is only for the log.
+    private static IdentityProviderException failure(RestClientException e, String call, String method, String url) {
+        String detail = Diagnostics.call(call + " request", method, url, e);
         if (e instanceof RestClientResponseException) {
-            return IdentityProviderException.failed("The identity provider refused the " + call + " request.");
+            return IdentityProviderException.failed("The identity provider refused the " + call + " request.", detail);
         }
         if (e instanceof ResourceAccessException) {
-            return IdentityProviderException.failed("The identity provider could not be reached.");
+            return IdentityProviderException.failed("The identity provider could not be reached.", detail);
         }
-        return IdentityProviderException.failed("The identity provider's answer could not be read.");
+        return IdentityProviderException.failed("The identity provider's answer could not be read.", detail);
     }
 
     private static IdentityProviderException untrusted() {
-        return IdentityProviderException.failed("The identity provider's answer could not be verified.");
+        return IdentityProviderException.failed(UNTRUSTED);
     }
 
     private OAuth2TokenValidator<Jwt> audienceIsOurClient() {
