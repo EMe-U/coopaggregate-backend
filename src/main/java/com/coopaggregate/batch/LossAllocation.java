@@ -7,6 +7,7 @@ import org.hibernate.annotations.CreationTimestamp;
 
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.loss.Loss;
+import com.coopaggregate.lot.LotPortion;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -29,6 +30,11 @@ public class LossAllocation {
 
     @ManyToOne(fetch = FetchType.LAZY)
     private Delivery delivery;
+
+    // The portion of the delivery the kg came from. Null for losses recorded before fixed-size lots: their delivery
+    // has one portion, in its own lot.
+    @ManyToOne(fetch = FetchType.LAZY)
+    private LotPortion lotPortion;
 
     private BigDecimal quantityKg;
 
@@ -55,6 +61,14 @@ public class LossAllocation {
 
     public Delivery getDelivery() {
         return delivery;
+    }
+
+    public LotPortion getLotPortion() {
+        return lotPortion;
+    }
+
+    public void setLotPortion(LotPortion lotPortion) {
+        this.lotPortion = lotPortion;
     }
 
     public BigDecimal getQuantityKg() {

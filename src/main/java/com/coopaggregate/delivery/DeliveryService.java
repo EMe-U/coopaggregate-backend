@@ -107,6 +107,7 @@ public class DeliveryService {
         Delivery delivery = new Delivery();
         delivery.setClientUuid(request.clientUuid());
         delivery.setMember(member);
+        delivery.setGrade(grade);
         // The lot is chosen when the delivery reaches the server, not from deliveredAt: an offline delivery
         // goes to the lot that is open for its grade at sync time, or opens a new one if that lot was closed
         // in the meantime. A closed lot may already be on sale, so its kilograms must not change.
@@ -184,6 +185,7 @@ public class DeliveryService {
         corrected.setClientUuid(UUID.randomUUID());
         corrected.setCorrects(original);
         corrected.setMember(member);
+        corrected.setGrade(grade);
         corrected.setLot(lotService.findOrOpenLot(grade));
         corrected.setDeliveredAt(original.getDeliveredAt());
         corrected.setQuantityKg(request.quantityKg());
