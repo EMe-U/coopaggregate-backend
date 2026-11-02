@@ -32,11 +32,11 @@ public record MemberRequest(
         @Pattern(regexp = "^(rw|en)$", message = "must be rw or en")
         String preferredLanguage,
 
-        // From POST /api/members/verify/callback. Only used when registering; ignored when updating.
+        // From POST /api/members/verify/callback. Required when registering; ignored when updating.
         Long verificationId,
 
-        // Only for the identity check: required with verificationId, compared with the person who verified, and never
-        // saved. Ignored without a verificationId and when updating.
+        // Only for the identity check: required when registering, compared with the person who verified, and never
+        // saved. Ignored when updating.
         @PastOrPresent(message = "cannot be in the future")
         LocalDate birthDate) {
 

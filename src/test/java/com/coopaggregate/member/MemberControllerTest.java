@@ -215,10 +215,9 @@ class MemberControllerTest {
     }
 
     @Test
-    void registrationThatNeedsAnUnavailableVerificationIs503WithAClearMessage() throws Exception {
+    void registrationWithoutIdentityVerificationConfiguredIs503WithAClearMessage() throws Exception {
         when(memberService.create(any(MemberRequest.class))).thenThrow(IdentityProviderException.notConfigured(
-                "Identity verification is required but not available. Set up the identity provider, or switch the "
-                        + "requirement off in the settings."));
+                "Member registration needs identity verification, which is not configured."));
 
         mockMvc.perform(post("/api/members")
                         .header(HttpHeaders.AUTHORIZATION, bearerToken)
@@ -227,8 +226,8 @@ class MemberControllerTest {
                                 {"fullName": "Uwimana Claudine", "phone": "0788123456"}
                                 """))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.message").value("Identity verification is required but not available. Set up "
-                        + "the identity provider, or switch the requirement off in the settings."));
+                .andExpect(jsonPath("$.message")
+                        .value("Member registration needs identity verification, which is not configured."));
     }
 
     @Test

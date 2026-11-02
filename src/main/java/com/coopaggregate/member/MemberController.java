@@ -59,11 +59,11 @@ public class MemberController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Register a member. The member code (M-0001, ...) is generated. After an identity "
-            + "verification send its verificationId and the member's birthDate (used for the check only, never saved); "
-            + "they are required when the requireIdentityVerification setting is on. 400 if the name, birth date or "
-            + "phone do not match the person who verified (three tries), 409 if the person is already a member, 503 "
-            + "if verification is required but not available")
+    @Operation(summary = "Register a member. The member code (M-0001, ...) is generated. Every member needs an "
+            + "identity verification: send its verificationId and the member's birthDate (used for the check only, "
+            + "never saved). 400 if either is missing or the name, birth date or phone do not match the person who "
+            + "verified (three tries), 409 if the person is already a member, 503 if identity verification is not "
+            + "configured (no member can be registered then)")
     public MemberResponse create(@Valid @RequestBody MemberRequest request) {
         return memberService.create(request);
     }

@@ -58,6 +58,7 @@ class MemberServiceTest {
         repository = mock(MemberRepository.class);
         identityAvailability = mock(IdentityAvailability.class);
         identityVerificationService = mock(IdentityVerificationService.class);
+        when(identityAvailability.isAvailable()).thenReturn(true);
         service = new MemberService(repository, identityAvailability, identityVerificationService);
         when(repository.save(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(repository.highestMemberNumber()).thenReturn(7);
@@ -68,7 +69,8 @@ class MemberServiceTest {
     @Test
     void createGeneratesMemberCodeAndSavesDetails() {
         MemberResponse response = service.create(new MemberRequest(
-                "  Uwimana Claudine ", "0788123456", "1199880012345678", "Busogo", LocalDate.of(2024, 3, 1), "en", null, null));
+                "  Uwimana Claudine ", "0788123456", "1199880012345678", "Busogo", LocalDate.of(2024, 3, 1), "en", 9L,
+                LocalDate.of(1990, 5, 17)));
 
         assertEquals("M-0008", response.memberCode());
         assertEquals("Uwimana Claudine", response.fullName());
@@ -97,7 +99,8 @@ class MemberServiceTest {
 
     @Test
     void createUsesDefaultsForOptionalFields() {
-        MemberResponse response = service.create(new MemberRequest("Habimana Eric", "0722123456", " ", "", null, null, null, null));
+        MemberResponse response = service.create(new MemberRequest("Habimana Eric", "0722123456", " ", "", null, null, 9L,
+                LocalDate.of(1990, 5, 17)));
 
         assertNull(response.nationalId());
         assertNull(response.address());
@@ -233,37 +236,34 @@ class MemberServiceTest {
     // --- Identity verification
 
     @Test
-    void withoutARequirementAMemberIsRegisteredUnverified() {
-        MemberResponse response = service.create(registration("0722123456", null));
+    void aMemberCannotBeRegisteredWithoutAVerification() {
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> service.create(registration("0722123456", null, LocalDate.of(1990, 5, 17))));
 
-        assertFalse(response.verified());
+        assertEquals("verificationId is required. Verify the person's identity first.", e.getMessage());
+        verify(repository, never()).save(any());
         verifyNoInteractions(identityVerificationService);
     }
 
     @Test
-    void whenVerificationIsRequiredAMemberCannotBeRegisteredWithout() {
-        when(identityAvailability.isRequired()).thenReturn(true);
-        when(identityAvailability.isAvailable()).thenReturn(true);
-
-        BadRequestException e = assertThrows(BadRequestException.class,
-                () -> service.create(registration("0722123456", null)));
-
-        assertTrue(e.getMessage().startsWith("Identity verification is required. Verify the person first"));
-        verify(repository, never()).save(any());
-    }
-
-    @Test
-    void whenVerificationIsRequiredButNotAvailableRegistrationIsBlockedWithAClearMessage() {
-        when(identityAvailability.isRequired()).thenReturn(true);
+    void whenIdentityVerificationIsNotConfiguredNoMemberCanBeRegistered() {
         when(identityAvailability.isAvailable()).thenReturn(false);
 
         IdentityProviderException e = assertThrows(IdentityProviderException.class,
-                () -> service.create(registration("0722123456", null)));
+                () -> service.create(registration("0722123456", 9L, LocalDate.of(1990, 5, 17))));
 
         assertTrue(e.isNotConfigured());
-        assertEquals("Identity verification is required but not available. Set up the identity provider, or switch "
-                + "the requirement off in the settings.", e.getMessage());
+        assertEquals("Member registration needs identity verification, which is not configured.", e.getMessage());
         verify(repository, never()).save(any());
+        verifyNoInteractions(identityVerificationService);
+    }
+
+    @Test
+    void whenIdentityVerificationIsNotConfiguredTheMessageComesBeforeAnyOtherCheck() {
+        when(identityAvailability.isAvailable()).thenReturn(false);
+
+        assertThrows(IdentityProviderException.class,
+                () -> service.create(registration("0722123456", null, null)));
     }
 
     @Test
@@ -271,7 +271,7 @@ class MemberServiceTest {
         BadRequestException e = assertThrows(BadRequestException.class,
                 () -> service.create(registration("0722123456", 9L, null)));
 
-        assertEquals("birthDate is required when registering with an identity verification.", e.getMessage());
+        assertEquals("birthDate is required.", e.getMessage());
         verify(repository, never()).save(any());
         verifyNoInteractions(identityVerificationService);
     }
@@ -345,10 +345,6 @@ class MemberServiceTest {
         }).when(identityVerificationService).attach(eq(9L), any(Member.class));
     }
 
-    private static MemberRequest registration(String phone, Long verificationId) {
-        return registration(phone, verificationId, null);
-    }
-
     private static MemberRequest registration(String phone, Long verificationId, LocalDate birthDate) {
         return new MemberRequest("Uwimana Claudine", phone, null, null, null, null, verificationId, birthDate);
     }
@@ -356,7 +352,7 @@ class MemberServiceTest {
     @Test
     void memberCanBeRegisteredWithoutANationalId() {
         MemberResponse response = service.create(new MemberRequest("Habimana Eric", "0722123456", null, null,
-                null, null, null, null));
+                null, null, 9L, LocalDate.of(1990, 5, 17)));
 
         assertNull(response.nationalId());
         verify(repository, never()).findByNationalId(any());
@@ -402,7 +398,7 @@ class MemberServiceTest {
     }
 
     private static MemberRequest request(String phone, String nationalId) {
-        return new MemberRequest("Uwimana Claudine", phone, nationalId, null, null, null, null, null);
+        return new MemberRequest("Uwimana Claudine", phone, nationalId, null, null, null, 9L, LocalDate.of(1990, 5, 17));
     }
 
     private static Member existingMember(Long id, String memberCode) {

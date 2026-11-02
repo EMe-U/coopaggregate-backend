@@ -71,16 +71,20 @@ public class MemberService {
 
     @Transactional
     public MemberResponse create(MemberRequest request) {
-        if (request.verificationId() == null) {
-            checkVerificationIsNotRequired();
-        } else {
-            if (request.birthDate() == null) {
-                throw new BadRequestException("birthDate is required when registering with an identity verification.");
-            }
-            // Before anything is saved. A mismatch is counted and refuses the registration.
-            identityVerificationService.checkDetails(request.verificationId(), request.fullName(),
-                    request.birthDate(), request.phone());
+        // Every member is registered with a verified identity. Without the identity provider nobody can be registered.
+        if (!identityAvailability.isAvailable()) {
+            throw IdentityProviderException.notConfigured(
+                    "Member registration needs identity verification, which is not configured.");
         }
+        if (request.verificationId() == null) {
+            throw new BadRequestException("verificationId is required. Verify the person's identity first.");
+        }
+        if (request.birthDate() == null) {
+            throw new BadRequestException("birthDate is required.");
+        }
+        // Before anything is saved. A mismatch is counted and refuses the registration.
+        identityVerificationService.checkDetails(request.verificationId(), request.fullName(), request.birthDate(),
+                request.phone());
         Member member = new Member();
         applyDetails(member, request);
         member.setJoinDate(request.joinDate() != null ? request.joinDate() : KigaliTime.today());
@@ -88,24 +92,8 @@ public class MemberService {
         // the same code, the unique member_code would reject the second one with 409.
         member.setMemberCode(String.format("M-%04d", memberRepository.highestMemberNumber() + 1));
         Member saved = memberRepository.save(member);
-        if (request.verificationId() != null) {
-            identityVerificationService.attach(request.verificationId(), saved);
-        }
+        identityVerificationService.attach(request.verificationId(), saved);
         return MemberResponse.from(saved);
-    }
-
-    // When the cooperative requires verification, a member cannot be registered without it, and that includes the
-    // time the identity provider is not available: the manager switches the requirement off in the settings.
-    private void checkVerificationIsNotRequired() {
-        if (!identityAvailability.isRequired()) {
-            return;
-        }
-        if (!identityAvailability.isAvailable()) {
-            throw IdentityProviderException.notConfigured("Identity verification is required but not available. "
-                    + "Set up the identity provider, or switch the requirement off in the settings.");
-        }
-        throw new BadRequestException("Identity verification is required. Verify the person first and send the "
-                + "verificationId and the birthDate with the registration.");
     }
 
     @Transactional
