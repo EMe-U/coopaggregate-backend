@@ -43,8 +43,8 @@ import com.coopaggregate.member.MemberRepository;
 @ExtendWith(OutputCaptureExtension.class)
 class IdentityVerificationServiceTest {
 
-    private static final MosipClaims CLAIMS = new MosipClaims("pairwise-sub", "Uwimana Claudine", "1990/05/17",
-            "+250788123456", "claudine@example.com");
+    private static final MosipClaims CLAIMS = new MosipClaims("pairwise-sub", "Uwimana Claudine",
+            "+250788123456");
 
     private final Map<String, IdentityVerification> stored = new HashMap<>();
     private IdentityVerificationRepository verificationRepository;
@@ -162,7 +162,7 @@ class IdentityVerificationServiceTest {
     @Test
     void theNameIsTrimmedAndThePhoneNormalised() {
         when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(
-                new MosipClaims("pairwise-sub", "  UWIMANA   Claudine \n", null, " 0788 123 456 ", null));
+                new MosipClaims("pairwise-sub", "  UWIMANA   Claudine \n", " 0788 123 456 "));
         String state = service.start(manager).state();
 
         VerifyResultResponse result = service.complete("the-code", state, manager);
@@ -289,7 +289,7 @@ class IdentityVerificationServiceTest {
     @Test
     void aProviderThatLeavesOutThePhoneVerifiesNobody(CapturedOutput output) {
         when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(
-                new MosipClaims("pairwise-sub", "Uwimana Claudine", "1990/05/17", null, null));
+                new MosipClaims("pairwise-sub", "Uwimana Claudine", null));
         String state = service.start(manager).state();
 
         BadRequestException e = assertThrows(BadRequestException.class,
@@ -311,7 +311,7 @@ class IdentityVerificationServiceTest {
     @org.junit.jupiter.params.provider.ValueSource(strings = {"   ", "\t\n"})
     void aMissingOrBlankNameVerifiesNobody(String name) {
         when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(
-                new MosipClaims("pairwise-sub", name, null, "+250788123456", null));
+                new MosipClaims("pairwise-sub", name, "+250788123456"));
         String state = service.start(manager).state();
 
         assertThrows(BadRequestException.class, () -> service.complete("the-code", state, manager));
@@ -323,7 +323,7 @@ class IdentityVerificationServiceTest {
     @Test
     void bothMissingAreNamedInTheHistory() {
         when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(
-                new MosipClaims("pairwise-sub", null, null, " ", null));
+                new MosipClaims("pairwise-sub", null, " "));
         String state = service.start(manager).state();
 
         assertThrows(BadRequestException.class, () -> service.complete("the-code", state, manager));
@@ -335,7 +335,7 @@ class IdentityVerificationServiceTest {
     @org.junit.jupiter.params.provider.ValueSource(strings = {"0711111111", "+256772123456", "788123456", "07881234567"})
     void aPhoneThatIsNotARwandanMobileNumberVerifiesNobody(String phone, CapturedOutput output) {
         when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(
-                new MosipClaims("pairwise-sub", "Uwimana Claudine", null, phone, null));
+                new MosipClaims("pairwise-sub", "Uwimana Claudine", phone));
         String state = service.start(manager).state();
 
         BadRequestException e = assertThrows(BadRequestException.class,
@@ -351,7 +351,7 @@ class IdentityVerificationServiceTest {
     @Test
     void aNameLongerThan150CharactersVerifiesNobody() {
         when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(
-                new MosipClaims("pairwise-sub", "A".repeat(151), null, "+250788123456", null));
+                new MosipClaims("pairwise-sub", "A".repeat(151), "+250788123456"));
         String state = service.start(manager).state();
 
         BadRequestException e = assertThrows(BadRequestException.class,
@@ -364,7 +364,7 @@ class IdentityVerificationServiceTest {
     @Test
     void aNameOfExactly150CharactersIsKept() {
         when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(
-                new MosipClaims("pairwise-sub", "A".repeat(150), null, "+250788123456", null));
+                new MosipClaims("pairwise-sub", "A".repeat(150), "+250788123456"));
         String state = service.start(manager).state();
 
         assertEquals(150, service.complete("the-code", state, manager).fullName().length());

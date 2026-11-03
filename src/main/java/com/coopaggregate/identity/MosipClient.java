@@ -38,6 +38,10 @@ public class MosipClient {
     private static final Logger log = LoggerFactory.getLogger(MosipClient.class);
     private static final String UNTRUSTED = "The identity provider's answer could not be verified.";
     private static final String ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+    // The OIDC claims request: only the name and the phone, both essential, so eSignet shows them as required on its
+    // consent screen. A member who does not allow them can only cancel.
+    static final String CLAIMS_REQUEST =
+            "{\"userinfo\":{\"name\":{\"essential\":true},\"phone_number\":{\"essential\":true}}}";
 
     private final MosipProperties properties;
     private final MosipSigningKey signingKey;
@@ -66,7 +70,10 @@ public class MosipClient {
                 hasExpiryAndSubject()));
     }
 
-    /** The URL the member is sent to. The challenge is the S256 hash of the verifier kept for the callback. */
+    /**
+     * The URL the member is sent to. The challenge is the S256 hash of the verifier kept for the callback; the claims
+     * parameter asks for the name and phone only.
+     */
     public String authorizationUrl(String state, String nonce, String codeChallenge) {
         return UriComponentsBuilder.fromUriString(properties.authorizationUrl())
                 .queryParam("response_type", "code")
@@ -78,7 +85,8 @@ public class MosipClient {
                 .queryParam("code_challenge", codeChallenge)
                 .queryParam("code_challenge_method", "S256")
                 .queryParam("acr_values", properties.acrValues())
-                .encode().build().toUriString();
+                .queryParam("claims", "{claims}")
+                .encode().buildAndExpand(Map.of("claims", CLAIMS_REQUEST)).toUriString();
     }
 
     /**
@@ -100,8 +108,7 @@ public class MosipClient {
         if (!id.getSubject().equals(userinfo.getSubject())) {
             throw untrusted();
         }
-        return new MosipClaims(userinfo.getSubject(), claim(userinfo, "name"), claim(userinfo, "birthdate"),
-                claim(userinfo, "phone_number"), claim(userinfo, "email"));
+        return new MosipClaims(userinfo.getSubject(), claim(userinfo, "name"), claim(userinfo, "phone_number"));
     }
 
     private Map<String, Object> exchangeCode(String code, String codeVerifier) {
@@ -189,7 +196,8 @@ public class MosipClient {
         return value instanceof String s && !s.isBlank() ? s : null;
     }
 
-    // A claim may come plain ("name") or tagged with a language ("name#en"); the plain one wins.
+    // eSignet picks the language and sends a plain claim ("name"). A claim tagged with a language ("name#eng") is
+    // only used when the plain one is missing; with several, the first language code in alphabetical order wins.
     private static String claim(Jwt jwt, String name) {
         String plain = text(jwt.getClaims().get(name));
         if (plain != null) {

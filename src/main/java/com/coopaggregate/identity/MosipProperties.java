@@ -26,7 +26,10 @@ public record MosipProperties(
         String userinfoEndpoint,
         String jwksUri) {
 
-    static final String DEFAULT_SCOPE = "openid profile email phone";
+    // Only openid: the name and phone are asked for with the claims parameter (see MosipClient), so no scope brings
+    // in details the cooperative does not use.
+    static final String DEFAULT_SCOPE = "openid";
+    private static final List<String> NEEDED_SCOPES = List.of("openid", "phone");
     static final String DEFAULT_ACR = "mosip:idp:acr:password";
 
     public MosipProperties {
@@ -54,6 +57,13 @@ public record MosipProperties(
             missing.add("MOSIP_KEY_ID");
         }
         return missing;
+    }
+
+    /** Scopes in MOSIP_SCOPE beyond openid (and phone), which would bring details that are never used. */
+    public List<String> extraScopes() {
+        return java.util.Arrays.stream(scope.split("\\s+"))
+                .filter(name -> !name.isEmpty() && !NEEDED_SCOPES.contains(name))
+                .toList();
     }
 
     /** Settings that are present but unsafe: plain http is only for a local eSignet. Names only. */

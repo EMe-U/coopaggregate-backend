@@ -26,6 +26,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -106,12 +107,33 @@ class MosipClientTest {
         assertEquals("code", query.get("response_type"));
         assertEquals("coopaggregate", query.get("client_id"));
         assertEquals("http://localhost:5173/identity/callback", query.get("redirect_uri"));
-        assertEquals("openid profile email phone", query.get("scope"));
+        assertEquals("openid", query.get("scope"));
         assertEquals("the-state", query.get("state"));
         assertEquals(NONCE, query.get("nonce"));
         assertEquals("the-challenge", query.get("code_challenge"));
         assertEquals("S256", query.get("code_challenge_method"));
         assertEquals("mosip:idp:acr:password", query.get("acr_values"));
+    }
+
+    @Test
+    void theAuthorizeUrlAsksForTheNameAndPhoneOnlyBothEssential() throws Exception {
+        String url = client.authorizationUrl("the-state", NONCE, "the-challenge");
+
+        String claims = query(url.substring(url.indexOf('?') + 1)).get("claims");
+        com.fasterxml.jackson.databind.JsonNode request = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(claims);
+        assertEquals(1, request.size(), "userinfo claims only");
+        com.fasterxml.jackson.databind.JsonNode userinfo = request.get("userinfo");
+        assertEquals(List.of("name", "phone_number"), iterable(userinfo.fieldNames()));
+        assertTrue(userinfo.get("name").get("essential").asBoolean());
+        assertTrue(userinfo.get("phone_number").get("essential").asBoolean());
+        assertFalse(url.contains("{") || url.contains("}") || url.contains("\""), "the JSON is URL-encoded: " + url);
+    }
+
+    private static List<String> iterable(java.util.Iterator<String> names) {
+        List<String> list = new java.util.ArrayList<>();
+        names.forEachRemaining(list::add);
+        return list;
     }
 
     // --- The whole exchange
@@ -124,9 +146,8 @@ class MosipClientTest {
 
         assertEquals("pairwise-sub", claims.subject());
         assertEquals("Uwimana Claudine", claims.name());
-        assertEquals("1990/05/17", claims.birthdate());
         assertEquals("+250788123456", claims.phoneNumber());
-        assertEquals("claudine@example.com", claims.email());
+        assertFalse(claims.toString().contains("Uwimana"));
         http.verify();
     }
 
@@ -171,22 +192,55 @@ class MosipClientTest {
     void aLanguageTaggedClaimIsUsedWhenThePlainOneIsMissing() throws Exception {
         JWTClaimsSet.Builder claims = userinfoClaims();
         claims.claim("name", null);
-        claims.claim("name#en", "Uwimana Claudine");
+        claims.claim("name#eng", "Uwimana Claudine");
         provider(idToken(idClaims()), userinfo(claims));
 
         assertEquals("Uwimana Claudine", client.fetchClaims(CODE, VERIFIER, NONCE).name());
     }
 
     @Test
+    void thePlainNameWinsOverLanguageTaggedOnes() throws Exception {
+        JWTClaimsSet.Builder claims = userinfoClaims();
+        claims.claim("name#kin", "Uwimana Klodina");
+        provider(idToken(idClaims()), userinfo(claims));
+
+        assertEquals("Uwimana Claudine", client.fetchClaims(CODE, VERIFIER, NONCE).name());
+    }
+
+    @Test
+    void withSeveralLanguagesAndNoPlainNameTheFirstLanguageCodeWins() throws Exception {
+        JWTClaimsSet.Builder claims = userinfoClaims();
+        claims.claim("name", null);
+        claims.claim("name#kin", "Uwimana Klodina");
+        claims.claim("name#eng", "Uwimana Claudine");
+        provider(idToken(idClaims()), userinfo(claims));
+
+        assertEquals("Uwimana Claudine", client.fetchClaims(CODE, VERIFIER, NONCE).name());
+    }
+
+    @Test
+    void aBirthDateInAnyFormatIsIgnored() throws Exception {
+        JWTClaimsSet.Builder claims = userinfoClaims();
+        claims.claim("birthdate", "not/a/date");
+        provider(idToken(idClaims()), userinfo(claims));
+
+        MosipClaims result = client.fetchClaims(CODE, VERIFIER, NONCE);
+
+        assertEquals("Uwimana Claudine", result.name());
+        assertEquals(List.of("name", "phoneNumber", "subject"), java.util.Arrays.stream(
+                MosipClaims.class.getRecordComponents()).map(c -> c.getName()).sorted().toList());
+    }
+
+    @Test
     void claimsThatAreMissingAreNull() throws Exception {
         JWTClaimsSet.Builder claims = userinfoClaims();
-        claims.claim("email", null);
+        claims.claim("name", null);
         claims.claim("phone_number", null);
         provider(idToken(idClaims()), userinfo(claims));
 
         MosipClaims result = client.fetchClaims(CODE, VERIFIER, NONCE);
 
-        assertNull(result.email());
+        assertNull(result.name());
         assertNull(result.phoneNumber());
     }
 
@@ -366,7 +420,7 @@ class MosipClientTest {
 
     @Test
     void theClaimsNeverPrint() {
-        assertFalse(new MosipClaims("sub", "Uwimana Claudine", "1990/05/17", "+250788123456", "c@example.com")
+        assertFalse(new MosipClaims("sub", "Uwimana Claudine", "+250788123456")
                 .toString().contains("Uwimana"));
     }
 

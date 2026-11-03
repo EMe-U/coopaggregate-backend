@@ -26,6 +26,7 @@ import org.springframework.web.client.RestClient;
 
 import com.nimbusds.jose.jwk.RSAKey;
 
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class MosipSettingsTest {
 
     private static KeyPair keyPair;
@@ -63,8 +64,18 @@ class MosipSettingsTest {
     void scopeAndAcrHaveTheDefaultsOfTheCooperative() {
         MosipProperties properties = properties("http://localhost:8080", "the-key.pem");
 
-        assertEquals("openid profile email phone", properties.scope());
+        assertEquals("openid", properties.scope());
         assertEquals("mosip:idp:acr:password", properties.acrValues());
+        assertEquals(List.of(), properties.extraScopes());
+    }
+
+    @Test
+    void scopesBeyondOpenidAndPhoneAreNamed() {
+        MosipProperties properties = new MosipProperties(true, "http://localhost:8080", "coopaggregate",
+                "http://localhost:5173/identity/callback", "the-key.pem", "kid", "openid  profile email phone", null,
+                null, null, null, null, null);
+
+        assertEquals(List.of("profile", "email"), properties.extraScopes());
     }
 
     @Test
@@ -245,6 +256,32 @@ class MosipSettingsTest {
             assertEquals("coopaggregate-key", context.getBean(MosipSigningKey.class).keyId());
             assertThat(context).hasSingleBean(MosipClient.class);
         });
+    }
+
+    @Test
+    void extraScopesAreNamedAtStartupButDoNotStopTheApp(
+            org.springframework.boot.test.system.CapturedOutput output) throws IOException {
+        Path file = directory.resolve("key.pem");
+        Files.writeString(file, pem(keyPair.getPrivate().getEncoded()));
+
+        runner.withPropertyValues(allSettings(file.toString()))
+                .withPropertyValues("app.identity.mosip.scope=openid profile email").run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertTrue(output.getAll().contains("MOSIP_SCOPE asks eSignet for more than the name and phone "
+                            + "(profile, email); they are never used. Set MOSIP_SCOPE=openid or leave it out."));
+                });
+    }
+
+    @Test
+    void theDefaultScopeLogsNoWarning(org.springframework.boot.test.system.CapturedOutput output) throws IOException {
+        Path file = directory.resolve("key.pem");
+        Files.writeString(file, pem(keyPair.getPrivate().getEncoded()));
+
+        runner.withPropertyValues(allSettings(file.toString()))
+                .withPropertyValues("app.identity.mosip.scope=openid").run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertFalse(output.getAll().contains("MOSIP_SCOPE asks eSignet"));
+                });
     }
 
     private static String[] allSettings(String keyPath) {

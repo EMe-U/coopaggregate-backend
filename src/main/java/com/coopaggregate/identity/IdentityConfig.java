@@ -4,6 +4,8 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.web.client.RestTemplateBuilder;
@@ -14,6 +16,8 @@ import org.springframework.web.client.RestClient;
 @Configuration
 @EnableConfigurationProperties(MosipProperties.class)
 public class IdentityConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(IdentityConfig.class);
 
     /**
      * Only exists when MOSIP_ENABLED=true. Refuses to start rather than fail on the first member, and names only the
@@ -33,6 +37,10 @@ public class IdentityConfig {
         if (!problems.isEmpty()) {
             throw new IllegalStateException("MOSIP_ENABLED=true but " + String.join("; ", problems)
                     + ". Set them as environment variables, or set MOSIP_ENABLED=false.");
+        }
+        if (!properties.extraScopes().isEmpty()) {
+            log.warn("MOSIP_SCOPE asks eSignet for more than the name and phone ({}); they are never used. Set "
+                    + "MOSIP_SCOPE=openid or leave it out.", String.join(", ", properties.extraScopes()));
         }
         return new MosipSigningKey(MosipKeyLoader.load(properties.privateKeyPath()), properties.keyId().trim());
     }
