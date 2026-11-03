@@ -13,6 +13,7 @@ public enum AuditAction {
     IDENTITY_VERIFIED,
     IDENTITY_DUPLICATE,
     // The registration did not match the person who verified. The details name the fields, never their values.
+    // From the old comparison of typed details, kept only so earlier history rows can still be read.
     IDENTITY_MISMATCH,
     IDENTITY_VERIFICATION_FAILED,
     // Changes the manager makes to buyers' purchase requests. The details hold the request code, not personal data.

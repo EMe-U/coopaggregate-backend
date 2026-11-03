@@ -51,15 +51,8 @@ public class IdentityVerification {
 
     private String identityToken;
 
-    // Salted hashes of the provider's claims (name, birth date, phone), never the claims. They let the registration
-    // be compared with the person who verified, and are cleared once the member is saved, spent or expired.
-    private String salt;
-    private String nameHash;
-    private String birthHash;
-    private String phoneHash;
-
-    // Registrations refused because the details did not match. The verification is spent after three.
-    private int attempts;
+    // The columns salt, name_hash, birth_hash, phone_hash and attempts of the old comparison stay in the table, emptied
+    // by V37, but are no longer used.
 
     // The verified name and phone (+2507XXXXXXXX) from the provider. Kept only until the member is saved or for at most
     // 30 minutes, then cleared. Never logged, never in the change history.
@@ -121,41 +114,6 @@ public class IdentityVerification {
 
     public void setCodeVerifier(String codeVerifier) {
         this.codeVerifier = codeVerifier;
-    }
-
-    public String getSalt() {
-        return salt;
-    }
-
-    public String getNameHash() {
-        return nameHash;
-    }
-
-    public String getBirthHash() {
-        return birthHash;
-    }
-
-    public String getPhoneHash() {
-        return phoneHash;
-    }
-
-    public void setFingerprints(String salt, String nameHash, String birthHash, String phoneHash) {
-        this.salt = salt;
-        this.nameHash = nameHash;
-        this.birthHash = birthHash;
-        this.phoneHash = phoneHash;
-    }
-
-    public void clearFingerprints() {
-        setFingerprints(null, null, null, null);
-    }
-
-    public int getAttempts() {
-        return attempts;
-    }
-
-    public void countFailedAttempt() {
-        this.attempts++;
     }
 
     public Instant getVerifiedAt() {

@@ -155,8 +155,6 @@ class IdentityVerificationServiceTest {
         IdentityVerification verification = stored.get(IdentityVerificationService.sha256(state));
         assertEquals("Uwimana Claudine", verification.getVerifiedName());
         assertEquals("+250788123456", verification.getVerifiedPhone());
-        assertNull(verification.getSalt(), "no fingerprints any more");
-        assertNull(verification.getNameHash());
     }
 
     @Test
@@ -182,7 +180,6 @@ class IdentityVerificationServiceTest {
                 verification.getIdentityToken(), verification.getNonce());
         assertFalse(everything.contains("1990"));
         assertFalse(everything.contains("claudine@example.com"));
-        assertNull(verification.getBirthHash());
     }
 
     @Test
@@ -637,7 +634,7 @@ class IdentityVerificationServiceTest {
     }
 
     @Test
-    void clearExpiredDropsOldVerifiersAndFingerprints() {
+    void clearExpiredDropsOldVerifiersAndVerifiedDetails() {
         when(verificationRepository.clearUnusedVerifiers(any(Instant.class))).thenReturn(2);
         when(verificationRepository.clearOldDetails(any(Instant.class))).thenReturn(1);
 

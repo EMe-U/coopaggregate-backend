@@ -179,7 +179,6 @@ public class IdentityVerificationService {
                 verification.getIdentityToken());
         verification.setMember(member);
         verification.clearVerifiedDetails();
-        verification.clearFingerprints();
     }
 
     // The verification, locked, when this manager can still use it to register a member. Another manager's
@@ -243,7 +242,7 @@ public class IdentityVerificationService {
     }
 
     /**
-     * Drops what is not needed any more: the PKCE verifier of a state that was never used, and the fingerprints of a
+     * Drops what is not needed any more: the PKCE verifier of a state that was never used, and the verified details of a
      * verification nobody registered a member with in time. Returns how many rows were cleaned.
      */
     @Transactional
