@@ -57,6 +57,7 @@ import com.coopaggregate.setting.SettingRepository;
 
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Join;
 import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
@@ -405,6 +406,15 @@ public class SaleService {
                 .where(cb.equal(allocation.get("sale").get("id"), sale.get("id")), condition.apply(allocation));
     }
 
+    // The test holds for the lot an allocation's kg came from: its portion's, or for an allocation from before
+    // fixed-size lots (no portion), its delivery's own lot.
+    private static Predicate lotMatches(CriteriaBuilder cb, Root<SaleAllocation> allocation,
+                                        Function<Join<?, ?>, Predicate> test) {
+        Join<?, ?> portionLot = allocation.join("lotPortion", JoinType.LEFT).join("lot", JoinType.LEFT);
+        Join<?, ?> ownLot = allocation.join("delivery").join("lot", JoinType.LEFT);
+        return cb.or(test.apply(portionLot), cb.and(cb.isNull(allocation.get("lotPortion")), test.apply(ownLot)));
+    }
+
     private static Specification<Sale> matching(String search, Long lotId, Long buyerId, Long gradeId) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
@@ -412,7 +422,7 @@ public class SaleService {
                 // A sale made from one lot, or a sale by grade that took kg from the lot's batches.
                 predicates.add(cb.or(cb.equal(root.get("lot").get("id"), lotId),
                         cb.exists(batchesOf(query, cb, root,
-                                a -> cb.equal(a.get("delivery").get("lot").get("id"), lotId)))));
+                                a -> lotMatches(cb, a, lot -> cb.equal(lot.get("id"), lotId))))));
             }
             if (buyerId != null) {
                 predicates.add(cb.equal(root.get("buyer").get("id"), buyerId));
@@ -428,7 +438,7 @@ public class SaleService {
                 // A sale by grade has no lot of its own, so the lot code is also looked for in its batches.
                 matches.add(cb.like(cb.lower(root.join("lot", JoinType.LEFT).get("lotCode")), pattern));
                 matches.add(cb.exists(batchesOf(query, cb, root,
-                        a -> cb.like(cb.lower(a.get("delivery").get("lot").get("lotCode")), pattern))));
+                        a -> lotMatches(cb, a, lot -> cb.like(cb.lower(lot.get("lotCode")), pattern)))));
                 matches.add(cb.like(cb.lower(root.get("saleCode")), pattern));
                 // A number on its own can also be the sale's id.
                 if (term.matches("\\d{1,18}")) {

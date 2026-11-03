@@ -16,6 +16,10 @@ public interface LotPortionRepository extends JpaRepository<LotPortion, Long> {
 
     List<LotPortion> findByDeliveryIdOrderById(Long deliveryId);
 
+    // The portions of a page of deliveries with their lots, in one query.
+    @Query("SELECT p FROM LotPortion p JOIN FETCH p.lot WHERE p.delivery.id IN :deliveryIds")
+    List<LotPortion> findWithLotByDeliveryIdIn(Collection<Long> deliveryIds);
+
     // The portions of a lot that can carry a loss: of confirmed or disputed deliveries that are not reversed, with kg
     // left. Not locked: the caller holds the grade's lock and the lot's.
     @Query("""

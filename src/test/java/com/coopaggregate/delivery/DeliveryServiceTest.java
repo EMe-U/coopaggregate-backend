@@ -63,6 +63,7 @@ import com.coopaggregate.lot.LotPortion;
 import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.lot.LotFiller;
 import com.coopaggregate.lot.LotStatus;
+import com.coopaggregate.lot.PortionResponse;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
@@ -773,6 +774,39 @@ class DeliveryServiceTest {
 
         assertEquals(ConfirmationStatus.PENDING, response.confirmationStatus());
         assertEquals(null, response.confirmationMethod());
+    }
+
+    @Test
+    void aDeliverySplitAcrossTwoLotsListsBothFirstLotFirst() {
+        Delivery delivery = givenStoredDelivery("50.00");
+        delivery.setLot(null);
+        Lot third = fixedLot(7L, "A-2026-03", LotStatus.FULL);
+        Lot fourth = fixedLot(8L, "A-2026-04", LotStatus.FILLING);
+        LotPortion inFourth = new LotPortion(fourth, delivery, new BigDecimal("20.00"));
+        inFourth.addSoldKg(new BigDecimal("5.00"));
+        when(lotPortionRepository.findWithLotByDeliveryIdIn(List.of(42L))).thenReturn(List.of(inFourth,
+                new LotPortion(third, delivery, new BigDecimal("30.00"))));
+
+        DeliveryResponse response = service.get(42L);
+
+        assertEquals(7L, response.lotId());
+        assertEquals("A-2026-03", response.lotCode());
+        assertEquals(List.of(
+                new PortionResponse(7L, "A-2026-03", LotStatus.FULL, new BigDecimal("30.00"), BigDecimal.ZERO,
+                        BigDecimal.ZERO, new BigDecimal("30.00")),
+                new PortionResponse(8L, "A-2026-04", LotStatus.FILLING, new BigDecimal("20.00"),
+                        new BigDecimal("5.00"), BigDecimal.ZERO, new BigDecimal("15.00"))), response.lots());
+    }
+
+    @Test
+    void aWaitingDeliveryIsInNoLot() {
+        Delivery delivery = givenStoredDelivery("50.00");
+        delivery.setLot(null);
+
+        DeliveryResponse response = service.get(42L);
+
+        assertNull(response.lotId());
+        assertEquals(List.of(), response.lots());
     }
 
     @Test

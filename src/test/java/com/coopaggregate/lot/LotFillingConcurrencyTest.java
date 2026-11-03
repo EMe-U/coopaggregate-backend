@@ -30,11 +30,14 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import com.coopaggregate.dashboard.DashboardResponse;
 import com.coopaggregate.delivery.CorrectDeliveryRequest;
 import com.coopaggregate.delivery.DeliveryRequest;
+import com.coopaggregate.delivery.DeliveryResponse;
 import com.coopaggregate.delivery.DeliveryService;
 import com.coopaggregate.delivery.DisputeReason;
 import com.coopaggregate.error.BadRequestException;
+import com.coopaggregate.ledger.LedgerFilter;
 import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.loss.LossReason;
 import com.coopaggregate.loss.LossRequest;
@@ -82,6 +85,20 @@ class LotFillingConcurrencyTest {
     SaleService saleService;
     @Autowired
     LossService lossService;
+    @Autowired
+    LotService lotService;
+    @Autowired
+    com.coopaggregate.batch.BatchService batchService;
+    @Autowired
+    com.coopaggregate.payment.StatementService statementService;
+    @Autowired
+    com.coopaggregate.dispute.DisputeService disputeService;
+    @Autowired
+    com.coopaggregate.ledger.LedgerQueryService ledgerQueryService;
+    @Autowired
+    com.coopaggregate.report.ReportService reportService;
+    @Autowired
+    com.coopaggregate.dashboard.DashboardService dashboardService;
     @Autowired
     LedgerService ledgerService;
     @Autowired
@@ -194,6 +211,66 @@ class LotFillingConcurrencyTest {
         assertEquals(List.of(), unexpected.stream().map(LotFillingConcurrencyTest::describe).toList());
         assertLotsAreConsistent();
         assertTrue(ledgerService.verify().valid(), "the ledger hash chain must still verify");
+        assertReadModelsAgreeWithTheData();
+    }
+
+    // Every read model on the real data: the JPQL and criteria queries run, and their figures match the tables.
+    private void assertReadModelsAgreeWithTheData() {
+        List<Long> fixedLots = jdbc.queryForList("SELECT id FROM lot WHERE capacity_kg IS NOT NULL ORDER BY id",
+                Long.class);
+        for (Long lotId : fixedLots) {
+            LotDetailResponse lot = lotService.get(lotId);
+            BigDecimal inLot = jdbc.queryForObject("""
+                    SELECT COALESCE(SUM(p.quantity_kg), 0) FROM lot_portion p JOIN delivery d ON d.id = p.delivery_id
+                    WHERE p.lot_id = ? AND d.reversed_at IS NULL
+                    """, BigDecimal.class, lotId);
+            assertEquals(0, inLot.compareTo(lot.deliveredKg()), "kg in lot " + lot.code());
+            assertEquals(0, lot.deliveredKg().compareTo(sum(lot.members(), LotMemberResponse::kg)), lot.code());
+            assertEquals(0, lot.remainingKg().compareTo(sum(lot.members(), LotMemberResponse::remainingKg)), lot.code());
+            assertEquals(0, lot.soldKg().compareTo(sum(lot.members(), LotMemberResponse::soldKg)), lot.code());
+            assertEquals(0, lot.lostKg().compareTo(sum(lot.members(), LotMemberResponse::lostKg)), lot.code());
+            BigDecimal missing = lot.capacityKg().subtract(lot.deliveredKg());
+            assertEquals(0, (lot.status() == LotStatus.FILLING ? lot.spaceLeftKg() : lot.shortfallKg())
+                    .compareTo(missing), lot.code());
+
+            // The deliveries list filtered by the lot finds every delivery with a portion in it.
+            long withPortion = jdbc.queryForObject("SELECT COUNT(DISTINCT delivery_id) FROM lot_portion WHERE lot_id = ?",
+                    Long.class, lotId);
+            List<DeliveryResponse> deliveries = deliveryService.list(null, lotId, null, null, true, 0, 100).content();
+            assertEquals(withPortion, deliveries.size(), "deliveries of " + lot.code());
+            assertTrue(deliveries.stream().allMatch(d -> d.lots().stream().anyMatch(l -> l.lotId().equals(lotId))));
+            // And the ledger and the sales filtered by it run.
+            ledgerQueryService.list(new LedgerFilter(null, null, lotId, null, null, null), 0, 50);
+            saleService.list(null, lotId, null, null, 0, 50);
+        }
+        // A delivery split across two lots lists both.
+        List<Long> split = jdbc.queryForList(
+                "SELECT delivery_id FROM lot_portion GROUP BY delivery_id HAVING COUNT(*) > 1 LIMIT 5", Long.class);
+        assertTrue(!split.isEmpty(), "some deliveries were split across lots");
+        for (Long id : split) {
+            DeliveryResponse delivery = deliveryService.get(id);
+            assertTrue(delivery.lots().size() > 1, delivery.receiptCode());
+            assertEquals(0, delivery.quantityKg().compareTo(sum(delivery.lots(), PortionResponse::kg)));
+        }
+        // The other read models run on it too.
+        long member = jdbc.queryForObject("SELECT MAX(member_id) FROM delivery", Long.class);
+        batchService.memberBatches(member, "all", 0, 100);
+        statementService.statement(member);
+        disputeService.list("open", null, 0, 50);
+        disputeService.list("settled", null, 0, 50);
+        ledgerQueryService.list(new LedgerFilter(null, null, null, null, null, null), 0, 100);
+        saleService.list(fixedLots.isEmpty() ? null : lotService.get(fixedLots.get(0)).code(), null, null, null, 0, 50);
+        reportService.weekly(null);
+        lotService.list(null, null, 0, 100);
+        lotService.stock();
+        DashboardResponse dashboard = dashboardService.dashboard();
+        for (DashboardResponse.LotBeingFilled lot : dashboard.lotsBeingFilled()) {
+            assertEquals(0, lot.filledKg().compareTo(lotService.get(lot.id()).deliveredKg()), lot.code());
+        }
+    }
+
+    private static <T> BigDecimal sum(List<T> rows, java.util.function.Function<T, BigDecimal> kg) {
+        return rows.stream().map(kg).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     // Every fixed-size lot holds at most its capacity, is FULL exactly when it holds it, and only the newest lot of a

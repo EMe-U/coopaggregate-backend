@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.List;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -268,6 +269,6 @@ class DeliveryControllerTest {
         return new DeliveryResponse(100L, "RCT-7K2Q", 5L, "Uwimana Claudine", "M-0005", 1L, "Big",
                 3L, "A-2026-01", new BigDecimal("120.50"), 603L, Instant.parse("2026-10-09T07:00:00Z"),
                 Instant.parse("2026-10-09T10:30:00Z"), false, null, null, null,
-                ConfirmationStatus.PENDING, null, null, 3, null, null, null, null, null);
+                ConfirmationStatus.PENDING, null, null, 3, null, null, null, null, null, List.of());
     }
 }

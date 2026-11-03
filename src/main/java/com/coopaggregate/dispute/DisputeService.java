@@ -18,6 +18,8 @@ import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
+import com.coopaggregate.lot.LotPortionRepository;
+import com.coopaggregate.lot.PortionResponse;
 import com.coopaggregate.error.BadRequestException;
 
 import jakarta.persistence.criteria.Predicate;
@@ -32,9 +34,11 @@ public class DisputeService {
     private static final int MAX_PAGE_SIZE = 100;
 
     private final DeliveryRepository deliveryRepository;
+    private final LotPortionRepository lotPortionRepository;
 
-    public DisputeService(DeliveryRepository deliveryRepository) {
+    public DisputeService(DeliveryRepository deliveryRepository, LotPortionRepository lotPortionRepository) {
         this.deliveryRepository = deliveryRepository;
+        this.lotPortionRepository = lotPortionRepository;
     }
 
     /** status is "open" (default) or "settled". The response is built here, inside the transaction. */
@@ -50,13 +54,17 @@ public class DisputeService {
                 .findByCorrectsIdIn(deliveries.getContent().stream().map(Delivery::getId).toList()).stream()
                 .collect(Collectors.toMap(corrected -> corrected.getCorrects().getId(), Delivery::getId));
         Instant now = Instant.now();
+        List<Long> ids = deliveries.getContent().stream().map(Delivery::getId).toList();
+        Map<Long, List<PortionResponse>> lots = ids.isEmpty() ? Map.of()
+                : PortionResponse.byDelivery(lotPortionRepository.findWithLotByDeliveryIdIn(ids));
 
         return new DisputesResponse(
                 deliveryRepository.countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus.DISPUTED),
                 deliveryRepository.sumOpenDisputedKg(),
                 deliveryRepository.countSettledDisputes(),
                 PageResponse.from(deliveries.map(delivery ->
-                        DisputeItem.from(delivery, correctedByOriginalId.get(delivery.getId()), now))));
+                        DisputeItem.from(delivery, correctedByOriginalId.get(delivery.getId()), now,
+                                lots.getOrDefault(delivery.getId(), List.of())))));
     }
 
     private static boolean isOpen(String status) {

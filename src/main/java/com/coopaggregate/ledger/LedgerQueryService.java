@@ -3,6 +3,7 @@ package com.coopaggregate.ledger;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -27,6 +28,9 @@ import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.loss.Loss;
 import com.coopaggregate.loss.LossRepository;
+import com.coopaggregate.lot.LotPortion;
+import com.coopaggregate.lot.LotPortionRepository;
+import com.coopaggregate.lot.PortionResponse;
 import com.coopaggregate.payment.ProducePayment;
 import com.coopaggregate.payment.ProducePaymentRepository;
 import com.coopaggregate.sale.Sale;
@@ -56,11 +60,13 @@ public class LedgerQueryService {
     private final LotShareRepository lotShareRepository;
     private final ProducePaymentRepository paymentRepository;
     private final SaleAllocationRepository saleAllocationRepository;
+    private final LotPortionRepository lotPortionRepository;
 
     public LedgerQueryService(LedgerEntryRepository ledgerEntryRepository, DeliveryRepository deliveryRepository,
                               LossRepository lossRepository, SaleRepository saleRepository,
                               LotShareRepository lotShareRepository, ProducePaymentRepository paymentRepository,
-                              SaleAllocationRepository saleAllocationRepository) {
+                              SaleAllocationRepository saleAllocationRepository,
+                              LotPortionRepository lotPortionRepository) {
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.deliveryRepository = deliveryRepository;
         this.lossRepository = lossRepository;
@@ -68,6 +74,7 @@ public class LedgerQueryService {
         this.lotShareRepository = lotShareRepository;
         this.paymentRepository = paymentRepository;
         this.saleAllocationRepository = saleAllocationRepository;
+        this.lotPortionRepository = lotPortionRepository;
     }
 
     @Transactional(readOnly = true)
@@ -143,6 +150,21 @@ public class LedgerQueryService {
                 .collect(Collectors.toMap(LedgerEntry::getId, LedgerEntry::getEntryType));
     }
 
+    // A delivery's own lot (from before fixed-size lots), or the lots it has portions in: the first one's id, and
+    // every code ("A-2026-03, A-2026-04"). None while it waits for confirmation.
+    private Map<Long, LedgerReference> deliveryReferences(Collection<Long> ids) {
+        Map<Long, List<PortionResponse>> lots = PortionResponse.byDelivery(
+                lotPortionRepository.findWithLotByDeliveryIdIn(ids));
+        return deliveryRepository.findByIdIn(ids).stream().collect(Collectors.toMap(Delivery::getId, d -> {
+            List<PortionResponse> portions = lots.getOrDefault(d.getId(), List.of());
+            Long lotId = d.getLot() != null ? d.ownLotId() : portions.isEmpty() ? null : portions.get(0).lotId();
+            String lotCode = d.getLot() != null ? d.ownLotCode() : portions.isEmpty() ? null
+                    : String.join(", ", portions.stream().map(PortionResponse::lotCode).toList());
+            return new LedgerReference(d.getReceiptCode(), d.getMember().getId(), d.getMember().getFullName(), lotId,
+                    lotCode, null);
+        }));
+    }
+
     private Map<String, Map<Long, LedgerReference>> references(List<LedgerEntry> entries) {
         Map<String, Set<Long>> idsByType = new HashMap<>();
         for (LedgerEntry entry : entries) {
@@ -154,9 +176,7 @@ public class LedgerQueryService {
 
         Map<String, Map<Long, LedgerReference>> references = new HashMap<>();
         idsByType.forEach((type, ids) -> references.put(type, switch (type) {
-            case "DELIVERY" -> deliveryRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
-                    Delivery::getId, d -> new LedgerReference(d.getReceiptCode(), d.getMember().getId(),
-                            d.getMember().getFullName(), d.ownLotId(), d.ownLotCode(), null)));
+            case "DELIVERY" -> deliveryReferences(ids);
             case "LOSS" -> lossRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     Loss::getId, loss -> new LedgerReference(null, null, null, loss.getLot().getId(),
                             loss.getLot().getLotCode(), null)));
@@ -168,7 +188,7 @@ public class LedgerQueryService {
             case "SALE_ALLOCATION" -> saleAllocationRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     SaleAllocation::getId, a -> new LedgerReference(a.getSale().getSaleCode(),
                             a.getDelivery().getMember().getId(), a.getDelivery().getMember().getFullName(),
-                            a.getDelivery().ownLotId(), a.getDelivery().ownLotCode(),
+                            a.lot() == null ? null : a.lot().getId(), a.lot() == null ? null : a.lot().getLotCode(),
                             a.getSale().getBuyer().getName())));
             case "LOT_SHARE" -> lotShareRepository.findByIdIn(ids).stream().collect(Collectors.toMap(
                     LotShare::getId, share -> new LedgerReference(null, share.getMember().getId(),
@@ -222,6 +242,8 @@ public class LedgerQueryService {
                 predicates.add(cb.or(
                         related(root, cb, "DELIVERY", idsOf(query, Delivery.class,
                                 d -> cb.equal(d.get("lot").get("id"), lotId))),
+                        // A delivery in fixed-size lots is found through its portions.
+                        related(root, cb, "DELIVERY", deliveriesWithPortionsInLot(query, cb, lotId)),
                         related(root, cb, "LOSS", idsOf(query, Loss.class,
                                 loss -> cb.equal(loss.get("lot").get("id"), lotId))),
                         related(root, cb, "SALE", idsOf(query, Sale.class,
@@ -229,7 +251,7 @@ public class LedgerQueryService {
                         // A sale by grade has no lot; it is found through the lots of the batches it used.
                         related(root, cb, "SALE", salesWithBatchesInLot(query, cb, lotId)),
                         related(root, cb, "SALE_ALLOCATION", idsOf(query, SaleAllocation.class,
-                                a -> cb.equal(a.get("delivery").get("lot").get("id"), lotId))),
+                                a -> allocationInLot(cb, a, lotId))),
                         related(root, cb, "LOT_SHARE", idsOf(query, LotShare.class,
                                 share -> cb.equal(share.get("lot").get("id"), lotId)))));
             }
@@ -273,8 +295,23 @@ public class LedgerQueryService {
     private static Subquery<Long> salesWithBatchesInLot(CriteriaQuery<?> query, CriteriaBuilder cb, Long lotId) {
         Subquery<Long> subquery = query.subquery(Long.class);
         Root<SaleAllocation> allocation = subquery.from(SaleAllocation.class);
-        return subquery.select(allocation.<Long>get("sale").get("id"))
-                .where(cb.equal(allocation.get("delivery").get("lot").get("id"), lotId));
+        return subquery.select(allocation.<Long>get("sale").get("id")).where(allocationInLot(cb, allocation, lotId));
+    }
+
+    private static Subquery<Long> deliveriesWithPortionsInLot(CriteriaQuery<?> query, CriteriaBuilder cb, Long lotId) {
+        Subquery<Long> subquery = query.subquery(Long.class);
+        Root<LotPortion> portion = subquery.from(LotPortion.class);
+        return subquery.select(portion.<Long>get("delivery").get("id"))
+                .where(cb.equal(portion.get("lot").get("id"), lotId));
+    }
+
+    // The kg of the allocation came from the lot: through its portion, or for an allocation from before fixed-size
+    // lots (no portion), through its delivery's own lot.
+    private static Predicate allocationInLot(CriteriaBuilder cb, Root<SaleAllocation> allocation, Long lotId) {
+        Join<?, ?> portionLot = allocation.join("lotPortion", JoinType.LEFT).join("lot", JoinType.LEFT);
+        Join<?, ?> ownLot = allocation.join("delivery").join("lot", JoinType.LEFT);
+        return cb.or(cb.equal(portionLot.get("id"), lotId),
+                cb.and(cb.isNull(allocation.get("lotPortion")), cb.equal(ownLot.get("id"), lotId)));
     }
 
     private static <T> Subquery<Long> idsOf(CriteriaQuery<?> query, Class<T> type,

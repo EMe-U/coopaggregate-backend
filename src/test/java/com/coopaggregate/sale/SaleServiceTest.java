@@ -610,8 +610,9 @@ class SaleServiceTest {
 
         CriteriaBuilder cb = applyListFilters("Kalisa", null, root);
 
-        // Buyer name, lot code (the lot of an older sale, or a lot of a sale batches) and sale code.
-        verify(cb, times(4)).like(any(), eq("%kalisa%"));
+        // Buyer name, lot code (the lot of an older sale, or the lot of a sale's batches: their portion's lot, or the
+        // delivery's own lot for credits from before fixed-size lots) and sale code.
+        verify(cb, times(5)).like(any(), eq("%kalisa%"));
         verify(cb, never()).equal(eq(id), any(Object.class));
     }
 
@@ -623,7 +624,7 @@ class SaleServiceTest {
         CriteriaBuilder cb = applyListFilters("42", null, root);
 
         verify(cb).equal(id, 42L);
-        verify(cb, times(4)).like(any(), eq("%42%"));
+        verify(cb, times(5)).like(any(), eq("%42%"));
     }
 
     @Test

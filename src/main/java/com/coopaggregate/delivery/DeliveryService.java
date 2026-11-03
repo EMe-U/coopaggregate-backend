@@ -16,6 +16,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -41,6 +42,7 @@ import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotFiller;
 import com.coopaggregate.lot.LotPortion;
 import com.coopaggregate.lot.LotPortionRepository;
+import com.coopaggregate.lot.PortionResponse;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
@@ -50,6 +52,8 @@ import com.coopaggregate.setting.SettingRepository;
 
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
 
 @Service
 public class DeliveryService {
@@ -105,7 +109,7 @@ public class DeliveryService {
         // Checked before the member, so a re-sent delivery is still accepted after the member is deactivated.
         Optional<Delivery> existing = deliveryRepository.findByClientUuid(request.clientUuid());
         if (existing.isPresent()) {
-            return new RecordedDelivery(DeliveryResponse.from(existing.get()), false);
+            return new RecordedDelivery(toResponse(existing.get()), false);
         }
 
         Instant deliveredAt = request.deliveredAt() != null ? request.deliveredAt() : Instant.now();
@@ -136,9 +140,17 @@ public class DeliveryService {
                                                boolean includeReversed, int page, int size) {
         PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
                 Sort.by(Sort.Direction.DESC, "deliveredAt", "id"));
-        return PageResponse.from(deliveryRepository.findAll(matching(memberId, lotId, from, to, includeReversed),
-                pageRequest)
-                .map(this::toResponse));
+        Page<Delivery> deliveries = deliveryRepository.findAll(matching(memberId, lotId, from, to, includeReversed),
+                pageRequest);
+        // The corrections and the lots of the whole page, in two queries.
+        List<Long> ids = deliveries.getContent().stream().map(Delivery::getId).toList();
+        Map<Long, Long> correctedBy = ids.isEmpty() ? Map.of() : deliveryRepository.findByCorrectsIdIn(ids).stream()
+                .collect(Collectors.toMap(corrected -> corrected.getCorrects().getId(), Delivery::getId,
+                        (first, second) -> first));
+        Map<Long, List<PortionResponse>> lots = ids.isEmpty() ? Map.of()
+                : PortionResponse.byDelivery(lotPortionRepository.findWithLotByDeliveryIdIn(ids));
+        return PageResponse.from(deliveries.map(delivery -> DeliveryResponse.from(delivery,
+                correctedBy.get(delivery.getId()), lots.getOrDefault(delivery.getId(), List.of()))));
     }
 
     @Transactional(readOnly = true)
@@ -354,7 +366,9 @@ public class DeliveryService {
                 .findFirst()
                 .map(Delivery::getId)
                 .orElse(null);
-        return DeliveryResponse.from(delivery, correctedById);
+        return DeliveryResponse.from(delivery, correctedById, PortionResponse.byDelivery(
+                lotPortionRepository.findWithLotByDeliveryIdIn(List.of(delivery.getId())))
+                .getOrDefault(delivery.getId(), List.of()));
     }
 
     /**
@@ -502,7 +516,13 @@ public class DeliveryService {
                 predicates.add(cb.equal(root.get("member").get("id"), memberId));
             }
             if (lotId != null) {
-                predicates.add(cb.equal(root.get("lot").get("id"), lotId));
+                // Its own lot (from before fixed-size lots), or a lot it has a portion in.
+                Subquery<Long> portions = query.subquery(Long.class);
+                Root<LotPortion> portion = portions.from(LotPortion.class);
+                portions.select(portion.<Long>get("id")).where(
+                        cb.equal(portion.get("delivery").get("id"), root.get("id")),
+                        cb.equal(portion.get("lot").get("id"), lotId));
+                predicates.add(cb.or(cb.equal(root.get("lot").get("id"), lotId), cb.exists(portions)));
             }
             if (from != null) {
                 Instant start = from.atStartOfDay(KigaliTime.ZONE).toInstant();

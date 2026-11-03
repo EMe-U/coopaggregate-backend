@@ -49,10 +49,11 @@ public interface ReportRepository extends Repository<Delivery, Long> {
             """)
     List<Sale> findSalesBetween(LocalDate from, LocalDate to);
 
-    // The lots that the week's sales by grade took kg from (they have no lot of their own).
+    // The lots that the week's sales by grade took kg from (they have no lot of their own): the portion's lot, or for
+    // allocations from before fixed-size lots, the delivery's own lot.
     @Query("""
-            SELECT new com.coopaggregate.report.SaleLotCode(a.sale.id, a.delivery.lot.lotCode)
-            FROM SaleAllocation a
+            SELECT new com.coopaggregate.report.SaleLotCode(a.sale.id, COALESCE(pl.lotCode, dl.lotCode))
+            FROM SaleAllocation a LEFT JOIN a.lotPortion p LEFT JOIN p.lot pl JOIN a.delivery d LEFT JOIN d.lot dl
             WHERE a.sale.saleDate BETWEEN :from AND :to
             """)
     List<SaleLotCode> findSaleLotCodesBetween(LocalDate from, LocalDate to);

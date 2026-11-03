@@ -49,11 +49,8 @@ public record SaleResponse(
             Long deductionRwf,
             Long netRwf) {
 
-        // The lot is the portion's; allocations from before fixed-size lots have no portion, and their delivery's
-        // own lot is the one they were sold from.
         static BatchLine from(SaleAllocation allocation) {
-            Lot lot = allocation.getLotPortion() != null ? allocation.getLotPortion().getLot()
-                    : allocation.getDelivery().getLot();
+            Lot lot = allocation.lot();
             return new BatchLine(allocation.getDelivery().getId(), allocation.getDelivery().getReceiptCode(),
                     lot == null ? null : lot.getId(), lot == null ? null : lot.getLotCode(),
                     allocation.getDelivery().getMember().getId(), allocation.getDelivery().getMember().getMemberCode(),

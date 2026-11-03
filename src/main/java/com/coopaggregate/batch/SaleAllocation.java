@@ -6,6 +6,7 @@ import java.time.Instant;
 import org.hibernate.annotations.CreationTimestamp;
 
 import com.coopaggregate.delivery.Delivery;
+import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotPortion;
 import com.coopaggregate.sale.Sale;
 
@@ -82,6 +83,11 @@ public class SaleAllocation {
 
     public void setLotPortion(LotPortion lotPortion) {
         this.lotPortion = lotPortion;
+    }
+
+    /** The lot the kg came from: the portion's, or for allocations from before fixed-size lots, the delivery's own. */
+    public Lot lot() {
+        return lotPortion != null ? lotPortion.getLot() : delivery.getLot();
     }
 
     public BigDecimal getQuantityKg() {

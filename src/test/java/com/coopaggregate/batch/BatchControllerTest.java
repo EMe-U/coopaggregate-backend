@@ -157,6 +157,6 @@ class BatchControllerTest {
         return new BatchResponse(42L, "RCT-7K2Q", 5L, "M-0005", "Uwimana Claudine", "Big", 3L, "A-2026-01",
                 LotStatus.CLOSED, Instant.parse("2026-10-19T08:00:00Z"), new BigDecimal("120.50"),
                 new BigDecimal("100.00"), new BigDecimal("0.50"), new BigDecimal("20.00"), ConfirmationStatus.CONFIRMED,
-                30000, 500, 29500, BatchPayment.BATCH);
+                30000, 500, 29500, BatchPayment.BATCH, List.of());
     }
 }

@@ -26,6 +26,7 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
@@ -51,7 +52,7 @@ class DisputeServiceTest {
     @BeforeEach
     void setUp() {
         deliveryRepository = mock(DeliveryRepository.class);
-        service = new DisputeService(deliveryRepository);
+        service = new DisputeService(deliveryRepository, mock(LotPortionRepository.class));
         when(deliveryRepository.findByCorrectsIdIn(any())).thenReturn(List.of());
         when(deliveryRepository.countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus.DISPUTED))
                 .thenReturn(2L);
