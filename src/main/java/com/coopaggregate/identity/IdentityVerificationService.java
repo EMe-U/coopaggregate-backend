@@ -6,7 +6,6 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -17,12 +16,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.audit.AuditAction;
 import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
+import com.coopaggregate.common.RwandanPhoneNumber;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
@@ -30,9 +29,10 @@ import com.coopaggregate.member.MemberRepository;
 
 /**
  * Verifies a new member's identity before registration: start gives a random one-use state and where to send the
- * member; complete checks the state, asks eSignet who the person is and refuses people who are already members.
- * Codes, states, tokens and the provider's claims are never logged or returned; of the claims only salted hashes of
- * the name, birth date and phone are kept, until the member is registered or 30 minutes have passed.
+ * member; complete checks the state, asks eSignet who the person is, refuses people who are already members, and keeps
+ * the verified name and phone that the member is then registered with. Codes, states and tokens are never logged or
+ * returned; the name and phone are returned to the manager once, never logged or written to the change history, and
+ * kept only until the member is registered or 30 minutes have passed.
  */
 @Service
 public class IdentityVerificationService {
@@ -41,7 +41,7 @@ public class IdentityVerificationService {
     static final String PROVIDER = "MOSIP";
     static final Duration STATE_VALIDITY = Duration.ofMinutes(10);
     static final Duration USE_WITHIN = Duration.ofMinutes(30);
-    static final int MAX_MISMATCHES = 3;
+    static final int MAX_NAME = 150;
 
     private final SecureRandom random = new SecureRandom();
     private final IdentityVerificationRepository verificationRepository;
@@ -81,7 +81,8 @@ public class IdentityVerificationService {
      * Completes a verification. The state is used up even when the provider fails or the person is already a
      * member, and the result is written to the change history either way.
      */
-    @Transactional(noRollbackFor = {IdentityProviderException.class, DuplicateIdentityException.class})
+    @Transactional(noRollbackFor = {IdentityProviderException.class, DuplicateIdentityException.class,
+            BadRequestException.class})
     public VerifyResultResponse complete(String code, String state, Manager manager) {
         IdentityVerification verification = verificationRepository.findForUpdateByStateHash(sha256(state))
                 .filter(found -> Objects.equals(found.getManager().getId(), manager.getId()))
@@ -113,120 +114,100 @@ public class IdentityVerificationService {
             throw new DuplicateIdentityException();
         }
 
-        String name = ClaimFingerprints.normalizeName(claims.name());
-        String birth = ClaimFingerprints.normalizeBirth(claims.birthdate());
-        String phone = ClaimFingerprints.normalizePhone(claims.phoneNumber());
+        // The name and phone become the member's own: they must be there and fit, and the phone must be Rwandan.
+        String name = verifiedName(claims.name());
+        String phone = claims.phoneNumber() == null ? null : claims.phoneNumber().replaceAll("\s+", "");
         List<String> missing = new ArrayList<>();
         if (name == null) {
             missing.add("name");
         }
-        if (birth == null) {
-            missing.add("birthDate");
-        }
-        if (phone == null) {
+        if (phone == null || phone.isEmpty()) {
             missing.add("phone");
         }
         if (!missing.isEmpty()) {
-            log.warn("Identity verification {} failed: the provider did not give {}", verification.getId(), missing);
-            record(AuditAction.IDENTITY_VERIFICATION_FAILED, manager, "Provider " + PROVIDER
-                    + ": missing or unreadable details: " + String.join(", ", missing));
-            throw IdentityProviderException.failed("The identity provider did not give the name, birth date and "
-                    + "phone number needed to check the member.");
+            refuse(verification, manager, "missing details: " + String.join(", ", missing),
+                    "eSignet did not share the member's name and phone number. Start the verification again and "
+                            + "allow both.");
         }
+        if (name.length() > MAX_NAME) {
+            refuse(verification, manager, "the name is longer than " + MAX_NAME + " characters",
+                    "The verified name is longer than " + MAX_NAME + " characters, so it cannot be saved.");
+        }
+        if (!RwandanPhoneNumber.isValid(phone)) {
+            refuse(verification, manager, "the phone is not a Rwandan mobile number",
+                    "The verified phone number is not a Rwandan mobile number, so the member cannot be registered "
+                            + "with it.");
+        }
+        phone = RwandanPhoneNumber.normalize(phone);
 
-        String salt = ClaimFingerprints.newSalt();
-        verification.setFingerprints(salt, ClaimFingerprints.hash(salt, ClaimFingerprints.NAME, name),
-                ClaimFingerprints.hash(salt, ClaimFingerprints.BIRTH, birth),
-                ClaimFingerprints.hash(salt, ClaimFingerprints.PHONE, phone));
+        verification.setVerifiedDetails(name, phone);
         verification.markVerified(new VerifiedIdentity(claims.subject(), VerificationMethod.PASSWORD), now);
         record(AuditAction.IDENTITY_VERIFIED, manager,
                 "Provider " + PROVIDER + ", method " + VerificationMethod.PASSWORD);
-        return new VerifyResultResponse(verification.getId(), true, VerificationMethod.PASSWORD, now.plus(USE_WITHIN));
+        return new VerifyResultResponse(verification.getId(), true, VerificationMethod.PASSWORD, name, phone,
+                now.plus(USE_WITHIN));
     }
 
     /**
-     * Checks the details typed for a new member against the person who verified: name, birth date and phone must all
-     * match, or the registration is refused. Runs in its own transaction so a mismatch is counted even though the
-     * registration then rolls back: after three the verification is used up. Nothing is changed when they match.
-     */
-    @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = IdentityMismatchException.class)
-    public void checkDetails(Long verificationId, String fullName, LocalDate birthDate, String phone) {
-        IdentityVerification verification = usableVerification(verificationId);
-        if (verification.getAttempts() >= MAX_MISMATCHES) {
-            throw new BadRequestException("This verification has been used up. Verify the person again.");
-        }
-        String salt = verification.getSalt();
-        List<String> wrong = new ArrayList<>();
-        if (!matches(salt, ClaimFingerprints.NAME, verification.getNameHash(),
-                ClaimFingerprints.normalizeName(fullName))) {
-            wrong.add("name");
-        }
-        if (!matches(salt, ClaimFingerprints.BIRTH, verification.getBirthHash(),
-                ClaimFingerprints.normalizeBirth(birthDate))) {
-            wrong.add("birthDate");
-        }
-        if (!matches(salt, ClaimFingerprints.PHONE, verification.getPhoneHash(),
-                ClaimFingerprints.normalizePhone(phone))) {
-            wrong.add("phone");
-        }
-        if (wrong.isEmpty()) {
-            return;
-        }
-
-        verification.countFailedAttempt();
-        int attempt = verification.getAttempts();
-        String fields = String.join(", ", wrong);
-        log.warn("Identity verification {} did not match the member details ({} of {}): {}", verification.getId(),
-                attempt, MAX_MISMATCHES, fields);
-        record(AuditAction.IDENTITY_MISMATCH, verification.getManager(), "Verification " + verification.getId()
-                + ": details do not match: " + fields + " (attempt " + attempt + " of " + MAX_MISMATCHES + ")");
-        String message = "The details do not match the person who verified: " + fields + ".";
-        if (attempt >= MAX_MISMATCHES) {
-            verification.clearFingerprints();
-            throw new IdentityMismatchException(message + " This verification has been used up. Verify the person "
-                    + "again.");
-        }
-        throw new IdentityMismatchException(message + " Correct them and try again (attempt " + attempt + " of "
-                + MAX_MISMATCHES + ").");
-    }
-
-    /**
-     * Marks a newly registered member as verified with a completed verification, after checkDetails passed. A
-     * verification gives one member only, must be used within 30 minutes, and is refused if the person became a member
-     * in the meantime. The fingerprints are cleared: they have done their job.
+     * The verified name and phone to register the member with. Only the manager who started the verification can use
+     * it, once, within 30 minutes. Nothing changes here; attach then links the member and clears the details.
      */
     @Transactional
-    public void attach(Long verificationId, Member member) {
-        IdentityVerification verification = usableVerification(verificationId);
+    public VerifiedDetails verifiedDetails(Long verificationId, Manager manager) {
+        IdentityVerification verification = usableVerification(verificationId, manager);
+        return new VerifiedDetails(verification.getVerifiedName(), verification.getVerifiedPhone());
+    }
+
+    /**
+     * Marks a newly registered member as verified with the verification its details came from. A verification gives
+     * one member only, and is refused if the person became a member in the meantime. The verified details are
+     * cleared: they are now the member's own.
+     */
+    @Transactional
+    public void attach(Long verificationId, Manager manager, Member member) {
+        IdentityVerification verification = usableVerification(verificationId, manager);
         if (memberRepository.existsByIdentityToken(verification.getIdentityToken())) {
             throw new DuplicateIdentityException();
         }
         member.markIdentityVerified(verification.getVerificationMethod(), verification.getVerifiedAt(),
                 verification.getIdentityToken());
         verification.setMember(member);
+        verification.clearVerifiedDetails();
         verification.clearFingerprints();
     }
 
-    // The verification, locked, when it can still be used to register a member.
-    private IdentityVerification usableVerification(Long verificationId) {
+    // The verification, locked, when this manager can still use it to register a member. Another manager's
+    // verification is answered like an unknown one.
+    private IdentityVerification usableVerification(Long verificationId, Manager manager) {
         IdentityVerification verification = verificationRepository.findForUpdateById(verificationId)
-                .orElseThrow(() -> new BadRequestException("Verification " + verificationId + " does not exist."));
-        if (!verification.isVerified()) {
-            throw new BadRequestException("Verification " + verificationId + " did not verify anyone.");
-        }
+                .filter(found -> Objects.equals(found.getManager().getId(), manager.getId()))
+                .filter(IdentityVerification::isVerified)
+                .orElseThrow(() -> new BadRequestException("Unknown verification. Verify the person again."));
         if (verification.getMember() != null) {
-            throw new IllegalStateException("Verification " + verificationId
-                    + " was already used to register a member.");
+            throw new IllegalStateException("This verification was already used to register a member. Verify the "
+                    + "next person again.");
         }
-        if (Instant.now().isAfter(verification.getVerifiedAt().plus(USE_WITHIN)) || verification.getSalt() == null) {
-            throw new BadRequestException("Verification " + verificationId
-                    + " is more than 30 minutes old or used up. Verify the person again.");
+        if (Instant.now().isAfter(verification.getVerifiedAt().plus(USE_WITHIN))
+                || !verification.hasVerifiedDetails()) {
+            throw new BadRequestException("This verification is more than 30 minutes old. Verify the person again.");
         }
         return verification;
     }
 
-    private static boolean matches(String salt, String kind, String storedHash, String normalized) {
-        return normalized != null && ClaimFingerprints.same(storedHash, ClaimFingerprints.hash(salt, kind, normalized));
+    // Spaces trimmed and runs of spaces made one; null when there is no name.
+    private static String verifiedName(String name) {
+        if (name == null) {
+            return null;
+        }
+        String cleaned = name.strip().replaceAll("\s+", " ");
+        return cleaned.isEmpty() ? null : cleaned;
+    }
+
+    // Records why a verification verified nobody (the reason only, never the values) and refuses it.
+    private void refuse(IdentityVerification verification, Manager manager, String reason, String message) {
+        log.warn("Identity verification {} failed: {}", verification.getId(), reason);
+        record(AuditAction.IDENTITY_VERIFICATION_FAILED, manager, "Provider " + PROVIDER + ": " + reason);
+        throw new BadRequestException(message);
     }
 
     /**

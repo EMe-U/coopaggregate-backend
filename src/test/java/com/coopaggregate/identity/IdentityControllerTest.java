@@ -113,7 +113,8 @@ class IdentityControllerTest {
         Manager manager = new Manager();
         when(authService.currentManager("manager@example.com")).thenReturn(manager);
         when(verificationService.complete("the-code", "the-state", manager)).thenReturn(new VerifyResultResponse(9L,
-                true, VerificationMethod.PASSWORD, Instant.parse("2026-10-31T10:30:00Z")));
+                true, VerificationMethod.PASSWORD, "UWIMANA Claudine", "+250788123456",
+                Instant.parse("2026-10-31T10:30:00Z")));
 
         mockMvc.perform(post("/api/members/verify/callback").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -123,8 +124,19 @@ class IdentityControllerTest {
                 .andExpect(jsonPath("$.verified").value(true))
                 .andExpect(jsonPath("$.method").value("PASSWORD"))
                 .andExpect(jsonPath("$.useBefore").value("2026-10-31T10:30:00Z"))
+                .andExpect(jsonPath("$.fullName").value("UWIMANA Claudine"))
+                .andExpect(jsonPath("$.phone").value("+250788123456"))
                 .andExpect(jsonPath("$.identityToken").doesNotExist())
-                .andExpect(jsonPath("$.name").doesNotExist());
+                .andExpect(jsonPath("$.birthDate").doesNotExist());
+    }
+
+    @Test
+    void theCallbackResultNeverPrintsTheVerifiedDetails() {
+        String text = new VerifyResultResponse(9L, true, VerificationMethod.PASSWORD, "UWIMANA Claudine",
+                "+250788123456", Instant.parse("2026-10-31T10:30:00Z")).toString();
+
+        assertFalse(text.contains("UWIMANA"));
+        assertFalse(text.contains("788123456"));
     }
 
     @Test

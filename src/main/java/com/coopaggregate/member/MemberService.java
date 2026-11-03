@@ -19,6 +19,8 @@ import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.identity.IdentityAvailability;
 import com.coopaggregate.identity.IdentityProviderException;
 import com.coopaggregate.identity.IdentityVerificationService;
+import com.coopaggregate.identity.VerifiedDetails;
+import com.coopaggregate.manager.Manager;
 
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.Predicate;
@@ -69,8 +71,13 @@ public class MemberService {
         return MemberResponse.from(findMember(id));
     }
 
+    /**
+     * Registers a member from a completed identity verification: the name and phone are the verified ones, never typed.
+     * Everything happens in one transaction, so a registration refused for another reason (a phone or national ID
+     * already used) leaves the verification usable until its 30 minutes are over.
+     */
     @Transactional
-    public MemberResponse create(MemberRequest request) {
+    public MemberResponse create(NewMemberRequest request, Manager manager) {
         // Every member is registered with a verified identity. Without the identity provider nobody can be registered.
         if (!identityAvailability.isAvailable()) {
             throw IdentityProviderException.notConfigured(
@@ -79,27 +86,24 @@ public class MemberService {
         if (request.verificationId() == null) {
             throw new BadRequestException("verificationId is required. Verify the person's identity first.");
         }
-        if (request.birthDate() == null) {
-            throw new BadRequestException("birthDate is required.");
-        }
-        // Before anything is saved. A mismatch is counted and refuses the registration.
-        identityVerificationService.checkDetails(request.verificationId(), request.fullName(), request.birthDate(),
-                request.phone());
+        VerifiedDetails verified = identityVerificationService.verifiedDetails(request.verificationId(), manager);
         Member member = new Member();
-        applyDetails(member, request);
+        applyDetails(member, verified.fullName(), verified.phone(), request.nationalId(), request.address(),
+                request.preferredLanguage());
         member.setJoinDate(request.joinDate() != null ? request.joinDate() : KigaliTime.today());
         // Continues from the highest existing number. If two members were created at the same moment and got
         // the same code, the unique member_code would reject the second one with 409.
         member.setMemberCode(String.format("M-%04d", memberRepository.highestMemberNumber() + 1));
         Member saved = memberRepository.save(member);
-        identityVerificationService.attach(request.verificationId(), saved);
+        identityVerificationService.attach(request.verificationId(), manager, saved);
         return MemberResponse.from(saved);
     }
 
     @Transactional
     public MemberResponse update(Long id, MemberRequest request) {
         Member member = findMember(id);
-        applyDetails(member, request);
+        applyDetails(member, request.fullName(), request.phone(), request.nationalId(), request.address(),
+                request.preferredLanguage());
         if (request.joinDate() != null) {
             member.setJoinDate(request.joinDate());
         }
@@ -113,9 +117,10 @@ public class MemberService {
         return MemberResponse.from(member);
     }
 
-    private void applyDetails(Member member, MemberRequest request) {
-        String phone = RwandanPhoneNumber.normalize(request.phone());
-        String nationalId = trimToNull(request.nationalId());
+    private void applyDetails(Member member, String fullName, String rawPhone, String rawNationalId, String address,
+                              String preferredLanguage) {
+        String phone = RwandanPhoneNumber.normalize(rawPhone);
+        String nationalId = trimToNull(rawNationalId);
 
         memberRepository.findByPhone(phone)
                 .filter(other -> !other.getId().equals(member.getId()))
@@ -132,12 +137,12 @@ public class MemberService {
                     });
         }
 
-        member.setFullName(request.fullName().trim());
+        member.setFullName(fullName.trim());
         member.setPhone(phone);
         member.setNationalId(nationalId);
-        member.setAddress(trimToNull(request.address()));
-        if (request.preferredLanguage() != null) {
-            member.setPreferredLanguage(request.preferredLanguage());
+        member.setAddress(trimToNull(address));
+        if (preferredLanguage != null) {
+            member.setPreferredLanguage(preferredLanguage);
         }
     }
 
