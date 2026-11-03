@@ -93,6 +93,7 @@ cd coopaggregate-backend
 | `SMS_TRACCAR_URL` | No | Gateway URL with Traccar. Default `https://www.traccar.org/sms/`. Must be `https` (`http` only for localhost) |
 | `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
 | `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
+| `SMS_DEMO_CODE` | No | **Temporary, for the demo only.** 6 digits also accepted as the code of any pending delivery. Not set by default (see Delivery confirmation) |
 | `MOSIP_ENABLED` | To register members | `true` switches member identity verification on. Registering a member needs it, so with the default `false` no member can be registered (see Identity verification) |
 | `MOSIP_BASE_URL` | With `MOSIP_ENABLED` | The eSignet issuer, for example `http://localhost:8080`. Plain `http` only for localhost. The authorize, token, userinfo and JWKS URLs follow from it |
 | `MOSIP_CLIENT_ID` | With `MOSIP_ENABLED` | The client id registered with eSignet |
@@ -365,6 +366,15 @@ Every delivery is confirmed by the member with a one-time code sent by SMS.
   - It expires 10 minutes after it is sent (`409`).
   - A wrong code is `400` with the tries left. After 3 wrong tries the code stops working,
     even the right one (`409`); the manager must send a new one.
+- **Demo code (temporary, remove after the demo):** when `SMS_DEMO_CODE` is set to 6 digits,
+  `confirm` also accepts it as the right code for any `PENDING` delivery. Everything else stays
+  the same: the delivery needs a code that is sent and not expired, the 3-wrong-tries limit
+  applies, and the member still gets the receipt SMS. Such a delivery has the resolution note
+  "Confirmed with the demo code, not the member's SMS code." and a `DEMO_CODE_CONFIRMATION`
+  entry in the change history; the code itself is never logged or saved. The app logs one
+  warning at startup while it is set, and does not start if it is not 6 digits. Not set (the
+  default), nothing changes. After the demo, remove the variable and delete the code (look for
+  "TEMPORARY, for the demo only").
 - `POST /api/deliveries/{id}/resend-code` sends a new code and the old one stops working at
   once. At most 3 times per delivery (`409` after that); each delivery response shows
   `codeResendsLeft`. Every resend is written to the change history.

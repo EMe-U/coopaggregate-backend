@@ -21,5 +21,7 @@ public enum AuditAction {
     // A sale passed over the oldest batches. The details hold the sale code, the receipt codes and the reason.
     SALE_FIFO_SKIPPED,
     // The lot size setting changed. The details hold the old and new size and the reason.
-    LOT_SIZE_CHANGED
+    LOT_SIZE_CHANGED,
+    // TEMPORARY, for the demo only: a delivery confirmed with SMS_DEMO_CODE. The details never hold the code.
+    DEMO_CODE_CONFIRMATION
 }

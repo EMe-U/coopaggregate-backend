@@ -943,6 +943,128 @@ class DeliveryServiceTest {
         assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, code));
     }
 
+    // --- Temporary demo code (SMS_DEMO_CODE) ---
+
+    @Test
+    void demoCodeConfirmsAnyPendingDeliveryWhenSet() {
+        Delivery delivery = givenDeliveryWithCode();
+        String demo = otherCode(confirmationCodes.issue(delivery, Instant.now()));
+        useDemoCode(demo);
+
+        DeliveryResponse response = service.confirmWithCode(42L, demo);
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+        assertEquals(ConfirmationMethod.OTP, delivery.getConfirmationMethod());
+        assertEquals("Confirmed with the demo code, not the member's SMS code.", response.resolutionNote());
+        // The normal receipt SMS goes out from this event.
+        verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
+        ArgumentCaptor<AuditLog> audit = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogRepository).save(audit.capture());
+        assertEquals(AuditAction.DEMO_CODE_CONFIRMATION, audit.getValue().getAction());
+        assertEquals("Delivery RCT-7K2Q confirmed with the demo code", audit.getValue().getDetails());
+        assertEquals(member, audit.getValue().getMember());
+        assertFalse(audit.getValue().getDetails().contains(demo));
+    }
+
+    @Test
+    void demoCodePutsTheDeliveryIntoItsLotsLikeANormalConfirmation() {
+        Delivery delivery = givenDeliveryWithCode();
+        String demo = otherCode(confirmationCodes.issue(delivery, Instant.now()));
+        useDemoCode(demo);
+        AtomicReference<ConfirmationStatus> statusWhenPlaced = new AtomicReference<>();
+        doAnswer(invocation -> {
+            statusWhenPlaced.set(invocation.<Delivery>getArgument(0).getConfirmationStatus());
+            return List.of();
+        }).when(lotFiller).place(delivery);
+
+        service.confirmWithCode(42L, demo);
+
+        // The same filling path as the member's code: the confirmed delivery goes to the lot filler, once, before the
+        // demo audit entry and the event that sends the receipt SMS.
+        assertEquals(ConfirmationStatus.CONFIRMED, statusWhenPlaced.get());
+        InOrder order = inOrder(lotFiller, auditLogRepository, eventPublisher);
+        order.verify(lotFiller).place(delivery);
+        order.verify(auditLogRepository).save(org.mockito.ArgumentMatchers.argThat(
+                entry -> entry.getAction() == AuditAction.DEMO_CODE_CONFIRMATION));
+        order.verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
+        verify(lotFiller, times(1)).place(any());
+    }
+
+    @Test
+    void aRefusedDemoCodePutsNothingIntoLots() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+        String demo = otherCode(code);
+        String wrong = code.equals("222222") || demo.equals("222222") ? "333333" : "222222";
+        useDemoCode(demo);
+
+        for (int i = 0; i < 3; i++) {
+            assertThrows(WrongCodeException.class, () -> service.confirmWithCode(42L, wrong));
+        }
+        assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, demo));
+
+        verify(lotFiller, never()).place(any());
+    }
+
+    @Test
+    void memberCodeStillWorksNormallyWhenTheDemoCodeIsSet() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+        useDemoCode(otherCode(code));
+
+        DeliveryResponse response = service.confirmWithCode(42L, code);
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+        assertEquals(null, response.resolutionNote());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    void demoCodeIsAWrongCodeWhenNotSet() {
+        Delivery delivery = givenDeliveryWithCode();
+        String notTheCode = otherCode(confirmationCodes.issue(delivery, Instant.now()));
+
+        WrongCodeException e = assertThrows(WrongCodeException.class,
+                () -> service.confirmWithCode(42L, notTheCode));
+
+        assertEquals("Wrong code. 2 tries left.", e.getMessage());
+        assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    void demoCodeKeepsTheThreeTryLimit() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+        String demo = otherCode(code);
+        String wrong = code.equals("222222") || demo.equals("222222") ? "333333" : "222222";
+        useDemoCode(demo);
+
+        for (int i = 0; i < 3; i++) {
+            assertThrows(WrongCodeException.class, () -> service.confirmWithCode(42L, wrong));
+        }
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, demo));
+
+        assertEquals("Delivery RCT-7K2Q has no valid code. Send the member a new code.", e.getMessage());
+        assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    void demoCodeOnlyConfirmsAPendingDelivery() {
+        Delivery delivery = givenDeliveryWithCode();
+        String demo = otherCode(confirmationCodes.issue(delivery, Instant.now()));
+        delivery.dispute(DisputeReason.WRONG_KG, null, Instant.now());
+        useDemoCode(demo);
+
+        assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, demo));
+        assertEquals(ConfirmationStatus.DISPUTED, delivery.getConfirmationStatus());
+    }
+
+    private void useDemoCode(String demo) {
+        ReflectionTestUtils.setField(service, "confirmationCodes", new ConfirmationCodes(encoder, demo));
+    }
+
     @Test
     void correctionStartsPendingAndGetsItsOwnCodeSms() {
         Delivery original = givenStoredDelivery("100.00");
