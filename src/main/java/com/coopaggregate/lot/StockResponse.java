@@ -4,9 +4,11 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * Stock is read per grade from the batches (deliveries), whatever their lot. totalRemainingKg is the kg left in all
- * batches that are not reversed (physical stock); it is the sum of three parts: sellable (confirmed, can be sold),
- * waiting (pending the member's confirmation) and disputed. Only sellable kg can be sold.
+ * Stock is read per grade from the batches (deliveries) and their own grade, whether or not they are in a lot yet.
+ * totalRemainingKg is the kg left in all batches that are not reversed (physical stock); it is the sum of three parts:
+ * sellable (confirmed, can be sold), waiting (pending the member's confirmation, in no lot) and disputed. Only
+ * sellable kg can be sold. openLots counts the lots not full yet (FILLING, and older OPEN lots); closedLots the full
+ * ones not sold out yet (FULL, and older CLOSED lots).
  */
 public record StockResponse(
         BigDecimal totalRemainingKg,

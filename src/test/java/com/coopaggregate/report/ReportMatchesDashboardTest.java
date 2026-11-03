@@ -62,7 +62,8 @@ class ReportMatchesDashboardTest {
         when(saleRepository.totalKgBetween(any(), any())).thenReturn(BigDecimal.ZERO);
 
         DashboardResponse dashboard = new DashboardService(memberService, lotService, paymentService,
-                mock(LotRepository.class), deliveryRepository, gradeRepository).dashboard();
+                mock(LotRepository.class), deliveryRepository, gradeRepository,
+                mock(com.coopaggregate.lot.LotPortionRepository.class)).dashboard();
         WeeklyReport report = new ReportService(mock(ReportRepository.class), deliveryRepository, saleRepository,
                 mock(ProducePaymentRepository.class), gradeRepository, lotService, paymentService).weekly(null);
 

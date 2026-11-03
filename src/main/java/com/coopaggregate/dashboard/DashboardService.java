@@ -22,6 +22,8 @@ import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.delivery.GradeDeliveredKg;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
+import com.coopaggregate.lot.Lot;
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
@@ -43,16 +45,18 @@ public class DashboardService {
     private final LotRepository lotRepository;
     private final DeliveryRepository deliveryRepository;
     private final GradeRepository gradeRepository;
+    private final LotPortionRepository lotPortionRepository;
 
     public DashboardService(MemberService memberService, LotService lotService, PaymentService paymentService,
                             LotRepository lotRepository, DeliveryRepository deliveryRepository,
-                            GradeRepository gradeRepository) {
+                            GradeRepository gradeRepository, LotPortionRepository lotPortionRepository) {
         this.memberService = memberService;
         this.lotService = lotService;
         this.paymentService = paymentService;
         this.lotRepository = lotRepository;
         this.deliveryRepository = deliveryRepository;
         this.gradeRepository = gradeRepository;
+        this.lotPortionRepository = lotPortionRepository;
     }
 
     @Transactional(readOnly = true)
@@ -79,6 +83,7 @@ public class DashboardService {
         long membersAwaitingPayment = balances.members().stream()
                 .filter(member -> member.balanceRwf() > 0)
                 .count();
+        List<Lot> filling = lotsBeingFilled();
 
         return new DashboardResponse(
                 members.total(),
@@ -88,7 +93,10 @@ public class DashboardService {
                 stockByGrade,
                 stock.addedTodayKg(),
                 stock.deliveriesToday(),
-                openLots(),
+                filling.stream()
+                        .map(lot -> new DashboardResponse.OpenLot(lot.getId(), lot.getLotCode(),
+                                lot.getGrade().getName()))
+                        .toList(),
                 balances.totalOwedRwf(),
                 membersAwaitingPayment,
                 lotRepository.countByStatus(LotStatus.SOLD),
@@ -102,13 +110,18 @@ public class DashboardService {
                 stock.totalWaitingKg(),
                 stock.totalDisputedKg(),
                 gradesWithSellableKg,
-                stockByGradeDetail);
+                stockByGradeDetail,
+                filling.stream()
+                        .map(lot -> new DashboardResponse.LotBeingFilled(lot.getId(), lot.getLotCode(),
+                                lot.getGrade().getName(), lotPortionRepository.filledKg(lot.getId()),
+                                lot.getCapacityKg()))
+                        .toList());
     }
 
-    private List<DashboardResponse.OpenLot> openLots() {
-        return lotRepository.findByStatusIn(List.of(LotStatus.OPEN)).stream()
+    // At most one per grade, in grade order.
+    private List<Lot> lotsBeingFilled() {
+        return lotRepository.findByStatusIn(List.of(LotStatus.FILLING)).stream()
                 .sorted(Comparator.comparing(lot -> lot.getGrade().getCode()))
-                .map(lot -> new DashboardResponse.OpenLot(lot.getId(), lot.getLotCode(), lot.getGrade().getName()))
                 .toList();
     }
 

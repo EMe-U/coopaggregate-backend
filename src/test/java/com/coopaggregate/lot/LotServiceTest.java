@@ -1,6 +1,7 @@
 package com.coopaggregate.lot;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -89,8 +90,10 @@ class LotServiceTest {
                 new BigDecimal("1000.00"), new BigDecimal("25.50"), new BigDecimal("400.00"), 120000L, 2L,
                 new BigDecimal("150.00"))));
         List<LotMemberResponse> members = List.of(
-                new LotMemberResponse(5L, "Uwimana Claudine", "M-0005", new BigDecimal("600.00")),
-                new LotMemberResponse(6L, "Habimana Eric", "M-0006", new BigDecimal("400.00")));
+                new LotMemberResponse(5L, "Uwimana Claudine", "M-0005", new BigDecimal("600.00"),
+                        new BigDecimal("240.00"), new BigDecimal("15.30"), new BigDecimal("344.70")),
+                new LotMemberResponse(6L, "Habimana Eric", "M-0006", new BigDecimal("400.00"),
+                        new BigDecimal("160.00"), new BigDecimal("10.20"), new BigDecimal("229.80")));
         when(lotRepository.findMembers(3L)).thenReturn(members);
 
         LotDetailResponse detail = service.get(3L);
@@ -102,6 +105,54 @@ class LotServiceTest {
         assertEquals(120000L, detail.saleAmountRwf());
         assertEquals(2L, detail.memberCount());
         assertEquals(members, detail.members());
+        // A lot from before fixed-size lots has no capacity.
+        assertTrue(detail.olderLot());
+        assertEquals(null, detail.capacityKg());
+        assertEquals(BigDecimal.ZERO, detail.shortfallKg());
+        assertEquals(BigDecimal.ZERO, detail.spaceLeftKg());
+    }
+
+    @Test
+    void aLotBeingFilledShowsItsSpaceLeft() {
+        Lot lot = lot(3L, "A-2026-04", "A", "Big", LotStatus.FILLING);
+        lot.setCapacityKg(new BigDecimal("100.00"));
+        givenLot(lot);
+        when(lotRepository.findQuantities(anyCollection())).thenReturn(List.of(new LotQuantities(3L,
+                new BigDecimal("72.50"), null, null, null, 3L)));
+
+        LotDetailResponse detail = service.get(3L);
+
+        assertFalse(detail.olderLot());
+        assertEquals(new BigDecimal("100.00"), detail.capacityKg());
+        assertEquals(new BigDecimal("27.50"), detail.spaceLeftKg());
+        assertEquals(BigDecimal.ZERO, detail.shortfallKg());
+    }
+
+    @Test
+    void aFullLotThatLostADeliveryToAReversalShowsItsShortfall() {
+        for (LotStatus status : new LotStatus[] {LotStatus.FULL, LotStatus.SOLD}) {
+            Lot lot = lot(3L, "A-2026-03", "A", "Big", status);
+            lot.setCapacityKg(new BigDecimal("100.00"));
+            givenLot(lot);
+            when(lotRepository.findQuantities(anyCollection())).thenReturn(List.of(new LotQuantities(3L,
+                    new BigDecimal("80.00"), null, null, null, 2L)));
+
+            LotDetailResponse detail = service.get(3L);
+
+            assertEquals(new BigDecimal("20.00"), detail.shortfallKg(), status.name());
+            assertEquals(BigDecimal.ZERO, detail.spaceLeftKg(), status.name());
+        }
+    }
+
+    @Test
+    void aFullLotWithAllItsKgHasNoShortfall() {
+        Lot lot = lot(3L, "A-2026-03", "A", "Big", LotStatus.FULL);
+        lot.setCapacityKg(new BigDecimal("100.00"));
+        givenLot(lot);
+        when(lotRepository.findQuantities(anyCollection())).thenReturn(List.of(new LotQuantities(3L,
+                new BigDecimal("100.00"), null, null, null, 2L)));
+
+        assertEquals(0, service.get(3L).shortfallKg().signum());
     }
 
     @Test
@@ -109,7 +160,7 @@ class LotServiceTest {
         Lot openA = lot(3L, "A-2026-02", "A", "Big", LotStatus.OPEN);
         Lot closedA = lot(4L, "A-2026-01", "A", "Big", LotStatus.CLOSED);
         Lot closedB = lot(5L, "B-2026-01", "B", "Normal", LotStatus.CLOSED);
-        when(lotRepository.findByStatusIn(List.of(LotStatus.OPEN, LotStatus.CLOSED)))
+        when(lotRepository.findByStatusIn(any()))
                 .thenReturn(List.of(openA, closedB, closedA));
         // Lots of the same grade are added together; a status with no kg left is simply not there.
         when(lotRepository.findKgLeftByGradeAndStatus()).thenReturn(List.of(
@@ -151,7 +202,7 @@ class LotServiceTest {
     @Test
     void stockDoesNotNeedALotToBeClosed() {
         // The kg of an open lot are sellable stock like those of a closed lot: only confirmation matters.
-        when(lotRepository.findByStatusIn(List.of(LotStatus.OPEN, LotStatus.CLOSED)))
+        when(lotRepository.findByStatusIn(any()))
                 .thenReturn(List.of(lot(3L, "A-2026-02", "A", "Big", LotStatus.OPEN)));
         when(lotRepository.findKgLeftByGradeAndStatus()).thenReturn(List.of(
                 new GradeKgLeft("A", "Big", ConfirmationStatus.CONFIRMED, new BigDecimal("120.00"))));

@@ -55,13 +55,13 @@ public class LotService {
         return LotDetailResponse.from(lot, lotRepository.findMembers(id));
     }
 
-    // The kg left are read per grade from the batches, whatever their lot, split into sellable (confirmed), waiting
-    // (pending) and disputed kg. The delivered, sold and lost totals cover all lots, so delivered - lost - sold still
-    // equals the remaining kg. The lot counts below are only for information: a lot does not have to be closed to be
-    // sold.
+    // The kg left are read per grade from the batches, whether or not they are in a lot, split into sellable
+    // (confirmed), waiting (pending, in no lot) and disputed kg. The delivered, sold and lost totals cover all
+    // batches, so delivered - lost - sold still equals the remaining kg. The lot counts are only for information.
     @Transactional(readOnly = true)
     public StockResponse stock() {
-        List<Lot> lots = lotRepository.findByStatusIn(List.of(LotStatus.OPEN, LotStatus.CLOSED));
+        List<Lot> lots = lotRepository.findByStatusIn(List.of(LotStatus.FILLING, LotStatus.OPEN, LotStatus.FULL,
+                LotStatus.CLOSED));
 
         // By grade code, so the grades are listed in the same order as before.
         Map<String, String> gradeNameByCode = new TreeMap<>();
@@ -94,7 +94,9 @@ public class LotService {
                         entry.getValue()[0], entry.getValue()[1], entry.getValue()[2]))
                 .toList();
         BigDecimal totalRemainingKg = totalSellableKg.add(totalWaitingKg).add(totalDisputedKg);
-        long openLots = lots.stream().filter(lot -> lot.getStatus() == LotStatus.OPEN).count();
+        long openLots = lots.stream()
+                .filter(lot -> lot.getStatus() == LotStatus.FILLING || lot.getStatus() == LotStatus.OPEN)
+                .count();
 
         Instant startOfToday = KigaliTime.today().atStartOfDay(KigaliTime.ZONE).toInstant();
         Instant startOfTomorrow = KigaliTime.today().plusDays(1).atStartOfDay(KigaliTime.ZONE).toInstant();

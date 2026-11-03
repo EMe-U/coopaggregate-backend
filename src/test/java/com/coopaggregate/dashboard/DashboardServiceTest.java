@@ -29,6 +29,7 @@ import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotQuantities;
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
@@ -53,6 +54,7 @@ class DashboardServiceTest {
     private Grade big;
     private Grade normal;
     private Grade small;
+    private LotPortionRepository lotPortionRepository;
 
     @BeforeEach
     void setUp() {
@@ -62,8 +64,9 @@ class DashboardServiceTest {
         lotRepository = mock(LotRepository.class);
         deliveryRepository = mock(DeliveryRepository.class);
         GradeRepository gradeRepository = mock(GradeRepository.class);
+        lotPortionRepository = mock(LotPortionRepository.class);
         service = new DashboardService(memberService, lotService, paymentService, lotRepository,
-                deliveryRepository, gradeRepository);
+                deliveryRepository, gradeRepository, lotPortionRepository);
 
         big = grade("A", "Big");
         normal = grade("B", "Normal");
@@ -106,12 +109,23 @@ class DashboardServiceTest {
     }
 
     @Test
-    void openLotsAreListedByGrade() {
-        when(lotRepository.findByStatusIn(List.of(LotStatus.OPEN))).thenReturn(List.of(
-                lot(7L, "B-2026-03", normal, LotStatus.OPEN), lot(6L, "A-2026-05", big, LotStatus.OPEN)));
+    void lotsBeingFilledAreListedByGradeWithTheirFillLevel() {
+        Lot normalLot = lot(7L, "B-2026-03", normal, LotStatus.FILLING);
+        normalLot.setCapacityKg(new BigDecimal("100.00"));
+        Lot bigLot = lot(6L, "A-2026-05", big, LotStatus.FILLING);
+        bigLot.setCapacityKg(new BigDecimal("100.00"));
+        when(lotRepository.findByStatusIn(List.of(LotStatus.FILLING))).thenReturn(List.of(normalLot, bigLot));
+        when(lotPortionRepository.filledKg(6L)).thenReturn(new BigDecimal("72.50"));
+        when(lotPortionRepository.filledKg(7L)).thenReturn(new BigDecimal("10.00"));
 
         DashboardResponse dashboard = service.dashboard(WEDNESDAY);
 
+        assertEquals(List.of(
+                new DashboardResponse.LotBeingFilled(6L, "A-2026-05", "Big", new BigDecimal("72.50"),
+                        new BigDecimal("100.00")),
+                new DashboardResponse.LotBeingFilled(7L, "B-2026-03", "Normal", new BigDecimal("10.00"),
+                        new BigDecimal("100.00"))), dashboard.lotsBeingFilled());
+        // openLots lists the same lots, for screens that do not show the fill level.
         assertEquals(List.of(new DashboardResponse.OpenLot(6L, "A-2026-05", "Big"),
                 new DashboardResponse.OpenLot(7L, "B-2026-03", "Normal")), dashboard.openLots());
     }
@@ -246,6 +260,7 @@ class DashboardServiceTest {
         assertEquals(0, dashboard.totalMembers());
         assertEquals(BigDecimal.ZERO, dashboard.stockKg());
         assertEquals(List.of(), dashboard.openLots());
+        assertEquals(List.of(), dashboard.lotsBeingFilled());
         assertEquals(0, dashboard.owedToMembersRwf());
         assertEquals(0, dashboard.membersAwaitingPayment());
         assertEquals(0, dashboard.lotsReadyToShare());
