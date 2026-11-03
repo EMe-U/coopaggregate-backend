@@ -159,7 +159,8 @@ class IdentityControllerTest {
 
         mockMvc.perform(post("/api/members/verify/start").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.message").value("Identity verification is not available."));
+                .andExpect(jsonPath("$.message").value("Identity verification is not available."))
+                .andExpect(jsonPath("$.code").value("NOT_CONFIGURED"));
     }
 
     @Test
@@ -171,7 +172,8 @@ class IdentityControllerTest {
         mockMvc.perform(post("/api/members/verify/callback").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON).content(CALLBACK_BODY))
                 .andExpect(status().isBadGateway())
-                .andExpect(jsonPath("$.message").value("The identity provider refused the token request."));
+                .andExpect(jsonPath("$.message").value("The identity provider refused the token request."))
+                .andExpect(jsonPath("$.code").value("PROVIDER_FAILED"));
     }
 
     @Test
@@ -182,18 +184,87 @@ class IdentityControllerTest {
         mockMvc.perform(post("/api/members/verify/callback").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON).content(CALLBACK_BODY))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value("This person is already a member."));
+                .andExpect(jsonPath("$.message").value("This person is already a member."))
+                .andExpect(jsonPath("$.code").value("ALREADY_MEMBER"));
     }
 
     @Test
     void anUnknownOrExpiredStateIs400() throws Exception {
         when(authService.currentManager("manager@example.com")).thenReturn(new Manager());
-        when(verificationService.complete(any(), any(), any())).thenThrow(
-                new BadRequestException("Unknown verification. Start the verification again."));
+        when(verificationService.complete(any(), any(), any())).thenThrow(new IdentityRequestException(
+                IdentityErrorCode.VERIFICATION_UNKNOWN, "Unknown verification. Start the verification again."));
 
         mockMvc.perform(post("/api/members/verify/callback").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON).content(CALLBACK_BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VERIFICATION_UNKNOWN"));
+    }
+
+    @Test
+    void eachRefusedCallbackCarriesItsCode() throws Exception {
+        when(authService.currentManager("manager@example.com")).thenReturn(new Manager());
+        String[][] cases = {
+                {"VERIFICATION_EXPIRED", "400"}, {"CLAIMS_MISSING", "400"}, {"PHONE_NOT_RWANDAN", "400"},
+                {"NAME_TOO_LONG", "400"}, {"VERIFICATION_USED", "409"}};
+        for (String[] c : cases) {
+            IdentityErrorCode code = IdentityErrorCode.valueOf(c[0]);
+            RuntimeException error = c[1].equals("409") ? new IdentityConflictException(code, "The message.")
+                    : new IdentityRequestException(code, "The message.");
+            org.mockito.Mockito.doThrow(error).when(verificationService).complete(any(), any(), any());
+
+            mockMvc.perform(post("/api/members/verify/callback").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                            .contentType(MediaType.APPLICATION_JSON).content(CALLBACK_BODY))
+                    .andExpect(status().is(Integer.parseInt(c[1])))
+                    .andExpect(jsonPath("$.message").value("The message."))
+                    .andExpect(jsonPath("$.code").value(c[0]));
+        }
+    }
+
+    @Test
+    void otherErrorsHaveNoCode() throws Exception {
+        when(authService.currentManager("manager@example.com")).thenReturn(new Manager());
+        when(verificationService.complete(any(), any(), any())).thenThrow(new BadRequestException("Plain."));
+
+        mockMvc.perform(post("/api/members/verify/callback").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content(CALLBACK_BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Plain."))
+                .andExpect(jsonPath("$.code").doesNotExist());
+    }
+
+    // --- Coming back from eSignet with an error
+
+    @Test
+    void cancelReportsTheErrorAndReturnsTheReasonAndMessage() throws Exception {
+        Manager manager = new Manager();
+        when(authService.currentManager("manager@example.com")).thenReturn(manager);
+        when(verificationService.cancel("the-state", "essential_consent_denied", manager))
+                .thenReturn(CancelResponse.of(CancelResponse.Reason.CLAIMS_REFUSED));
+
+        mockMvc.perform(post("/api/members/verify/cancel").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"state\": \"the-state\", \"error\": \"essential_consent_denied\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reason").value("CLAIMS_REFUSED"))
+                .andExpect(jsonPath("$.message").value("The member did not allow eSignet to share their name and "
+                        + "phone number, which are needed to register them. Nothing was saved."));
+    }
+
+    @Test
+    void cancelNeedsATokenAndAState() throws Exception {
+        mockMvc.perform(post("/api/members/verify/cancel").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"state\": \"s\", \"error\": \"access_denied\"}"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/members/verify/cancel").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"error\": \"access_denied\"}"))
                 .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(verificationService);
+    }
+
+    @Test
+    void theCancelRequestNeverPrintsTheState() {
+        assertFalse(new VerifyCancelRequest("secret-state", "access_denied").toString().contains("secret"));
     }
 
     @Test

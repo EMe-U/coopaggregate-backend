@@ -5,7 +5,7 @@ package com.coopaggregate.identity;
  * never contains codes, tokens or keys, and is what the client gets. The detail is for the server log only: where
  * the call went and how it failed (see Diagnostics); it is never part of the message or of any response.
  */
-public class IdentityProviderException extends RuntimeException {
+public class IdentityProviderException extends RuntimeException implements com.coopaggregate.error.ErrorCoded {
 
     private final boolean notConfigured;
     private final String detail;
@@ -35,5 +35,10 @@ public class IdentityProviderException extends RuntimeException {
 
     public boolean isNotConfigured() {
         return notConfigured;
+    }
+
+    @Override
+    public String errorCode() {
+        return (notConfigured ? IdentityErrorCode.NOT_CONFIGURED : IdentityErrorCode.PROVIDER_FAILED).name();
     }
 }

@@ -55,4 +55,14 @@ public class IdentityController {
         return verificationService.complete(request.code(), request.state(),
                 authService.currentManager(jwt.getSubject()));
     }
+
+    @PostMapping("/cancel")
+    @Operation(summary = "Report that eSignet sent the member back with an error instead of a code (the member "
+            + "cancelled, did not allow the name and phone, or eSignet failed). Uses the state up, writes the outcome "
+            + "to the change history and returns the reason with a message to show. The same answer whether or not "
+            + "the state is known")
+    public CancelResponse cancel(@Valid @RequestBody VerifyCancelRequest request, @AuthenticationPrincipal Jwt jwt) {
+        return verificationService.cancel(request.state(), request.error(),
+                authService.currentManager(jwt.getSubject()));
+    }
 }

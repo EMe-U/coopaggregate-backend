@@ -21,11 +21,22 @@ final class Diagnostics {
     private static final Set<String> OAUTH_ERRORS = Set.of("invalid_request", "invalid_client", "invalid_grant",
             "unauthorized_client", "unsupported_grant_type", "invalid_scope", "access_denied", "server_error",
             "temporarily_unavailable", "unsupported_response_type", "invalid_token", "insufficient_scope",
-            "invalid_dpop_proof", "use_dpop_nonce");
+            "invalid_dpop_proof", "use_dpop_nonce",
+            // eSignet's own: the member did not allow a claim the cooperative marked essential (the name or phone).
+            "essential_consent_denied");
     private static final int MAX_BODY = 4096;
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private Diagnostics() {
+    }
+
+    /** The error code if it is one of the known ones (trimmed, lower case), otherwise null. Never anything else. */
+    static String knownError(String error) {
+        if (error == null) {
+            return null;
+        }
+        String code = error.trim().toLowerCase(java.util.Locale.ROOT);
+        return OAUTH_ERRORS.contains(code) ? code : null;
     }
 
     /** scheme://host:port/path, without a query string, a fragment or user information. */

@@ -86,15 +86,18 @@ public class IdentityVerificationService {
     public VerifyResultResponse complete(String code, String state, Manager manager) {
         IdentityVerification verification = verificationRepository.findForUpdateByStateHash(sha256(state))
                 .filter(found -> Objects.equals(found.getManager().getId(), manager.getId()))
-                .orElseThrow(() -> new BadRequestException("Unknown verification. Start the verification again."));
+                .orElseThrow(() -> new IdentityRequestException(IdentityErrorCode.VERIFICATION_UNKNOWN,
+                        "Unknown verification. Start the verification again."));
         if (verification.getUsedAt() != null) {
-            throw new IllegalStateException("This verification was already used. Start the verification again.");
+            throw new IdentityConflictException(IdentityErrorCode.VERIFICATION_USED,
+                    "This verification was already used. Start the verification again.");
         }
         Instant now = Instant.now();
         String codeVerifier = verification.getCodeVerifier();
         verification.markUsed(now);
         if (now.isAfter(verification.getExpiresAt())) {
-            throw new BadRequestException("This verification has expired. Start the verification again.");
+            throw new IdentityRequestException(IdentityErrorCode.VERIFICATION_EXPIRED,
+                    "This verification has expired. Start the verification again.");
         }
 
         MosipClaims claims;
@@ -125,16 +128,19 @@ public class IdentityVerificationService {
             missing.add("phone");
         }
         if (!missing.isEmpty()) {
-            refuse(verification, manager, "missing details: " + String.join(", ", missing),
+            refuse(verification, manager, IdentityErrorCode.CLAIMS_MISSING,
+                    "missing details: " + String.join(", ", missing),
                     "eSignet did not share the member's name and phone number. Start the verification again and "
                             + "allow both.");
         }
         if (name.length() > MAX_NAME) {
-            refuse(verification, manager, "the name is longer than " + MAX_NAME + " characters",
+            refuse(verification, manager, IdentityErrorCode.NAME_TOO_LONG,
+                    "the name is longer than " + MAX_NAME + " characters",
                     "The verified name is longer than " + MAX_NAME + " characters, so it cannot be saved.");
         }
         if (!RwandanPhoneNumber.isValid(phone)) {
-            refuse(verification, manager, "the phone is not a Rwandan mobile number",
+            refuse(verification, manager, IdentityErrorCode.PHONE_NOT_RWANDAN,
+                    "the phone is not a Rwandan mobile number",
                     "The verified phone number is not a Rwandan mobile number, so the member cannot be registered "
                             + "with it.");
         }
@@ -182,14 +188,16 @@ public class IdentityVerificationService {
         IdentityVerification verification = verificationRepository.findForUpdateById(verificationId)
                 .filter(found -> Objects.equals(found.getManager().getId(), manager.getId()))
                 .filter(IdentityVerification::isVerified)
-                .orElseThrow(() -> new BadRequestException("Unknown verification. Verify the person again."));
+                .orElseThrow(() -> new IdentityRequestException(IdentityErrorCode.VERIFICATION_UNKNOWN,
+                        "Unknown verification. Verify the person again."));
         if (verification.getMember() != null) {
-            throw new IllegalStateException("This verification was already used to register a member. Verify the "
-                    + "next person again.");
+            throw new IdentityConflictException(IdentityErrorCode.VERIFICATION_USED,
+                    "This verification was already used to register a member. Verify the next person again.");
         }
         if (Instant.now().isAfter(verification.getVerifiedAt().plus(USE_WITHIN))
                 || !verification.hasVerifiedDetails()) {
-            throw new BadRequestException("This verification is more than 30 minutes old. Verify the person again.");
+            throw new IdentityRequestException(IdentityErrorCode.VERIFICATION_EXPIRED,
+                    "This verification is more than 30 minutes old. Verify the person again.");
         }
         return verification;
     }
@@ -204,10 +212,34 @@ public class IdentityVerificationService {
     }
 
     // Records why a verification verified nobody (the reason only, never the values) and refuses it.
-    private void refuse(IdentityVerification verification, Manager manager, String reason, String message) {
+    private void refuse(IdentityVerification verification, Manager manager, IdentityErrorCode code, String reason,
+                        String message) {
         log.warn("Identity verification {} failed: {}", verification.getId(), reason);
         record(AuditAction.IDENTITY_VERIFICATION_FAILED, manager, "Provider " + PROVIDER + ": " + reason);
-        throw new BadRequestException(message);
+        throw new IdentityRequestException(code, message);
+    }
+
+    /**
+     * The member came back from eSignet with an error instead of a code: they cancelled, refused to share the name and
+     * phone, or eSignet failed. The state is used up and the outcome written to the change history. Only a known error
+     * code is recorded; anything else, and eSignet's free-text description, never is. The answer is the same whether
+     * or not the state is known, so it tells nothing about other verifications.
+     */
+    @Transactional
+    public CancelResponse cancel(String state, String error, Manager manager) {
+        String code = Diagnostics.knownError(error);
+        CancelResponse.Reason reason = CancelResponse.reasonFor(code);
+        verificationRepository.findForUpdateByStateHash(sha256(state))
+                .filter(found -> Objects.equals(found.getManager().getId(), manager.getId()))
+                .filter(found -> found.getUsedAt() == null)
+                .ifPresent(verification -> {
+                    verification.markUsed(Instant.now());
+                    log.info("Identity verification {} ended at the provider: {}", verification.getId(),
+                            code == null ? "unknown error" : code);
+                    record(AuditAction.IDENTITY_VERIFICATION_FAILED, manager, "Provider " + PROVIDER + ": "
+                            + reason.history() + (code == null ? "" : " (" + code + ")"));
+                });
+        return CancelResponse.of(reason);
     }
 
     /**

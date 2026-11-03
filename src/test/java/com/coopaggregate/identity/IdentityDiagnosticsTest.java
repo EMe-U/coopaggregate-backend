@@ -67,6 +67,15 @@ import com.nimbusds.jwt.SignedJWT;
 @ExtendWith(OutputCaptureExtension.class)
 class IdentityDiagnosticsTest {
 
+    @Test
+    void onlyKnownErrorCodesAreKept() {
+        assertEquals("essential_consent_denied", Diagnostics.knownError("essential_consent_denied"));
+        assertEquals("access_denied", Diagnostics.knownError(" Access_Denied "));
+        assertNull(Diagnostics.knownError("consent rejected by Uwimana"));
+        assertNull(Diagnostics.knownError(""));
+        assertNull(Diagnostics.knownError(null));
+    }
+
     private static final String BASE = "http://localhost:8080";
     private static final String CODE = "secret-authorization-code-xyz";
     private static final String BODY_SECRET = "secret-body-text";

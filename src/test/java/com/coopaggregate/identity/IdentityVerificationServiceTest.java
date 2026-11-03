@@ -392,6 +392,130 @@ class IdentityVerificationServiceTest {
         }
     }
 
+    // --- Coming back from eSignet with an error
+
+    @Test
+    void aMemberWhoDoesNotAllowTheNameAndPhoneEndsTheVerification() {
+        String state = service.start(manager).state();
+
+        CancelResponse response = service.cancel(state, "essential_consent_denied", manager);
+
+        assertEquals(CancelResponse.Reason.CLAIMS_REFUSED, response.reason());
+        assertEquals("The member did not allow eSignet to share their name and phone number, which are needed to "
+                + "register them. Nothing was saved.", response.message());
+        IdentityVerification verification = stored.get(IdentityVerificationService.sha256(state));
+        assertNotNull(verification.getUsedAt());
+        assertNull(verification.getCodeVerifier());
+        assertEquals(AuditAction.IDENTITY_VERIFICATION_FAILED, lastAudit().getAction());
+        assertEquals("Provider MOSIP: the member did not allow the name and phone (essential_consent_denied)",
+                lastAudit().getDetails());
+        verify(client, never()).fetchClaims(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void aMemberWhoCancelsEndsTheVerification() {
+        String state = service.start(manager).state();
+
+        CancelResponse response = service.cancel(state, " ACCESS_DENIED ", manager);
+
+        assertEquals(CancelResponse.Reason.CANCELLED, response.reason());
+        assertEquals("The member cancelled the verification at eSignet. Nothing was saved.", response.message());
+        assertEquals("Provider MOSIP: cancelled at the provider (access_denied)", lastAudit().getDetails());
+    }
+
+    @Test
+    void anUnknownErrorIsNeverRecordedAsSent(CapturedOutput output) {
+        String state = service.start(manager).state();
+
+        CancelResponse response = service.cancel(state, "<script>Uwimana 0788123456</script>", manager);
+
+        assertEquals(CancelResponse.Reason.PROVIDER_ERROR, response.reason());
+        assertEquals("Provider MOSIP: the provider returned an error", lastAudit().getDetails());
+        assertFalse(output.getAll().contains("script"));
+        assertFalse(output.getAll().contains("Uwimana"));
+        assertFalse(output.getAll().contains(state));
+    }
+
+    @Test
+    void aStateThatWasCancelledCannotBeCompletedAfterwards() {
+        String state = service.start(manager).state();
+        service.cancel(state, "access_denied", manager);
+
+        IdentityConflictException e = assertThrows(IdentityConflictException.class,
+                () -> service.complete("the-code", state, manager));
+
+        assertEquals("VERIFICATION_USED", e.errorCode());
+    }
+
+    @Test
+    void anUnknownUsedOrOtherManagersStateGetsTheSameAnswerAndChangesNothing() {
+        String state = service.start(manager).state();
+        String used = service.start(manager).state();
+        service.cancel(used, "access_denied", manager);
+        org.mockito.Mockito.clearInvocations(auditLogRepository);
+
+        CancelResponse unknown = service.cancel("made-up-state", "access_denied", manager);
+        CancelResponse again = service.cancel(used, "access_denied", manager);
+        CancelResponse other = service.cancel(state, "access_denied", manager(2L));
+
+        assertEquals(CancelResponse.Reason.CANCELLED, unknown.reason());
+        assertEquals(unknown, again);
+        assertEquals(unknown, other);
+        assertNull(stored.get(IdentityVerificationService.sha256(state)).getUsedAt());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    // --- Error codes
+
+    @Test
+    void everyRefusalCarriesItsCode() {
+        String expired = service.start(manager).state();
+        stored.get(IdentityVerificationService.sha256(expired)).setExpiresAt(Instant.now().minusSeconds(1));
+        assertEquals("VERIFICATION_EXPIRED", assertThrows(IdentityRequestException.class,
+                () -> service.complete("the-code", expired, manager)).errorCode());
+        assertEquals("VERIFICATION_UNKNOWN", assertThrows(IdentityRequestException.class,
+                () -> service.complete("the-code", "made-up", manager)).errorCode());
+        assertEquals("VERIFICATION_UNKNOWN", assertThrows(IdentityRequestException.class,
+                () -> service.verifiedDetails(99L, manager)).errorCode());
+
+        when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(
+                new MosipClaims("pairwise-sub", null, "+250788123456"));
+        String missing = service.start(manager).state();
+        assertEquals("CLAIMS_MISSING", assertThrows(IdentityRequestException.class,
+                () -> service.complete("the-code", missing, manager)).errorCode());
+
+        when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(
+                new MosipClaims("pairwise-sub", "Uwimana Claudine", "0711111111"));
+        String phone = service.start(manager).state();
+        assertEquals("PHONE_NOT_RWANDAN", assertThrows(IdentityRequestException.class,
+                () -> service.complete("the-code", phone, manager)).errorCode());
+
+        when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(
+                new MosipClaims("pairwise-sub", "A".repeat(151), "+250788123456"));
+        String name = service.start(manager).state();
+        assertEquals("NAME_TOO_LONG", assertThrows(IdentityRequestException.class,
+                () -> service.complete("the-code", name, manager)).errorCode());
+
+        when(memberRepository.existsByIdentityToken("pairwise-sub")).thenReturn(true);
+        String duplicate = service.start(manager).state();
+        assertEquals("ALREADY_MEMBER", assertThrows(DuplicateIdentityException.class,
+                () -> service.complete("the-code", duplicate, manager)).errorCode());
+    }
+
+    @Test
+    void theRegistrationRefusalsCarryTheirCodes() {
+        Long id = verified();
+        ReflectionTestUtils.setField(stored.values().iterator().next(), "verifiedAt",
+                Instant.now().minus(Duration.ofMinutes(31)));
+        assertEquals("VERIFICATION_EXPIRED", assertThrows(IdentityRequestException.class,
+                () -> service.verifiedDetails(id, manager)).errorCode());
+
+        ReflectionTestUtils.setField(stored.values().iterator().next(), "verifiedAt", Instant.now());
+        service.attach(id, manager, new Member());
+        assertEquals("VERIFICATION_USED", assertThrows(IdentityConflictException.class,
+                () -> service.verifiedDetails(id, manager)).errorCode());
+    }
+
     // --- Registering the member with the verification
 
     @Test

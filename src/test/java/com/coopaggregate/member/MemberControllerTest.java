@@ -254,7 +254,8 @@ class MemberControllerTest {
                                 {"verificationId": 9}
                                 """))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value("Phone number +250788123456 is already used by member M-0003."));
+                .andExpect(jsonPath("$.message").value("Phone number +250788123456 is already used by member M-0003."))
+                .andExpect(jsonPath("$.code").doesNotExist());
     }
 
     @Test
