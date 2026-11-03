@@ -228,7 +228,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
 | POST | `/api/auth/change-password` | JWT | Body `{"currentPassword", "newPassword"}`. Returns `204` (see Authentication) |
-| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, cooperativeName, cooperativePhone, lotSizeKg, lotSizeLocked}` |
+| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, cooperativeName, cooperativePhone, lotSizeKg}` |
 | PUT | `/api/settings` | JWT | Saves the settings (see Settings and change history) |
 | GET | `/api/settings/history?page=0&size=20` | JWT | Change history, newest first (max 100 per page) |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
@@ -314,10 +314,13 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
   (`07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`), stored as `+2507XXXXXXXX`; empty clears it. `minOrderKg` (default 100) must be more than 0.
 - `cooperativeName` (default "Koperative Intagamburuzwa") is shown on the public pages. Optional
   in the request; left out or empty keeps the current name.
-- `lotSizeKg` (default 100, more than 0, at most 100,000, 2 decimals) is the size of every lot (see
-  Lots and losses). Optional in the request; left out keeps the current size. It can only change
-  until the first fixed-size lot exists: after that a different size gets `409`, and
-  `lotSizeLocked` in the response is `true`. Each lot also keeps its own capacity.
+- `lotSizeKg` (default 100, more than 0, at most 100,000, 2 decimals) is the size of new lots (see
+  Lots and losses). Optional in the request; left out keeps the current size. It can change at any
+  time, with `lotSizeReason` (10 to 500 characters, otherwise `400`; ignored when the size does not
+  change). The new size applies only to lots opened afterwards: every lot keeps the capacity it was
+  opened with, so the lot being filled keeps its size and the next lot gets the new one. Each
+  change is written to the change history as `LOT_SIZE_CHANGED`, for example
+  `Lot size: 100 kg -> 50 kg, for new lots only. Reason: …`.
 - `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
   duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
 - Every change to the settings or a grade, every password change, every new code sent for
@@ -664,7 +667,9 @@ follows these rules:
 ### Lots and losses
 
 A lot holds potatoes of **one grade** and has a **fixed size**: the lot size setting when it was
-opened (100 kg by default, see Settings). Nobody opens or closes a lot: the system fills them.
+opened (100 kg by default, see Settings). The setting can change, so lots of one grade can have
+different sizes; the fill level, space left, shortfall, sales and losses always use the lot's own
+capacity. Nobody opens or closes a lot: the system fills them.
 
 - **Only confirmed kg go into lots.** A delivery enters a lot when it becomes `CONFIRMED` (with the
   code, by an SMS reply, by the manager's review, or when a dispute raised before confirmation is
@@ -1067,7 +1072,7 @@ The tests do not need a database. They cover the ledger hash chain, the ledger s
 validation, the member service (create, update, duplicates, not found, activate and
 deactivate), the member endpoints (validation errors, `401` without a token), recording
 deliveries (deduction, no lot until confirmed, idempotency, ledger entry), fixed-size lots (filling
-in confirmation order, splitting a delivery across lots, the lot size and its lock, shortfall and
+in confirmation order, splitting a delivery across lots, changing the lot size, lots of two sizes in one grade, shortfall and
 space left, stock per grade), losses (shared in proportion, exact rounding, sold kg carry none),
 batches, buyers and sales by grade (older lots first, then lots in fill order shared in proportion,
 awkward numbers that must add up exactly to the ledger entries, skipping whole lots with a reason,
@@ -1079,8 +1084,9 @@ attempts, and that nothing personal is logged or stored). What only the real eSi
 
 `LotFillingConcurrencyTest` runs on a real, **empty, local** Postgres and is skipped otherwise:
 many confirmations of one grade at once, and confirmations, sales, losses, reversals, corrections
-and disputes side by side, with no lot over its size, no deadlock, every total matching, every read
-model agreeing with the tables, and the ledger still verifying. It refuses any host but localhost:
+and disputes side by side while the lot size changes, with no lot over its size, no deadlock, every
+total matching, every read model agreeing with the tables, and the ledger still verifying; and lots of
+two sizes in one grade through filling, a sale, a loss, a reversal and the weekly report. It refuses any host but localhost:
 
 ```bash
 ./mvnw test -Dtest=LotFillingConcurrencyTest -Dcoopaggregate.test.postgres-url=jdbc:postgresql://localhost:5432/<empty-db>

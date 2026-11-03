@@ -102,6 +102,8 @@ class LotFillingConcurrencyTest {
     @Autowired
     LedgerService ledgerService;
     @Autowired
+    com.coopaggregate.setting.SettingService settingService;
+    @Autowired
     ManagerRepository managerRepository;
     @Autowired
     JdbcTemplate jdbc;
@@ -183,6 +185,12 @@ class LotFillingConcurrencyTest {
             work.add(() -> saleService.record(new SaleRequest(UUID.randomUUID(), grade, 1L, new BigDecimal("5"),
                     300L, null, List.of(), null, null), manager));
             work.add(() -> recordLoss(grade));
+            // The lot size changes while lots are being filled: each lot keeps the size it was opened with.
+            String size = List.of("100", "75.5", "140").get(i % 3);
+            work.add(() -> {
+                changeLotSize(size, "Changed during the concurrent run");
+                return null;
+            });
 
             // Deliveries already in lots: reversed, corrected, or disputed and then found correct.
             long inLots = confirmed(member, grade);
@@ -212,6 +220,136 @@ class LotFillingConcurrencyTest {
         assertLotsAreConsistent();
         assertTrue(ledgerService.verify().valid(), "the ledger hash chain must still verify");
         assertReadModelsAgreeWithTheData();
+    }
+
+    /**
+     * The lot size changes while a lot is being filled, and changes back: that lot keeps its size, the next lots take
+     * the new one, and sales, losses, reversals, the fill level, the shortfall and the report all use each lot's own
+     * capacity.
+     */
+    @Test
+    void lotsOfTwoSizesInTheSameGradeWorkEverywhere() {
+        long grade = newGrade();
+        long m1 = newMember();
+        long m2 = newMember();
+
+        long d1 = confirmed(m1, grade, "60");
+        changeLotSize("50", "Smaller lots for the new buyer");
+        long d2 = confirmed(m2, grade, "70");
+        long d3 = confirmed(m1, grade, "30");
+
+        // L1 kept its 100 kg; L2 and L3 have 50 kg.
+        List<LotResponse> lots = lotsOf(grade);
+        assertEquals(List.of("100", "50", "50"), lots.stream().map(l -> plain(l.capacityKg())).toList());
+        assertEquals(List.of(LotStatus.FULL, LotStatus.FULL, LotStatus.FILLING),
+                lots.stream().map(LotResponse::status).toList());
+        assertEquals(List.of("60:L1", "40:L1", "30:L2", "20:L2", "10:L3"), portions(lots, d1, d2, d3));
+        LotResponse l3 = lots.get(2);
+        assertEquals("40", plain(l3.spaceLeftKg()));
+        OpenLotResponse open = lotService.findOpenLot(grade).orElseThrow();
+        assertEquals("10 of 50", plain(open.totalKg()) + " of " + plain(open.capacityKg()));
+        DashboardResponse.LotBeingFilled filling = dashboardService.dashboard().lotsBeingFilled().stream()
+                .filter(l -> l.id().equals(l3.id())).findFirst().orElseThrow();
+        assertEquals("10 of 50", plain(filling.filledKg()) + " of " + plain(filling.capacityKg()));
+
+        // A sale of 120 kg: all of L1 (100 kg), then 20 kg of L2 shared 30 : 20.
+        var sale = saleService.record(new SaleRequest(UUID.randomUUID(), grade, 1L, new BigDecimal("120"), 300L,
+                null, List.of(), null, null), manager).sale();
+        assertEquals(List.of("L1:" + d1 + ":60", "L1:" + d2 + ":40", "L2:" + d2 + ":12", "L2:" + d3 + ":8"),
+                sale.batches().stream().map(b -> name(lots, b.lotId()) + ":" + b.deliveryId() + ":" + plain(b.kg()))
+                        .toList());
+        assertEquals(LotStatus.SOLD, lotService.get(lots.get(0).id()).status());
+
+        // A loss of 6 kg in L2 is shared in proportion to what is left there (18 : 12).
+        lossService.record(lots.get(1).id(), new LossRequest(new BigDecimal("6"), LossReason.ROT, null, "Wet sacks"),
+                manager);
+        assertEquals("3.6", plain(portionOf(d2, lots.get(1).id()).lostKg()));
+        assertEquals("2.4", plain(portionOf(d3, lots.get(1).id()).lostKg()));
+        assertEquals("24", plain(lotService.get(lots.get(1).id()).remainingKg()));
+
+        // L3 fills to its 50 kg; reversing that delivery leaves a 40 kg shortfall of 50, not of 100.
+        long d4 = confirmed(m2, grade, "40");
+        assertEquals(LotStatus.FULL, lotService.get(l3.id()).status());
+        deliveryService.reverse(d4, "Recorded twice", manager);
+        LotDetailResponse shortL3 = lotService.get(l3.id());
+        assertEquals("40 of 50", plain(shortL3.shortfallKg()) + " of " + plain(shortL3.capacityKg()));
+
+        // Back to 100 kg: the next lot is 100 kg.
+        changeLotSize("100", "Back to the usual truck size");
+        long d5 = confirmed(m1, grade, "30");
+        List<LotResponse> after = lotsOf(grade);
+        assertEquals(List.of("100", "50", "50", "100"), after.stream().map(l -> plain(l.capacityKg())).toList());
+        assertEquals("70", plain(after.get(3).spaceLeftKg()));
+        assertEquals(List.of(after.get(3).id()),
+                deliveryService.get(d5).lots().stream().map(PortionResponse::lotId).toList());
+
+        // Both changes are in the change history with the old size, the new size and the reason.
+        assertEquals(List.of("Lot size: 50 kg -> 100 kg, for new lots only. Reason: Back to the usual truck size",
+                        "Lot size: 100 kg -> 50 kg, for new lots only. Reason: Smaller lots for the new buyer"),
+                jdbc.queryForList("SELECT details FROM audit_log WHERE action = 'LOT_SIZE_CHANGED' ORDER BY id DESC "
+                        + "LIMIT 2", String.class));
+
+        // The weekly report lists the sale with both lots, and everything still adds up.
+        var line = reportService.weekly(null).sales().sales().stream()
+                .filter(l -> l.code().equals(sale.saleCode())).findFirst().orElseThrow();
+        assertEquals(List.of(lots.get(0).code(), lots.get(1).code()), line.lotCodes().stream().sorted().toList());
+        assertLotsAreConsistent();
+        assertTrue(ledgerService.verify().valid(), "the ledger hash chain must still verify");
+        assertReadModelsAgreeWithTheData();
+    }
+
+    private void changeLotSize(String kg, String reason) {
+        var current = settingService.get();
+        settingService.update(new com.coopaggregate.setting.SettingsRequest(current.smsEnabled(),
+                current.cooperativeEmail(), current.location(), current.minOrderKg(), current.committeeEmails(),
+                current.cooperativeName(), current.cooperativePhone(), new BigDecimal(kg), reason), manager);
+    }
+
+    private List<LotResponse> lotsOf(long grade) {
+        return lotService.list(null, grade, 0, 100).content().stream()
+                .sorted(java.util.Comparator.comparing(LotResponse::id))
+                .toList();
+    }
+
+    private PortionResponse portionOf(long delivery, Long lotId) {
+        return deliveryService.get(delivery).lots().stream().filter(p -> p.lotId().equals(lotId)).findFirst()
+                .orElseThrow();
+    }
+
+    // "kg:L<n>" for each portion of the deliveries, in order, with the grade's lots named L1, L2... by age.
+    private List<String> portions(List<LotResponse> lots, long... deliveries) {
+        List<String> result = new ArrayList<>();
+        for (long id : deliveries) {
+            deliveryService.get(id).lots().forEach(p -> result.add(plain(p.kg()) + ":" + name(lots, p.lotId())));
+        }
+        return result;
+    }
+
+    private static String name(List<LotResponse> lots, Long lotId) {
+        for (int i = 0; i < lots.size(); i++) {
+            if (lots.get(i).id().equals(lotId)) {
+                return "L" + (i + 1);
+            }
+        }
+        return "?";
+    }
+
+    private static String plain(BigDecimal kg) {
+        return kg.stripTrailingZeros().toPlainString();
+    }
+
+    private long confirmed(long member, long grade, String kg) {
+        long id = record(member, grade, new BigDecimal(kg));
+        deliveryService.reviewPending(id, "Checked with the member", manager);
+        return id;
+    }
+
+    // A new grade with no lots yet, so the scenario does not depend on what other tests left.
+    private long newGrade() {
+        long count = jdbc.queryForObject("SELECT COUNT(*) FROM grade", Long.class) + 1;
+        String code = "T" + count;
+        jdbc.update("INSERT INTO grade (code, name, floor_price_per_kg) VALUES (?, ?, 100)", code, "Test " + count);
+        return jdbc.queryForObject("SELECT id FROM grade WHERE code = ?", Long.class, code);
     }
 
     // Every read model on the real data: the JPQL and criteria queries run, and their figures match the tables.

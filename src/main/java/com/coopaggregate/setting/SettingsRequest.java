@@ -42,9 +42,11 @@ public record SettingsRequest(
         @Pattern(regexp = "^$|" + RwandanPhoneNumber.PATTERN,
                 message = "must be a Rwandan mobile number: 07XXXXXXXX, 2507XXXXXXXX or +2507XXXXXXXX")
         String cooperativePhone,
-        // Optional: left out keeps the current size. Can only change until the first fixed-size lot exists.
+        // Optional: left out keeps the current size. A new size applies to lots opened afterwards only.
         @Positive(message = "must be more than 0")
         @DecimalMax(value = "100000", message = "must be at most 100000 kg")
         @Digits(integer = 10, fraction = 2, message = "must have at most 2 decimals")
-        BigDecimal lotSizeKg) {
+        BigDecimal lotSizeKg,
+        // Required (10 to 500 characters) when lotSizeKg changes; written to the change history. Ignored otherwise.
+        String lotSizeReason) {
 }

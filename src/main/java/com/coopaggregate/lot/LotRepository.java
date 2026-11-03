@@ -33,9 +33,6 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
     @Query("SELECT l FROM Lot l WHERE l.grade.id = :gradeId AND l.status = com.coopaggregate.lot.LotStatus.FILLING")
     Optional<Lot> findFillingForUpdate(Long gradeId);
 
-    // Once a fixed-size lot exists, the lot size can no longer change.
-    boolean existsByCapacityKgIsNotNull();
-
     @Query("SELECT l.grade.id FROM Lot l WHERE l.id = :id")
     Optional<Long> findGradeIdById(Long id);
 

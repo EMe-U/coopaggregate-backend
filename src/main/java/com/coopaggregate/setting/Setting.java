@@ -34,7 +34,7 @@ public class Setting {
 
     private BigDecimal minOrderKg = new BigDecimal("100");
 
-    // The capacity of each new lot. Only editable until the first fixed-size lot exists.
+    // The capacity of each lot opened from now on. Lots already opened keep their own capacity.
     private BigDecimal lotSizeKg = new BigDecimal("100");
 
     public Long getId() {

@@ -10,8 +10,9 @@ examples, change the last digits if a step says "already recorded" (`200` instea
 ## 0. Before you start
 
 1. `POST /api/auth/login` with the manager's email and password, then **Authorize** with the token.
-2. `GET /api/settings`: `lotSizeKg` is `100`. `lotSizeLocked` is `false` until the first fixed-size
-   lot exists, `true` after that.
+2. `GET /api/settings`: `lotSizeKg` is `100`. If not, set it with `PUT /api/settings` (your current
+   settings plus `"lotSizeKg": 100, "lotSizeReason": "Swagger test of fixed-size lots"`); only lots
+   opened afterwards get that size.
 3. Pick a grade with no stock: `GET /api/lots/stock` must not list it, and
    `GET /api/lots/open?gradeId=<grade>` must answer `204` (no lot being filled). Below it is
    `<grade>`. If every grade has stock, the steps still work, but the sale in step 3 first takes
@@ -71,7 +72,6 @@ Expect:
 `L1` and `L2` are the next lot codes of the grade (for example `A-2026-03` and `A-2026-04`).
 `GET /api/lots/<L1 id>`: status `FULL`, `deliveredKg` 100, `shortfallKg` 0, members `<m1>` 60 kg and
 `<m2>` 40 kg. `GET /api/lots/<L2 id>`: status `FILLING`, `deliveredKg` 80, `spaceLeftKg` 20.
-`GET /api/settings`: `lotSizeLocked` is now `true`.
 
 ## 3. Sell 130 kg: lot L1 whole, then 30 kg of L2 shared in proportion
 

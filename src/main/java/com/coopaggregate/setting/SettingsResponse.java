@@ -4,8 +4,8 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * deductionPerKg is shown for information; it is not changed through the settings page. lotSizeLocked is true once the
- * first fixed-size lot exists: from then on the lot size can no longer change.
+ * deductionPerKg is shown for information; it is not changed through the settings page. lotSizeKg is the size of lots
+ * opened from now on; each lot keeps the capacity it was opened with.
  */
 public record SettingsResponse(
         boolean smsEnabled,
@@ -16,15 +16,13 @@ public record SettingsResponse(
         Long deductionPerKg,
         String cooperativeName,
         String cooperativePhone,
-        BigDecimal lotSizeKg,
-        boolean lotSizeLocked) {
+        BigDecimal lotSizeKg) {
 
-    public static SettingsResponse from(Setting setting, boolean lotSizeLocked) {
+    public static SettingsResponse from(Setting setting) {
         return new SettingsResponse(setting.isSmsEnabled(), setting.getCooperativeEmail(), setting.getLocation(),
                 setting.getMinOrderKg(), setting.getCommitteeEmailList(), setting.getDeductionPerKg(),
                 setting.getCooperativeName(),
                 setting.getCooperativePhone(),
-                setting.getLotSizeKg(),
-                lotSizeLocked);
+                setting.getLotSizeKg());
     }
 }

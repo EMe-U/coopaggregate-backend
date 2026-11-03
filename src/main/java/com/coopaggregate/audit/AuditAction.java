@@ -19,5 +19,7 @@ public enum AuditAction {
     BUYER_REQUEST_STATUS_CHANGED,
     BUYER_REQUEST_CONVERTED,
     // A sale passed over the oldest batches. The details hold the sale code, the receipt codes and the reason.
-    SALE_FIFO_SKIPPED
+    SALE_FIFO_SKIPPED,
+    // The lot size setting changed. The details hold the old and new size and the reason.
+    LOT_SIZE_CHANGED
 }
