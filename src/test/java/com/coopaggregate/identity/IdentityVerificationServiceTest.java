@@ -549,12 +549,12 @@ class IdentityVerificationServiceTest {
     @Test
     void clearExpiredDropsOldVerifiersAndFingerprints() {
         when(verificationRepository.clearUnusedVerifiers(any(Instant.class))).thenReturn(2);
-        when(verificationRepository.clearOldFingerprints(any(Instant.class))).thenReturn(1);
+        when(verificationRepository.clearOldDetails(any(Instant.class))).thenReturn(1);
 
         assertEquals(3, service.clearExpired());
 
         ArgumentCaptor<Instant> cutoff = ArgumentCaptor.forClass(Instant.class);
-        verify(verificationRepository).clearOldFingerprints(cutoff.capture());
+        verify(verificationRepository).clearOldDetails(cutoff.capture());
         assertTrue(Duration.between(cutoff.getValue(), Instant.now()).toMinutes() >= 29);
     }
 

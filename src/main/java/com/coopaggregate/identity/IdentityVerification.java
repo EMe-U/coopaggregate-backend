@@ -61,6 +61,11 @@ public class IdentityVerification {
     // Registrations refused because the details did not match. The verification is spent after three.
     private int attempts;
 
+    // The verified name and phone (+2507XXXXXXXX) from the provider. Kept only until the member is saved or for at most
+    // 30 minutes, then cleared. Never logged, never in the change history.
+    private String verifiedName;
+    private String verifiedPhone;
+
     // The member registered with this verification. Set once, so one verification gives one member.
     @ManyToOne(fetch = FetchType.LAZY)
     private Member member;
@@ -185,5 +190,32 @@ public class IdentityVerification {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public String getVerifiedName() {
+        return verifiedName;
+    }
+
+    public String getVerifiedPhone() {
+        return verifiedPhone;
+    }
+
+    public void setVerifiedDetails(String name, String phone) {
+        this.verifiedName = name;
+        this.verifiedPhone = phone;
+    }
+
+    public boolean hasVerifiedDetails() {
+        return verifiedName != null && verifiedPhone != null;
+    }
+
+    public void clearVerifiedDetails() {
+        setVerifiedDetails(null, null);
+    }
+
+    // Never the verified details, the state or the verifier.
+    @Override
+    public String toString() {
+        return "IdentityVerification[id=" + id + "]";
     }
 }

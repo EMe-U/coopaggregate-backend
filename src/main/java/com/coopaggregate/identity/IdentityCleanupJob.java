@@ -5,7 +5,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** Clears the PKCE verifiers and claim fingerprints that are no longer needed (see IdentityVerificationService). */
+/**
+ * Clears the PKCE verifiers and verified details that are no longer needed (see IdentityVerificationService). Runs every
+ * minute, so verified details never stay more than about 31 minutes.
+ */
 @Component
 public class IdentityCleanupJob {
 
@@ -17,7 +20,7 @@ public class IdentityCleanupJob {
         this.verificationService = verificationService;
     }
 
-    @Scheduled(fixedDelayString = "${app.identity.cleanup-delay-ms:600000}", initialDelay = 60_000)
+    @Scheduled(fixedDelayString = "${app.identity.cleanup-delay-ms:60000}", initialDelay = 60_000)
     public void run() {
         try {
             int cleaned = verificationService.clearExpired();

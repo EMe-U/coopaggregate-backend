@@ -237,7 +237,7 @@ public class IdentityVerificationService {
     public int clearExpired() {
         Instant now = Instant.now();
         return verificationRepository.clearUnusedVerifiers(now)
-                + verificationRepository.clearOldFingerprints(now.minus(USE_WITHIN));
+                + verificationRepository.clearOldDetails(now.minus(USE_WITHIN));
     }
 
     // No member is linked yet and the details hold no personal data: only the provider, the method and field names.

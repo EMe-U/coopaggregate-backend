@@ -26,9 +26,10 @@ public interface IdentityVerificationRepository extends JpaRepository<IdentityVe
             + "where v.codeVerifier is not null and v.expiresAt < :now")
     int clearUnusedVerifiers(@Param("now") Instant now);
 
-    // The claim fingerprints of a verification that nobody registered a member with in time.
+    // The verified details (and any old fingerprints) of a verification nobody registered a member with in time.
     @Modifying
-    @Query("update IdentityVerification v set v.salt = null, v.nameHash = null, v.birthHash = null, "
-            + "v.phoneHash = null where v.salt is not null and v.verifiedAt < :cutoff")
-    int clearOldFingerprints(@Param("cutoff") Instant cutoff);
+    @Query("update IdentityVerification v set v.verifiedName = null, v.verifiedPhone = null, v.salt = null, "
+            + "v.nameHash = null, v.birthHash = null, v.phoneHash = null "
+            + "where (v.verifiedName is not null or v.salt is not null) and v.verifiedAt < :cutoff")
+    int clearOldDetails(@Param("cutoff") Instant cutoff);
 }
