@@ -204,6 +204,20 @@ ERD: see `docs/erd.png`.
 - **V35** gives each `sms_log` row a `message_type`: `DELIVERY_CODE` (every existing row) or
   `RECEIPT`, and makes the unique index one message per delivery, type and send number. No row is
   changed. Run it before the new build starts: the new build reads and writes the column.
+- **V36** brings fixed-size lots (see Lots and losses). It adds:
+  - `setting.lot_size_kg` (default 100, more than 0);
+  - `lot.capacity_kg` and the statuses `FILLING` and `FULL`, with at most one `FILLING` lot per grade;
+  - `delivery.grade_id`, and makes `delivery.lot_id` optional (only deliveries from before have one);
+  - the table `lot_portion` (the kg of one delivery in one lot, with sold, lost and a generated
+    remaining kg);
+  - `lot_portion_id` on `sale_allocation` and `loss_allocation`, and a sale unique per portion instead
+    of per delivery.
+
+  It fills in every delivery's grade from its lot (the only row update) and gives every existing
+  delivery one portion in the lot it is in, with the same kg. Existing lots keep their size and
+  status and get no new kg. No ledger row is touched. A check at the end compares grades, portions
+  and lot totals and rolls the whole migration back on any difference. Run it before the new build
+  starts. `docs/fixed-lots-checks.sql` checks the result afterwards (read only).
 - Applied migrations are never edited; a change is a new migration.
 
 ## API endpoints
@@ -214,7 +228,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
 | POST | `/api/auth/change-password` | JWT | Body `{"currentPassword", "newPassword"}`. Returns `204` (see Authentication) |
-| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, cooperativeName, cooperativePhone}` |
+| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, cooperativeName, cooperativePhone, lotSizeKg, lotSizeLocked}` |
 | PUT | `/api/settings` | JWT | Saves the settings (see Settings and change history) |
 | GET | `/api/settings/history?page=0&size=20` | JWT | Change history, newest first (max 100 per page) |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
@@ -232,12 +246,11 @@ ERD: see `docs/erd.png`.
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
 | GET | `/api/grades?includeInactive=false` | JWT | Grades `{id, code, name, nameRw, active, floorPricePerKg, description, sizeInfo, packaging}`, sorted by code. Only active ones unless `includeInactive=true`. `floorPricePerKg` is `null` when not set |
 | PUT | `/api/grades/{id}` | JWT | Body `{"name", "nameRw", "active", "floorPricePerKg", "description", "sizeInfo", "packaging"}`. Edits a grade. Grades A, B and C are fixed: they cannot be created or deleted |
-| GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold, remaining and pending-confirmation kg |
-| GET | `/api/lots/{id}` | JWT | One lot, with the kilograms each member delivered |
+| GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with capacity, space left or shortfall, and kg in the lot, lost, sold, remaining and pending confirmation |
+| GET | `/api/lots/{id}` | JWT | One lot, with each member's kg in it and how much of it was sold, lost and is left |
 | GET | `/api/lots/stock` | JWT | Stock: kg left in total and per grade, read from the batches and split into sellable, waiting and disputed kg; delivered, sold, lost and pending-confirmation kg, today's deliveries and lot counts |
-| GET | `/api/lots/open?gradeId=` | JWT | Open lot of the grade `{id, code, gradeName, totalKg}`. `204` if none is open yet, `404` if the grade does not exist |
-| PATCH | `/api/lots/{id}/close` | JWT | Closes an open lot (optional: sales do not need it). The next delivery of that grade starts a new lot |
-| POST | `/api/lots/{id}/losses` | JWT | Records a loss on an open or closed lot, returns `201`. The member of the lot's oldest batches bears it |
+| GET | `/api/lots/open?gradeId=` | JWT | The lot being filled for the grade `{id, code, gradeName, totalKg, capacityKg}`. `204` if none yet, `404` if the grade does not exist |
+| POST | `/api/lots/{id}/losses` | JWT | Records a loss on a lot that still holds potatoes, returns `201`. Shared across the lot's members in proportion to their kg left |
 | GET | `/api/lots/{id}/losses` | JWT | Losses of a lot, newest first |
 | GET | `/api/buyers?search=` | JWT | Buyers sorted by name. `search` matches name or phone |
 | POST | `/api/buyers` | JWT | Adds a buyer, returns `201` |
@@ -249,10 +262,10 @@ ERD: see `docs/erd.png`.
 | GET | `/api/buyer-requests/{id}` | JWT | One request with the buyer's contact details and how to contact them |
 | PATCH | `/api/buyer-requests/{id}/status` | JWT | Body `{"status", "publicMessage"}` (message optional). Changes the status; kept in the change history |
 | POST | `/api/buyer-requests/{id}/buyer` | JWT | Turns the request into a buyer record, or links it to the buyer with the same phone |
-| POST | `/api/sales` | JWT | Records a sale of a grade from the oldest sellable batches and credits each batch's member (see Sales). `201` when new, `200` when the same `clientUuid` was already recorded |
+| POST | `/api/sales` | JWT | Records a sale of a grade, first in first out by lot, and credits each portion's member (see Sales). `201` when new, `200` when the same `clientUuid` was already recorded |
 | POST | `/api/sales/orders` | JWT | One buyer order for several grades (each once), one sale per grade. Same rules and status codes |
-| GET | `/api/grades/{id}/sale-preview?quantityKg=&pricePerKg=&skip=` | JWT | The batches a sale would use and what each member would be credited. Saves nothing |
-| GET | `/api/grades/{id}/batches?page=0&size=20` | JWT | The grade's batches that still have kg, oldest first (the order sales take them in) |
+| GET | `/api/grades/{id}/sale-preview?quantityKg=&pricePerKg=&skipLots=` | JWT | The portions a sale would use and what each member would be credited. Saves nothing |
+| GET | `/api/grades/{id}/batches?page=0&size=20` | JWT | The grade's batches that still have kg, oldest delivery first, each with its lots |
 | GET | `/api/members/{id}/batches?status=all&page=0&size=20` | JWT | A member's batches, newest first, with kg and money earned per batch. `status=unsold` keeps batches with kg left |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
@@ -264,7 +277,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/payments/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a payment; the member is owed the amount again |
 | GET | `/api/members/{id}/statement` | JWT | A member's sale credits, shares, deductions, payments and amount owed |
 | POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
-| GET | `/api/deliveries?memberId=&lotId=&from=&to=&includeReversed=false&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional. Reversed deliveries only with `includeReversed=true` |
+| GET | `/api/deliveries?memberId=&lotId=&from=&to=&includeReversed=false&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page), each with its `lots`. All filters are optional; `lotId` finds every delivery with kg in that lot. Reversed deliveries only with `includeReversed=true` |
 | GET | `/api/deliveries/{id}` | JWT | One delivery, also when it was reversed |
 | POST | `/api/deliveries/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a delivery recorded by mistake |
 | POST | `/api/deliveries/{id}/correct` | JWT | Body `{"reason", "memberId", "gradeId", "quantityKg"}`. Replaces a wrong delivery, returns the corrected one with `201` |
@@ -277,7 +290,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/reports/weekly?weekStart=2026-10-19` | JWT | Weekly report: deliveries, stock, sales, money and confirmations (see Weekly report) |
 | GET | `/api/reports/weeks` | JWT | The weeks of the last 52 with any activity, newest first: `[{weekStart, weekEnd}]` |
 | POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
-| GET | `/api/dashboard` | JWT | Numbers for the home screen: stock split into sellable, waiting and disputed kg, grades with sellable kg, disputed deliveries and confirmations pending for more than 48 hours |
+| GET | `/api/dashboard` | JWT | Numbers for the home screen: stock split into sellable, waiting and disputed kg, grades with sellable kg, the lots being filled with their fill level (`lotsBeingFilled`), disputed deliveries and confirmations pending for more than 48 hours |
 
 More endpoints coming soon.
 
@@ -301,6 +314,10 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
   (`07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`), stored as `+2507XXXXXXXX`; empty clears it. `minOrderKg` (default 100) must be more than 0.
 - `cooperativeName` (default "Koperative Intagamburuzwa") is shown on the public pages. Optional
   in the request; left out or empty keeps the current name.
+- `lotSizeKg` (default 100, more than 0, at most 100,000, 2 decimals) is the size of every lot (see
+  Lots and losses). Optional in the request; left out keeps the current size. It can only change
+  until the first fixed-size lot exists: after that a different size gets `409`, and
+  `lotSizeLocked` in the response is `true`. Each lot also keeps its own capacity.
 - `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
   duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
 - Every change to the settings or a grade, every password change, every new code sent for
@@ -473,12 +490,20 @@ anywhere: lot kilograms, stock, the dashboard, sharing, member statements and ba
 - **Delivery:** `POST /api/deliveries/{id}/reverse`. Only while none of its kg are sold,
   because its member was already credited for sold kg (otherwise `409`). Other deliveries of a
   lot that has sales can still be reversed, but not those of a `SHARED` lot. Also `409` when the
-  delivery is already reversed, or when the lot's recorded losses would leave it with less than
-  0 kg.
+  delivery is already reversed, or when its lost kg would not fit in what the rest of its lot has
+  left ("would have less than 0 kg left").
+- **A delivery that is in lots** leaves them: its lost kg are handed to the other portions of
+  each lot, in proportion to what each has left, so the lot's losses stay the same. A lot still
+  being filled gets the space back. A `FULL` lot keeps the shortfall (for example capacity 100,
+  80 kg in it) and is never filled again; it becomes `SOLD` if nothing is left in it. Its
+  portions stay as a record but no longer count. A waiting delivery is in no lot, so nothing
+  else changes.
 - **Correction:** `POST /api/deliveries/{id}/correct` reverses the delivery and saves the
-  corrected one in the same transaction: new receipt code, the open lot of its grade, the
-  same `deliveredAt`, its own `DELIVERY` ledger entry. The two are linked by `correctsId`
-  (on the new delivery) and `correctedById` (on the original). Same rules as a reversal.
+  corrected one in the same transaction: new receipt code, the same `deliveredAt`, its own
+  `DELIVERY` ledger entry. Like any new delivery it waits for the member's confirmation and only
+  then goes into a lot. The two are linked by `correctsId` (on the new delivery) and
+  `correctedById` (on the original). Same rules as a reversal. A correction to another grade
+  locks both grades, in id order.
 - **Payment:** `POST /api/payments/{id}/reverse`. The member's balance goes back up.
 - **Ledger:** `POST /api/ledger/{id}/reverse` does the same as the endpoints above for
   `DELIVERY` and `PAYMENT` entries. `SHARE`, `SALE`, `SALE_CREDIT` and `LOSS` entries cannot
@@ -591,16 +616,15 @@ Request body for `POST /api/deliveries`:
 | `quantityKg` | Required. More than 0, at most 5000, at most 2 decimals |
 | `deliveredAt` | Optional. When the delivery happened, for example the time on the device when it was recorded offline. At most 5 minutes in the future and at most 7 days in the past, otherwise `400`. Defaults to the time the server receives the delivery |
 
-- The response contains the receipt code, member, grade, lot, quantity, deduction,
-  `deliveredAt` (when the delivery happened) and `syncedAt` (when the server saved it).
+- The response contains the receipt code, member, grade, quantity, deduction, `deliveredAt`
+  (when the delivery happened), `syncedAt` (when the server saved it) and `lots`: one entry per lot
+  the delivery is in, `{lotId, lotCode, lotStatus, kg, soldKg, lostKg, remainingKg}`, oldest lot
+  first. `lots` is empty while the delivery waits for confirmation. `lotId` and `lotCode` are the
+  delivery's own lot (from before fixed-size lots) or its first lot.
 - **Deduction:** `quantityKg` x `deduction_per_kg` from the `setting` table (5 RWF),
   rounded half up to whole RWF. For example 12.25 kg gives 61 RWF.
-- **Lot:** the delivery goes to the open lot of its grade. If the grade has no open lot, a
-  new one is opened. Lot codes are the grade code, the year the lot was opened (Kigali
-  time) and the grade's lot number in that year: `A-2026-01`, `A-2026-02`, `B-2026-01`.
-  A grade can only have one open lot at a time (enforced by the database).
-  `GET /api/lots/open?gradeId=` shows it with the kilograms delivered so far, or returns
-  `204` when no lot is open yet (the next delivery of that grade opens one).
+- **Lot:** a new delivery is in no lot. It goes into the lots of its grade when it is
+  confirmed (see Lots and losses).
 - **Receipt code:** `RCT-` and 4 characters without look-alikes (no 0, O, 1, I or L), for
   example `RCT-7K2Q`.
 - **Same `clientUuid` again:** the existing delivery is returned with `200` and nothing new
@@ -624,11 +648,9 @@ follows these rules:
 - **Sending again is safe:** the same `clientUuid` always returns the delivery that was
   saved the first time, with `200`. It is saved once and adds one ledger entry, however
   often it is sent. This check comes first, so a re-sent delivery still gets `200` after the
-  7-day window, after its member was deactivated, or after its lot was closed.
-- **Lot at sync time:** the lot is chosen when the delivery reaches the server: the open
-  lot of its grade at that moment. If the lot that was open when the delivery was recorded
-  has been closed in the meantime, the delivery goes to a new lot, so the kilograms of a
-  closed lot do not change.
+  7-day window or after its member was deactivated.
+- **Lot:** an offline delivery is in no lot either. It goes into the lot being filled when it is
+  confirmed, whenever that is.
 - **Errors that will not go away on retry** return a `4xx` status with a message, never
   `500`, so the app can show the message and stop retrying:
   - `400`: invalid body (missing fields, malformed `clientUuid`, quantity out of range,
@@ -641,41 +663,58 @@ follows these rules:
 
 ### Lots and losses
 
-A lot groups the deliveries of one grade. Sales do not use lots: they take kg by grade from the
-oldest batches (see Sales), so a lot does not have to be closed to be sold. Closing a lot is
-optional, and a lot becomes `SOLD` by itself when nothing is left in it, closed or not. `SHARED`
-only remains for lots shared before sales were paid by batch.
+A lot holds potatoes of **one grade** and has a **fixed size**: the lot size setting when it was
+opened (100 kg by default, see Settings). Nobody opens or closes a lot: the system fills them.
 
-- **Quantities** are always computed from the database, never stored:
-  `remainingKg = deliveredKg - lostKg - soldKg`. `soldKg` is what sales took from the lot's
-  batches. `saleAmountRwf` is the money of those kg: sales made from the lot before sales by grade,
-  plus what sales by grade credited for its batches. `memberCount` is the number of members who
-  delivered to it. `createdAt` and
-  `closedAt` are the dates the lot was opened and closed.
-- `pendingConfirmationKg` is the part of `deliveredKg` from deliveries that are still
-  `PENDING` (not reversed). It is shown next to the totals and does **not** change them:
-  the potatoes are physically in the store either way. A lot with pending kg cannot be
-  shared yet (see Sharing).
-- **Close:** only an `OPEN` lot can be closed (otherwise `409`). Closing waits for any
-  delivery of the same grade that is being recorded, so no delivery ends up in a lot
-  after it closed.
+- **Only confirmed kg go into lots.** A delivery enters a lot when it becomes `CONFIRMED` (with the
+  code, by an SMS reply, by the manager's review, or when a dispute raised before confirmation is
+  resolved). Waiting deliveries, and deliveries disputed before they were confirmed, are in no lot.
+- **Filling:** each grade has at most one lot being filled (`FILLING`). A confirmed delivery fills
+  it up to its capacity; the lot becomes `FULL` and the rest of the delivery starts the next lot.
+  One delivery can be split across two or more lots, and deliveries of different members share a
+  lot. Lots are filled in the order deliveries are **confirmed**: a delivery confirmed late goes into
+  the lot being filled then, and nothing ever moves between lots afterwards.
+- **Statuses:** `FILLING`, `FULL`, and `SOLD` once a full lot has nothing left. Lots from before
+  fixed-size lots keep their size and status (`OPEN`, `CLOSED`, `SOLD`, `SHARED`), have no capacity
+  (`olderLot: true`) and get no new kg; their kg are sold first (see Sales).
+- **Lot codes** are the grade code, the year the lot was opened (Kigali time) and the grade's lot
+  number in that year: `A-2026-01`, `A-2026-02`, `B-2026-01`. They continue after the older lots.
+- `GET /api/lots/open?gradeId=` shows the lot being filled with `totalKg` (kg in it) and
+  `capacityKg`, or `204` when there is none (the next confirmed delivery of that grade starts one).
+- **Quantities** are always computed from the lot's portions (the part of each delivery in the lot),
+  never stored: `remainingKg = deliveredKg - lostKg - soldKg`, where `deliveredKg` is the kg in the
+  lot. `capacityKg` is the lot's size; `spaceLeftKg` what a `FILLING` lot can still take;
+  `shortfallKg` what reversals took out of a `FULL` or `SOLD` lot (it is never refilled).
+  `saleAmountRwf` is the money of the kg sold from it. `memberCount` is the number of members with
+  kg in it. `createdAt` and `closedAt` are the dates the lot was opened and became full.
+- `GET /api/lots/{id}` lists `members`: each member's `kg` in the lot and how much of it was
+  `soldKg`, `lostKg` and is `remainingKg`.
+- `pendingConfirmationKg` is only for older lots, which can still hold kg of deliveries that are
+  `PENDING`. It is shown next to the totals and does **not** change them.
 - **Stock:** `GET /api/lots/stock` reads the kg left per grade from the batches, whatever their
   lot. `totalRemainingKg` is split into `totalSellableKg` (confirmed), `totalWaitingKg` (pending
   confirmation) and `totalDisputedKg`; `byGrade` lists every grade with kg left with `remainingKg`,
   `sellableKg`, `waitingKg` and `disputedKg`. Only sellable kg can be sold. `totalDeliveredKg`,
   `totalSoldKg` and `totalLostKg` cover all lots (so delivered - lost - sold = remaining),
   `addedTodayKg` and `deliveriesToday`
-  (deliveries whose time falls on today in Kigali), `openLots` / `closedLots`, and
+  (deliveries whose time falls on today in Kigali), `openLots` (lots not full yet: `FILLING`, and
+  older `OPEN` lots) / `closedLots` (full lots not sold out: `FULL`, and older `CLOSED` lots), and
   `pendingConfirmationKg` (all `PENDING`, not reversed deliveries; already included in the
-  totals).
-- **Losses:** body `{"quantityKg", "reason", "recordedAt", "notes"}`. `reason` is `ROT`,
-  `DRYING`, `DAMAGE`, `THEFT` or `OTHER`; `recordedAt` (a date) and `notes` are optional. Allowed on
-  open and closed lots (otherwise `409`). `quantityKg` must be more than 0 and at most the
-  lot's remaining kg (otherwise `400`). Each loss adds a `LOSS` ledger entry.
-- **Who bears a loss:** losses are recorded per lot. A loss takes its kg from the lot's oldest
-  batches first (by delivery time, then id), whatever their confirmation status, and the member of
-  those batches bears it: they earn nothing on the lost kg and pay no deduction on them. The
-  cooperative bears nothing.
+  totals). The stock reads each delivery's own grade, so waiting kg (in no lot) are counted too.
+- **Losses** are for losses after intake; at intake the manager sorts the potatoes and records only
+  the good kg. Body `{"quantityKg", "reason", "recordedAt", "notes"}`. `reason` is `ROT`, `DRYING`,
+  `DAMAGE`, `THEFT` or `OTHER`; `recordedAt` (a date) and `notes` are optional. Allowed on lots that
+  still hold potatoes: `FILLING`, `FULL`, and older `OPEN` and `CLOSED` lots (otherwise `409`).
+  `quantityKg` must be more than 0 and at most the lot's **confirmed** kg left (otherwise `400`
+  "Only X kg of confirmed potatoes remain in lot Y."). Each loss adds one `LOSS` ledger entry.
+- **Who bears a loss:** the members whose potatoes are in the lot, never the cooperative. A loss is
+  shared across the lot's portions in proportion to what each has **left**: kg already sold never
+  carry a loss, and neither do kg still waiting for confirmation; disputed kg do, because they are
+  still in the lot. The split is in hundredths of a kg: each portion gets its share rounded down,
+  and the hundredths still missing go to the largest remainders, then to the older delivery. Each
+  part is a `loss_allocation` of that portion. The members earn nothing on lost kg and pay no
+  deduction on them. Example: 10 kg lost from a lot where three members have 18.75, 31.25 and 20 kg
+  left gives 2.68, 4.46 and 2.86 kg.
 
 ### Buyers
 
@@ -756,20 +795,30 @@ open; everything else needs the manager's token. CORS allows only the frontend (
 ### Batches
 
 Every delivery is a batch for its member: `receivedKg`, `soldKg`, `lostKg` and `remainingKg`
-(received - sold - lost, computed by the database). Reversed deliveries are not batches.
+(received - sold - lost, computed by the database), the sums of its portions. Each batch also has
+`lots`, one entry per lot it is in (empty while it waits for confirmation). Reversed deliveries are
+not batches.
 
 - `GET /api/members/{id}/batches?status=all|unsold&page=0&size=20`: the member's batches, newest
   first, with the kg `totals` and the money `earnings` over all of them. Each batch has `grossRwf`,
   `deductionRwf`, `earnedRwf` (what sales credited for its sold kg) and `payment`: `NOTHING_SOLD`,
   `BATCH`, or, only for sales made before sales by grade, `LOT_SHARE` or `AWAITING_SETTLEMENT`.
-- `GET /api/grades/{id}/batches`: the grade's batches that still have kg, oldest first.
+- `GET /api/grades/{id}/batches`: the grade's batches that still have kg, oldest delivery first.
 
 ### Sales
 
-Sales are made by **grade**, first come first served: the kg are taken from the oldest
-**sellable** batches of the grade, by delivery time and then id, whatever their lot. Sellable
-means confirmed, not reversed and with kg left; `PENDING` and `DISPUTED` batches are skipped. No lot
-has to be closed first.
+Sales are made by **grade**, first in, first out **by lot**:
+
+1. The lots from before fixed-size lots first, oldest delivery first (delivery time, then id), as
+   before.
+2. Then the fixed-size lots in the order they were filled. A sale may take part of a lot, and any
+   quantity is allowed: 150 kg from 100 kg lots is the first lot whole and half of the next. A lot
+   still being filled can be sold from and keeps filling.
+
+Inside a fixed-size lot the kg are shared across its portions **in proportion to what each has
+left** (the lot is one pool), in hundredths of a kg with the largest remainder first and ties to
+the older delivery. Only confirmed kg are sold: kg disputed after they went into a lot stay in it
+but are held back until the dispute is settled.
 
 Request body for `POST /api/sales`:
 
@@ -781,7 +830,7 @@ Request body for `POST /api/sales`:
   "quantityKg": 150,
   "pricePerKg": 300,
   "soldAt": "2026-10-09",
-  "skipDeliveryIds": [12, 15],
+  "skipLotIds": [12, 15],
   "skipReason": "The buyer wants the newer potatoes"
 }
 ```
@@ -792,35 +841,45 @@ Request body for `POST /api/sales`:
 - With fewer sellable kg than asked, the answer is `400` "Only 250.00 kg of Big can be sold now, but
   300.00 kg were asked for. 40.00 kg are waiting for their members to confirm them." and nothing is
   saved.
-- **Preview:** `GET /api/grades/{id}/sale-preview?quantityKg=150&pricePerKg=300&skip=12,15` shows
-  the batches the sale would use and what each member would be credited, and saves nothing. The sale
-  works it out again under locks when it is recorded, so it can differ if stock changed in between.
-- **Skipping the oldest batches** is allowed with `skipDeliveryIds` and a `skipReason` of 10 to
-  500 characters (otherwise `400`). A batch the sale would not reach cannot be skipped. Every skip
-  is written to the audit log as `SALE_FIFO_SKIPPED` (sale code, receipt codes, reason).
-- **Credits:** each batch used credits its member. `grossRwf` is the batch's part of the sale
-  amount (by kg; the rounding remainder goes to the batch with the most kg, so the parts add up to
-  exactly the total). `deductionRwf` is 5 RWF per **sold** kg (the rate from Settings, never more
-  than the gross). `netRwf = grossRwf - deductionRwf` is added to what the member is owed. Example:
-  150 kg at 300 RWF, 100 kg from Alice's batch and 50 kg from Bosco's: Alice gets 30,000 - 500 =
-  29,500 RWF and Bosco 15,000 - 250 = 14,750 RWF.
+- **Preview:** `GET /api/grades/{id}/sale-preview?quantityKg=150&pricePerKg=300&skipLots=12,15`
+  shows the portions the sale would use (`batches`, one line per portion, with `lotPortionId`: a
+  delivery split across two lots can appear twice) and what each member would be credited, and
+  saves nothing. `skipped` lists the skipped lots `{lotId, lotCode, sellableKg}`. The sale works it
+  out again under locks when it is recorded, so it can differ if stock changed in between.
+- **Skipping whole lots** is allowed with `skipLotIds` and a `skipReason` of 10 to 500 characters
+  (otherwise `400`). Only a lot of the grade with sellable kg that the sale would otherwise reach can
+  be skipped. Every skip is written to the audit log as `SALE_FIFO_SKIPPED` ("Sale SAL-7K2Q: skipped
+  lots A-2026-03. Reason: ..."). Single batches can no longer be skipped: `skipDeliveryIds` in a sale
+  and `skip` in the preview are refused with `400`.
+- **Credits:** each portion used credits its member. `grossRwf` is the portion's part of the sale
+  amount and `deductionRwf` its part of the deduction (5 RWF per **sold** kg, the rate from
+  Settings, rounded once for the whole sale), both split by kg, so the lines add up to exactly the
+  sale amount and the sale deduction. A deduction is never more than its gross. `netRwf = grossRwf -
+  deductionRwf` is added to what the member is owed. Example: 130 kg at 300 RWF from a full lot of
+  60 + 40 kg and 30 kg of the next lot, where two members have 30 and 50 kg: 60 kg (18,000 - 300),
+  40 kg (12,000 - 200), 11.25 kg (3,375 - 56) and 18.75 kg (5,625 - 94); 39,000 RWF and 650 RWF in
+  all.
 - **Ledger:** one `SALE` entry (kilograms and the buyer's total), then one `SALE_CREDIT` entry per
-  batch used (kilograms and the net amount, `relatedEntityType` `SALE_ALLOCATION`). A batch's part of
-  a sale is credited once: the database refuses a second credit.
+  portion used (kilograms and the net amount, `relatedEntityType` `SALE_ALLOCATION`). A portion's
+  part of a sale is credited once: the database refuses a second credit.
 - The response has the sale (`id`, `saleCode`, `gradeId`, `gradeName`, `buyerName`, `quantityKg`,
   `pricePerKg`, `totalAmountRwf`, `belowFloor`, `soldAt`, `totalDeductionRwf`, `totalNetRwf`) and
-  `batches`: for each batch used `receiptCode`, `lotCode`, `memberNumber`, `memberName`, `kg`,
-  `grossRwf`, `deductionRwf` and `netRwf`. `lotId`, `lotCode` and `lotStatus` are only set for
-  sales made before sales by grade; for those, the money fields are empty.
+  `batches`: for each portion used `receiptCode`, `lotId` and `lotCode` (the portion's lot),
+  `memberNumber`, `memberName`, `kg`, `grossRwf`, `deductionRwf` and `netRwf`. The sale's own
+  `lotId`, `lotCode` and `lotStatus` are only set for sales made before sales by grade; for those,
+  the money fields are empty.
 - `belowFloor` is `true` when the grade has a floor price and `pricePerKg` is lower. It is
   only a warning: the sale is saved either way.
-- A lot that has nothing left becomes `SOLD`, closed or not.
+- A `FULL` lot (or an older lot) that has nothing left becomes `SOLD`. A lot being filled stays
+  `FILLING`.
 - Sending the same `clientUuid` again returns the first result with `200`.
-- Locks are always taken in this order: the grade, the lots that have sellable batches (by id), the
-  batches (oldest first) and last the ledger. Two sales of one grade wait for each other.
+- Locks are always taken in this order: the grade, the lots that have sellable kg (by id), their
+  portions, the deliveries, and last the ledger. Two sales of one grade wait for each other.
+  Confirmations, losses, reversals and corrections take the grade first too, so none of them can
+  deadlock with a sale.
 - Sale codes look like `SAL-7K2Q`.
 - `POST /api/sales/orders` takes `{"clientUuid", "buyerId", "soldAt", "items": [{"gradeId",
-  "quantityKg", "pricePerKg", "skipDeliveryIds", "skipReason"}]}`, each grade at most once, and
+  "quantityKg", "pricePerKg", "skipLotIds", "skipReason"}]}`, each grade at most once, and
   records one sale per item with an order code `ORD-7K2Q`. If any item fails, nothing is saved.
 - `GET /api/sales` filters: `search` matches part of the buyer name, a lot code (also those of a
   sale's batches) or sale code (ignoring case), and a number on its own also matches the sale id.
@@ -901,7 +960,8 @@ Request body for `POST /api/payments`:
 `GET /api/members/{id}/statement` returns `grossShareRwf`, `deductionsRwf`, `paidRwf` and
 `owedRwf` (the first two add up lot shares and sale credits), the member's `payments` (newest
 first), `saleCredits` (for each: `saleCode`, `soldAt`, `receiptCode`, `lotCode`, `kg`,
-`pricePerKg`, `grossRwf`, `deductionRwf`, `netRwf`) and `lotShares`: every lot the member
+`pricePerKg`, `grossRwf`, `deductionRwf`, `netRwf`; `lotCode` is the lot the kg came from) and
+`lotShares`: every lot from before fixed-size lots the member
 delivered to, newest first. A shared lot shows the saved kg, percent and `shareRwf`. A lot
 that is not shared yet shows its status (`OPEN`, `CLOSED` or `SOLD`), the current kg and
 percent, and `shareRwf: null`, so the app can show "Waiting for sale" or "Waiting for
@@ -1006,14 +1066,27 @@ The tests do not need a database. They cover the ledger hash chain, the ledger s
 (including the lockout after 5 failures), the login endpoint, Rwandan phone number
 validation, the member service (create, update, duplicates, not found, activate and
 deactivate), the member endpoints (validation errors, `401` without a token), recording
-deliveries (deduction, lot assignment, idempotency, ledger entry), lots (remaining kg,
-closing, stock per grade), losses, batches, buyers and sales by grade (oldest batches first
-across lots, confirmed batches only, credits adding up to the sale total, skipping with a reason,
-lock order, `SOLD` at 0, floor price warning, idempotency, ledger entries), sharing (the 10,000 kg
+deliveries (deduction, no lot until confirmed, idempotency, ledger entry), fixed-size lots (filling
+in confirmation order, splitting a delivery across lots, the lot size and its lock, shortfall and
+space left, stock per grade), losses (shared in proportion, exact rounding, sold kg carry none),
+batches, buyers and sales by grade (older lots first, then lots in fill order shared in proportion,
+awkward numbers that must add up exactly to the ledger entries, skipping whole lots with a reason,
+lock order, `SOLD` at 0, floor price warning, idempotency), reversals of deliveries in lots, sharing (the 10,000 kg
 example, rounding remainder, refused for lots with sales), payments (owed math,
 overpayment, MoMo reference, idempotency), member statements and identity verification (the key file
 and startup checks, PKCE, the signed assertion, the token and userinfo checks with a fake eSignet, the matching rules, the three
 attempts, and that nothing personal is logged or stored). What only the real eSignet can show is listed in Identity verification.
+
+`LotFillingConcurrencyTest` runs on a real, **empty, local** Postgres and is skipped otherwise:
+many confirmations of one grade at once, and confirmations, sales, losses, reversals, corrections
+and disputes side by side, with no lot over its size, no deadlock, every total matching, every read
+model agreeing with the tables, and the ledger still verifying. It refuses any host but localhost:
+
+```bash
+./mvnw test -Dtest=LotFillingConcurrencyTest -Dcoopaggregate.test.postgres-url=jdbc:postgresql://localhost:5432/<empty-db>
+```
+
+`docs/fixed-lots-swagger-test.md` walks through the lot rules in Swagger with the numbers to expect.
 
 ## Author
 
