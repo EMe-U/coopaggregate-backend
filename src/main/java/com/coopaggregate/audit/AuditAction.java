@@ -19,5 +19,7 @@ public enum AuditAction {
     BUYER_REQUEST_STATUS_CHANGED,
     BUYER_REQUEST_CONVERTED,
     // A sale passed over the oldest batches. The details hold the sale code, the receipt codes and the reason.
-    SALE_FIFO_SKIPPED
+    SALE_FIFO_SKIPPED,
+    // TEMPORARY, for the demo only: a delivery confirmed with SMS_DEMO_CODE. The details never hold the code.
+    DEMO_CODE_CONFIRMATION
 }

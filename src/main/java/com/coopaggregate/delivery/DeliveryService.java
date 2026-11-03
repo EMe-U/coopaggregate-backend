@@ -53,6 +53,8 @@ public class DeliveryService {
     private static final int MAX_PAGE_SIZE = 100;
     private static final Duration MAX_CLOCK_AHEAD = Duration.ofMinutes(5);
     private static final Duration MAX_SYNC_DELAY = Duration.ofDays(7);
+    // TEMPORARY, for the demo only: shown in the delivery's details when SMS_DEMO_CODE confirmed it.
+    static final String DEMO_CODE_NOTE = "Confirmed with the demo code, not the member's SMS code.";
 
     private final DeliveryRepository deliveryRepository;
     private final MemberRepository memberRepository;
@@ -227,8 +229,15 @@ public class DeliveryService {
                     + " has expired. Send the member a new code.");
         }
 
-        if (confirmationCodes.matches(delivery, code)) {
+        boolean memberCode = confirmationCodes.matches(delivery, code);
+        if (memberCode || confirmationCodes.isDemoCode(code)) {
             delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+            if (!memberCode) {
+                // TEMPORARY, for the demo only. The code itself is never written anywhere.
+                delivery.setResolutionNote(DEMO_CODE_NOTE);
+                auditLogRepository.save(AuditLog.of(AuditAction.DEMO_CODE_CONFIRMATION, delivery.getMember(), null,
+                        "Delivery " + delivery.getReceiptCode() + " confirmed with the demo code"));
+            }
             eventPublisher.publishEvent(new DeliveryConfirmedEvent(delivery.getId()));
             return toResponse(delivery);
         }
