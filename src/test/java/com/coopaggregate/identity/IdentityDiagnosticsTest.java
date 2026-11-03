@@ -170,7 +170,7 @@ class IdentityDiagnosticsTest {
 
         fail();
 
-        assertTrue(output.getAll().contains("HTTP 401]"), output.getAll());
+        assertTrue(output.getAll().contains("HTTP 401; assertion sent: "), output.getAll());
         assertFalse(output.getAll().contains("error="));
         assertNoSecrets(output);
     }
@@ -330,6 +330,86 @@ class IdentityDiagnosticsTest {
     // --- Helpers
 
     // Starts a verification, remembers what must stay secret, and completes it against the fake provider.
+    // --- The client assertion
+
+    @Test
+    void startupLogsHowTheAssertionIsSignedWithThePublicHalfOnly(CapturedOutput output) throws Exception {
+        String thumbprint = new RSAKey.Builder((java.security.interfaces.RSAPublicKey) cooperativeKey.getPublic())
+                .build().computeThumbprint("SHA-256").toString();
+        String modulus = new RSAKey.Builder((java.security.interfaces.RSAPublicKey) cooperativeKey.getPublic())
+                .build().getModulus().toString();
+
+        assertTrue(output.getAll().contains("Client assertion: alg=PS256, thumbprint=" + thumbprint
+                + ", kid=coopaggregate-key, kidEqualsThumbprint=false, modulusStart=" + modulus.substring(0, 8)
+                + ", aud=http://localhost:8080, lifetimeSeconds=60"), output.getAll());
+        assertFalse(output.getAll().contains(modulus.substring(0, 20)), "only the first 8 characters");
+        assertFalse(output.getAll().contains("unused"), "never the key path");
+        begin();
+        assertNoSecrets(output);
+    }
+
+    @Test
+    void startupSaysWhenTheKidIsTheThumbprint(CapturedOutput output) throws Exception {
+        String thumbprint = new RSAKey.Builder((java.security.interfaces.RSAPublicKey) cooperativeKey.getPublic())
+                .build().computeThumbprint("SHA-256").toString();
+
+        new MosipClient(properties(null), new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), thumbprint),
+                RestClient.builder().build(), new RestTemplate(), Clock.systemUTC());
+
+        assertTrue(output.getAll().contains("kid=" + thumbprint + ", kidEqualsThumbprint=true"), output.getAll());
+    }
+
+    @Test
+    void aTokenCallRefusedWith401LogsTheDecodedAssertionButNeverItsSignature(CapturedOutput output)
+            throws Exception {
+        java.util.concurrent.atomic.AtomicReference<String> sent = new java.util.concurrent.atomic.AtomicReference<>();
+        http.expect(requestTo(BASE + "/oauth2/token"))
+                .andExpect(request -> sent.set(java.net.URLDecoder.decode(
+                        java.util.Arrays.stream(((org.springframework.mock.http.client.MockClientHttpRequest) request)
+                                .getBodyAsString().split("&"))
+                                .filter(pair -> pair.startsWith("client_assertion="))
+                                .findFirst().orElseThrow().substring("client_assertion=".length()),
+                        java.nio.charset.StandardCharsets.UTF_8)))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED).contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":\"invalid_client\"}"));
+
+        fail();
+
+        com.nimbusds.jwt.SignedJWT assertion = com.nimbusds.jwt.SignedJWT.parse(sent.get());
+        com.nimbusds.jwt.JWTClaimsSet claims = assertion.getJWTClaimsSet();
+        String logs = output.getAll();
+        assertTrue(logs.contains("[token request POST http://localhost:8080/oauth2/token: HTTP 401, "
+                + "error=invalid_client; assertion sent: header {alg=PS256, typ=(none), kid=coopaggregate-key}, "
+                + "claims {iss=coopaggregate, sub=coopaggregate, aud=[http://localhost:8080], iat="
+                + claims.getIssueTime().getTime() / 1000 + " (" + claims.getIssueTime().toInstant() + "), exp="
+                + claims.getExpirationTime().getTime() / 1000 + " (" + claims.getExpirationTime().toInstant()
+                + "), jti=" + claims.getJWTID() + "}]"), logs);
+        String[] parts = sent.get().split("\\.");
+        assertEquals(3, parts.length);
+        assertFalse(logs.contains(parts[2]), "the signature is never logged");
+        assertFalse(logs.contains(parts[2].substring(0, 16)), "not even part of it");
+        assertFalse(logs.contains(sent.get()), "nor the whole token");
+        assertFalse(logs.contains(parts[0]), "nor the encoded header");
+        assertFalse(logs.contains(parts[1]), "nor the encoded claims");
+        assertNoSecrets(output);
+    }
+
+    @Test
+    void otherRefusalsDoNotLogTheAssertion(CapturedOutput output) {
+        http.expect(requestTo(BASE + "/oauth2/token")).andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_JSON).body("{\"error\":\"invalid_grant\"}"));
+
+        fail();
+
+        assertTrue(output.getAll().contains("HTTP 400, error=invalid_grant]"), output.getAll());
+        assertFalse(output.getAll().contains("assertion sent"));
+    }
+
+    @Test
+    void anUnreadableAssertionIsNotPrinted() {
+        assertEquals("(unreadable)", Diagnostics.assertion("not-a-jwt"));
+    }
+
     private IdentityProviderException fail() {
         return finish(begin());
     }

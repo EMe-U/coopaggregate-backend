@@ -30,6 +30,56 @@ final class Diagnostics {
     private Diagnostics() {
     }
 
+    /**
+     * For the startup log: how the client assertion is signed. The algorithm, the RFC 7638 SHA-256 thumbprint of the
+     * PUBLIC half of the key, the configured kid and whether it equals that thumbprint, the first 8 characters of the
+     * public modulus, the audience and the lifetime. Nothing private, never the key file's path.
+     */
+    static String signingKey(MosipSigningKey key, String audience, long lifetimeSeconds) {
+        String publicPart;
+        if (key.privateKey() instanceof java.security.interfaces.RSAPrivateCrtKey crt) {
+            try {
+                java.security.interfaces.RSAPublicKey rsaPublic = (java.security.interfaces.RSAPublicKey)
+                        java.security.KeyFactory.getInstance("RSA").generatePublic(
+                                new java.security.spec.RSAPublicKeySpec(crt.getModulus(), crt.getPublicExponent()));
+                com.nimbusds.jose.jwk.RSAKey publicKey = new com.nimbusds.jose.jwk.RSAKey.Builder(rsaPublic).build();
+                String thumbprint = publicKey.computeThumbprint("SHA-256").toString();
+                publicPart = "thumbprint=" + thumbprint + ", kid=" + key.keyId() + ", kidEqualsThumbprint="
+                        + thumbprint.equals(key.keyId()) + ", modulusStart=" + publicKey.getModulus().toString()
+                        .substring(0, 8);
+            } catch (com.nimbusds.jose.JOSEException | java.security.GeneralSecurityException e) {
+                publicPart = "thumbprint=(could not be computed), kid=" + key.keyId();
+            }
+        } else {
+            publicPart = "thumbprint=(the key file has no public part), kid=" + key.keyId();
+        }
+        return "alg=PS256, " + publicPart + ", aud=" + audience + ", lifetimeSeconds=" + lifetimeSeconds;
+    }
+
+    /**
+     * For a token call refused with 401: the decoded header (alg, typ, kid) and claims (iss, sub, aud, iat, exp, jti)
+     * of the assertion that was sent. Never the signature or the whole token.
+     */
+    static String assertion(String serialized) {
+        try {
+            com.nimbusds.jwt.SignedJWT jwt = com.nimbusds.jwt.SignedJWT.parse(serialized);
+            com.nimbusds.jose.JWSHeader header = jwt.getHeader();
+            com.nimbusds.jwt.JWTClaimsSet claims = jwt.getJWTClaimsSet();
+            return "header {alg=" + header.getAlgorithm() + ", typ=" + (header.getType() == null ? "(none)"
+                    : header.getType()) + ", kid=" + header.getKeyID() + "}, claims {iss=" + claims.getIssuer()
+                    + ", sub=" + claims.getSubject() + ", aud=" + claims.getAudience() + ", iat="
+                    + seconds(claims.getIssueTime()) + ", exp=" + seconds(claims.getExpirationTime()) + ", jti="
+                    + claims.getJWTID() + "}";
+        } catch (java.text.ParseException | RuntimeException e) {
+            return "(unreadable)";
+        }
+    }
+
+    // Epoch seconds and the instant, so a clock difference with the provider is easy to see.
+    private static String seconds(java.util.Date date) {
+        return date == null ? "(none)" : date.getTime() / 1000 + " (" + date.toInstant() + ")";
+    }
+
     /** The error code if it is one of the known ones (trimmed, lower case), otherwise null. Never anything else. */
     static String knownError(String error) {
         if (error == null) {

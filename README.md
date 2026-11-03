@@ -649,6 +649,21 @@ text. Older history rows may also show `IDENTITY_MISMATCH` from the comparison t
 tokens, assertions, claims, the verified details and the key are never logged; the server log only gets safe
 one-line descriptions of a failed call to eSignet (address without query, HTTP status, known OAuth error code).
 
+**Checking the client assertion.** To match the key with the public JWK registered at eSignet, the app logs one
+INFO line at startup when verification is on, for example:
+
+```
+Client assertion: alg=PS256, thumbprint=<RFC 7638 SHA-256 thumbprint>, kid=<MOSIP_KEY_ID>,
+kidEqualsThumbprint=false, modulusStart=<first 8 characters of n>, aud=<audience>, lifetimeSeconds=60
+```
+
+The thumbprint and `modulusStart` come from the PUBLIC half of the key (compare them with the `n` and the
+thumbprint of the JWK registered at eSignet); `kidEqualsThumbprint` only says whether `MOSIP_KEY_ID` happens to be
+that thumbprint. Nothing private and never the key file's path is printed. When the token call is refused with
+`401`, the usual failure line also shows the assertion that was sent, decoded: the header (`alg`, `typ`, `kid`)
+and the claims (`iss`, `sub`, `aud`, `iat`, `exp` as epoch seconds and time, `jti`). Never its signature or the
+whole token. The assertion is RSASSA-PSS with SHA-256, MGF1-SHA-256 and a 32-byte salt (PS256).
+
 With `MOSIP_ENABLED=false` (the default) the app starts and works as before, but `POST /api/members` is refused
 with `503` "Member registration needs identity verification, which is not configured." and the status endpoint
 says `{available: false, required: false}`. With `MOSIP_ENABLED=true` the app does not start if a setting is

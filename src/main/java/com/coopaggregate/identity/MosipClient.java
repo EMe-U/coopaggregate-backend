@@ -58,6 +58,8 @@ public class MosipClient {
         this.clock = clock;
         log.info("Identity verification is on. Token: {}, userinfo: {}, JWKS: {}", Diagnostics.safeUrl(properties.tokenUrl()),
                 Diagnostics.safeUrl(properties.userinfoUrl()), Diagnostics.safeUrl(properties.jwksUrl()));
+        log.info("Client assertion: {}", Diagnostics.signingKey(signingKey, properties.audience(),
+                MosipClientAssertion.VALID_SECONDS));
         this.decoder = NimbusJwtDecoder.withJwkSetUri(properties.jwksUrl())
                 .jwsAlgorithm(SignatureAlgorithm.PS256)
                 .restOperations(jwksOperations)
@@ -119,7 +121,8 @@ public class MosipClient {
         form.add("client_id", properties.clientId());
         form.add("code_verifier", codeVerifier);
         form.add("client_assertion_type", ASSERTION_TYPE);
-        form.add("client_assertion", MosipClientAssertion.create(properties, signingKey, clock));
+        String assertion = MosipClientAssertion.create(properties, signingKey, clock);
+        form.add("client_assertion", assertion);
         try {
             Map<String, Object> body = restClient.post()
                     .uri(properties.tokenUrl())
@@ -133,7 +136,7 @@ public class MosipClient {
             }
             return body;
         } catch (RestClientException e) {
-            throw failure(e, "token", "POST", properties.tokenUrl());
+            throw failure(e, "token", "POST", properties.tokenUrl(), assertion);
         }
     }
 
@@ -151,7 +154,7 @@ public class MosipClient {
             }
             return body.trim();
         } catch (RestClientException e) {
-            throw failure(e, "userinfo", "GET", properties.userinfoUrl());
+            throw failure(e, "userinfo", "GET", properties.userinfoUrl(), null);
         }
     }
 
@@ -165,8 +168,15 @@ public class MosipClient {
 
     // Not logged and not shown: the answer of the provider can hold the code or personal data.
     // The message goes to the client and stays the same; the detail is only for the log.
-    private static IdentityProviderException failure(RestClientException e, String call, String method, String url) {
+    // A 401 on the token call is about the client assertion, so the decoded assertion that was sent is added (never its
+    // signature).
+    private static IdentityProviderException failure(RestClientException e, String call, String method, String url,
+                                                     String assertion) {
         String detail = Diagnostics.call(call + " request", method, url, e);
+        if (assertion != null && e instanceof RestClientResponseException response
+                && response.getStatusCode().value() == 401) {
+            detail = detail + "; assertion sent: " + Diagnostics.assertion(assertion);
+        }
         if (e instanceof RestClientResponseException) {
             return IdentityProviderException.failed("The identity provider refused the " + call + " request.", detail);
         }
