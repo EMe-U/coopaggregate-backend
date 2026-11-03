@@ -48,6 +48,7 @@ public class MosipClient {
     private final RestClient restClient;
     private final NimbusJwtDecoder decoder;
     private final Clock clock;
+    private final TokenDiagnostics tokenDiagnostics;
 
     /** jwksOperations fetches the provider's keys; both it and restClient should have timeouts. */
     public MosipClient(MosipProperties properties, MosipSigningKey signingKey, RestClient restClient,
@@ -60,6 +61,8 @@ public class MosipClient {
                 Diagnostics.safeUrl(properties.userinfoUrl()), Diagnostics.safeUrl(properties.jwksUrl()));
         log.info("Client assertion: {}", Diagnostics.signingKey(signingKey, properties.audience(),
                 MosipClientAssertion.VALID_SECONDS));
+        this.tokenDiagnostics = new TokenDiagnostics(jwksOperations, properties.jwksUrl(), properties.issuer(),
+                properties.clientId(), clock, CLOCK_SKEW);
         this.decoder = NimbusJwtDecoder.withJwkSetUri(properties.jwksUrl())
                 .jwsAlgorithm(SignatureAlgorithm.PS256)
                 .restOperations(jwksOperations)
@@ -102,13 +105,15 @@ public class MosipClient {
         if (idToken == null || accessToken == null) {
             throw untrusted();
         }
-        Jwt id = verify(idToken, "id_token");
+        Jwt id = verify(idToken, "id_token", null, null);
         if (nonce == null || !nonce.equals(id.getClaimAsString("nonce"))) {
             throw untrusted();
         }
-        Jwt userinfo = verify(userinfo(accessToken), "userinfo");
+        UserinfoAnswer answer = userinfo(accessToken);
+        Jwt userinfo = verify(answer.body(), "userinfo", answer.response(), id.getSubject());
         if (!id.getSubject().equals(userinfo.getSubject())) {
-            throw untrusted();
+            throw IdentityProviderException.failed(UNTRUSTED, "userinfo check failed: "
+                    + tokenDiagnostics.describe(answer.body(), answer.response(), id.getSubject(), null));
         }
         return new MosipClaims(userinfo.getSubject(), claim(userinfo, "name"), claim(userinfo, "phone_number"));
     }
@@ -140,29 +145,46 @@ public class MosipClient {
         }
     }
 
+    // The userinfo body, with its status and Content-Type for the log if it is refused.
+    private record UserinfoAnswer(String body, TokenDiagnostics.Response response) {
+    }
+
     // The answer is a signed JWT (application/jwt), not JSON.
-    private String userinfo(String accessToken) {
+    private UserinfoAnswer userinfo(String accessToken) {
+        org.springframework.http.ResponseEntity<String> entity;
         try {
-            String body = restClient.get()
+            entity = restClient.get()
                     .uri(properties.userinfoUrl())
                     .headers(headers -> headers.setBearerAuth(accessToken))
                     .accept(MediaType.parseMediaType("application/jwt"), MediaType.APPLICATION_JSON)
                     .retrieve()
-                    .body(String.class);
-            if (body == null || body.isBlank() || body.trim().startsWith("{")) {
-                throw untrusted();
-            }
-            return body.trim();
+                    .toEntity(String.class);
         } catch (RestClientException e) {
             throw failure(e, "userinfo", "GET", properties.userinfoUrl(), null);
         }
+        String body = entity.getBody();
+        MediaType type = entity.getHeaders().getContentType();
+        TokenDiagnostics.Response response = new TokenDiagnostics.Response(entity.getStatusCode().value(),
+                type == null ? null : type.toString());
+        if (body == null || body.isBlank() || body.trim().startsWith("{")) {
+            throw IdentityProviderException.failed(UNTRUSTED, "userinfo check failed: "
+                    + tokenDiagnostics.describe(body, response, null, null));
+        }
+        return new UserinfoAnswer(body.trim(), response);
     }
 
-    private Jwt verify(String token, String what) {
+    // A refused token: the existing one-line reason, then (unless the provider's keys could not be fetched) what the
+    // token looked like and which of our checks fail. See TokenDiagnostics for what is and is never shown.
+    private Jwt verify(String token, String what, TokenDiagnostics.Response response, String expectedSub) {
         try {
             return decoder.decode(token);
         } catch (JwtException e) {
-            throw IdentityProviderException.failed(UNTRUSTED, Diagnostics.token(what, properties.jwksUrl(), e));
+            String detail = Diagnostics.token(what, properties.jwksUrl(), e);
+            if (!detail.startsWith("JWKS request")) {
+                detail = detail + "; " + tokenDiagnostics.describe(token, response, expectedSub,
+                        e.getClass().getSimpleName());
+            }
+            throw IdentityProviderException.failed(UNTRUSTED, detail);
         }
     }
 

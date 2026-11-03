@@ -664,6 +664,29 @@ that thumbprint. Nothing private and never the key file's path is printed. When 
 and the claims (`iss`, `sub`, `aud`, `iat`, `exp` as epoch seconds and time, `jti`). Never its signature or the
 whole token. The assertion is RSASSA-PSS with SHA-256, MGF1-SHA-256 and a 32-byte salt (PS256).
 
+**Checking a refused id_token or userinfo answer.** No check is relaxed; when one fails, the failure line
+explains it, for example:
+
+```
+userinfo check failed: BadJwtException; failedChecks=[iss missing, aud missing], category=BadJwtException;
+response HTTP 200, Content-Type application/jwt; body JWT; header {alg=PS256, kid=..., typ=(none)};
+claimNames [birthdate, exp, iat, name, phone_number, sub]; iss=(none), aud=(none), exp=<epoch> (<time>),
+iat=<epoch> (<time>); subMatchesIdToken=true; jwks [{kid=..., alg=PS256, kty=RSA}]
+```
+
+- `failedChecks` are the app's own checks, run again on the refused answer: `format: ...` (not a JWT, JSON instead
+  of a signed JWT, encrypted), `algorithm not allowed` (not PS256), `signature: no matching key` (no published key
+  with that `kid`), `signature: does not verify`, `iss missing` / `iss different`, `aud missing` /
+  `aud different` (must contain `MOSIP_CLIENT_ID`), `exp missing`, `expired`, `not yet valid`, `sub missing`,
+  `sub mismatch` (userinfo `sub` is not the id_token's). `category` is only the class of the exception that refused
+  it (Spring reports several different problems as `BadJwtException`), never its message.
+- The response status and Content-Type are for the userinfo call only; the body is described as JWT, JSON,
+  encrypted JWT or other.
+- Only the NAMES of the claims are listed. The only values shown are `iss`, `aud`, `exp` and `iat`; `sub` is
+  only compared (`subMatchesIdToken`). Never a name, phone, birth date, the access token, the signature or the
+  whole token.
+- `jwks` lists the `kid`, `alg` and key type of every key eSignet publishes (public information).
+
 With `MOSIP_ENABLED=false` (the default) the app starts and works as before, but `POST /api/members` is refused
 with `503` "Member registration needs identity verification, which is not configured." and the status endpoint
 says `{available: false, required: false}`. With `MOSIP_ENABLED=true` the app does not start if a setting is

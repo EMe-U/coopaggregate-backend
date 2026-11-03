@@ -300,8 +300,149 @@ class IdentityDiagnosticsTest {
 
         finish(state);
 
-        assertTrue(output.getAll().contains("[id_token check failed: JwtValidationException]"), output.getAll());
-        assertFalse(output.getAll().contains("evil.example"), "the claim values are not logged");
+        String logs = output.getAll();
+        assertTrue(logs.contains("[id_token check failed: JwtValidationException; failedChecks=[iss different], "
+                + "category=JwtValidationException; body JWT; header {alg=PS256, kid=provider-1, typ=(none)}; "
+                + "claimNames [aud, exp, iat, iss, jti, kind, sub]; iss=http://evil.example, aud=[coopaggregate], "), logs);
+        assertTrue(logs.contains("; jwks [{kid=provider-1, alg=(none), kty=RSA}]]"), logs);
+        assertFalse(logs.contains("subMatchesIdToken"), "only for the userinfo answer");
+        assertFalse(logs.contains("pairwise-sub"), "the sub value is never logged");
+        assertNoSecrets(output);
+    }
+
+    // --- The userinfo check
+
+    private static final String NAME = "Uwimana Claudine";
+    private static final String PHONE = "+250788123456";
+    private static final String BIRTH = "1990/05/17";
+
+    // The token call works and the id_token is right; the userinfo answer is the one given.
+    private IdentityProviderException userinfoAnswer(String body, MediaType type) throws Exception {
+        String state = begin();
+        String id = idToken();
+        http.expect(requestTo(BASE + "/oauth2/token"))
+                .andRespond(withSuccess(tokenBody(id), MediaType.APPLICATION_JSON));
+        http.expect(requestTo(BASE + "/oauth2/userinfo")).andRespond(withSuccess(body, type));
+        return finish(state);
+    }
+
+    private static JWTClaimsSet.Builder person() {
+        return claims("userinfo").claim("name", NAME).claim("phone_number", PHONE).claim("birthdate", BIRTH);
+    }
+
+    @Test
+    void aUserinfoWithoutIssAndAudSaysSoAndNeverShowsTheDetails(CapturedOutput output) throws Exception {
+        String userinfo = sign(person().issuer(null).audience((String) null));
+
+        IdentityProviderException e = userinfoAnswer(userinfo, MediaType.valueOf("application/jwt"));
+
+        String logs = output.getAll();
+        assertEquals("The identity provider's answer could not be verified.", e.getMessage());
+        assertTrue(logs.contains("[userinfo check failed: JwtValidationException; failedChecks=[iss missing, "
+                + "aud missing], category=JwtValidationException; response HTTP 200, Content-Type application/jwt; "
+                + "body JWT; header {alg=PS256, kid=provider-1, typ=(none)}; claimNames [birthdate, exp, iat, jti, "
+                + "kind, name, phone_number, sub]; iss=(none), aud=(none), exp="), logs);
+        assertTrue(logs.contains("; subMatchesIdToken=true; jwks [{kid=provider-1, alg=(none), kty=RSA}]]"), logs);
+        assertNoPersonalData(output, userinfo);
+    }
+
+    @Test
+    void aUserinfoSignedByAnUnknownKeySaysNoMatchingKey(CapturedOutput output) throws Exception {
+        RSAKey stranger = new com.nimbusds.jose.jwk.gen.RSAKeyGenerator(2048).keyID("stranger").generate();
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.PS256).keyID("stranger").build(),
+                person().build());
+        jwt.sign(new RSASSASigner(stranger));
+
+        userinfoAnswer(jwt.serialize(), MediaType.valueOf("application/jwt"));
+
+        assertTrue(output.getAll().contains("failedChecks=[signature: no matching key], category=BadJwtException"),
+                output.getAll());
+        assertTrue(output.getAll().contains("header {alg=PS256, kid=stranger, typ=(none)}"), output.getAll());
+        assertNoPersonalData(output, jwt.serialize());
+    }
+
+    @Test
+    void aUserinfoWithTheRightKidButAnotherKeySaysTheSignatureDoesNotVerify(CapturedOutput output) throws Exception {
+        RSAKey impostor = new com.nimbusds.jose.jwk.gen.RSAKeyGenerator(2048).keyID("provider-1").generate();
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.PS256).keyID("provider-1").build(),
+                person().build());
+        jwt.sign(new RSASSASigner(impostor));
+
+        userinfoAnswer(jwt.serialize(), MediaType.valueOf("application/jwt"));
+
+        assertTrue(output.getAll().contains("failedChecks=[signature: does not verify], category=BadJwtException"),
+                output.getAll());
+        assertNoPersonalData(output, jwt.serialize());
+    }
+
+    @Test
+    void aUserinfoSignedWithAnotherAlgorithmSaysTheAlgorithmIsNotAllowed(CapturedOutput output) throws Exception {
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID("provider-1")
+                .type(com.nimbusds.jose.JOSEObjectType.JWT).build(), person().build());
+        jwt.sign(new RSASSASigner(providerKey));
+
+        userinfoAnswer(jwt.serialize(), MediaType.valueOf("application/jwt"));
+
+        assertTrue(output.getAll().contains("failedChecks=[algorithm not allowed], category=BadJwtException"),
+                output.getAll());
+        assertTrue(output.getAll().contains("header {alg=RS256, kid=provider-1, typ=JWT}"), output.getAll());
+        assertNoPersonalData(output, jwt.serialize());
+    }
+
+    @Test
+    void anExpiredUserinfoSaysExpired(CapturedOutput output) throws Exception {
+        String userinfo = sign(person().expirationTime(new Date(System.currentTimeMillis() - 600_000)));
+
+        userinfoAnswer(userinfo, MediaType.valueOf("application/jwt"));
+
+        assertTrue(output.getAll().contains("failedChecks=[expired], category=BadJwtException"),
+                output.getAll());
+        assertNoPersonalData(output, userinfo);
+    }
+
+    @Test
+    void aUserinfoForAnotherPersonSaysTheSubDoesNotMatch(CapturedOutput output) throws Exception {
+        String userinfo = sign(person().subject("someone-else"));
+
+        userinfoAnswer(userinfo, MediaType.valueOf("application/jwt"));
+
+        String logs = output.getAll();
+        assertTrue(logs.contains("[userinfo check failed: failedChecks=[sub mismatch], category=(our own check); "
+                + "response HTTP 200, Content-Type application/jwt; body JWT"), logs);
+        assertTrue(logs.contains("subMatchesIdToken=false"), logs);
+        assertFalse(logs.contains("someone-else"));
+        assertNoPersonalData(output, userinfo);
+    }
+
+    @Test
+    void aJsonUserinfoListsTheNamesOnly(CapturedOutput output) throws Exception {
+        String body = "{\"sub\":\"pairwise-sub\",\"name\":\"" + NAME + "\",\"phone_number\":\"" + PHONE
+                + "\",\"birthdate\":\"" + BIRTH + "\",\"iss\":\"" + BASE + "\"}";
+
+        userinfoAnswer(body, MediaType.APPLICATION_JSON);
+
+        String logs = output.getAll();
+        assertTrue(logs.contains("[userinfo check failed: failedChecks=[format: JSON, not a signed JWT, aud missing, "
+                + "exp missing], category=(our own check); response HTTP 200, Content-Type application/json; "
+                + "body JSON; claimNames [birthdate, iss, name, phone_number, sub]; iss=http://localhost:8080, "
+                + "aud=(none), exp=(none), iat=(none)"), logs);
+        assertNoPersonalData(output, body);
+    }
+
+    // Never a claim value, the access token, the signature or the whole token.
+    private void assertNoPersonalData(CapturedOutput output, String token) {
+        String logs = output.getAll();
+        for (String value : new String[] {NAME, "Uwimana", "Claudine", PHONE, "788123456", BIRTH, "1990",
+                "pairwise-sub", ACCESS_TOKEN}) {
+            assertFalse(logs.contains(value), "the log holds " + value);
+        }
+        assertFalse(logs.contains(token), "the whole token");
+        String[] parts = token.split("\\.");
+        if (parts.length == 3) {
+            assertFalse(logs.contains(parts[1]), "the encoded claims");
+            assertFalse(logs.contains(parts[2]), "the signature");
+            assertFalse(logs.contains(parts[2].substring(0, 16)), "part of the signature");
+        }
         assertNoSecrets(output);
     }
 
