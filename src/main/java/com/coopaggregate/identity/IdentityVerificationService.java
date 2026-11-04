@@ -111,6 +111,16 @@ public class IdentityVerificationService {
             throw e;
         }
 
+        // How the person logged in at eSignet: when the id_token says so (acr), only an allowed way counts. The local
+        // mock accepts any biometric capture, so by default only the one-time code does. Without an acr nothing
+        // changes. The acr value is never logged or recorded.
+        if (claims.acr() != null && !client().isAllowedAcr(claims.acr())) {
+            refuse(verification, manager, IdentityErrorCode.ACR_NOT_ALLOWED,
+                    "the login method (acr) is not in MOSIP_ALLOWED_ACRS",
+                    "This way of logging in at eSignet is not accepted for verifying a member. Start the "
+                            + "verification again and log in with the one-time code.");
+        }
+
         if (memberRepository.existsByIdentityToken(claims.subject())) {
             record(AuditAction.IDENTITY_DUPLICATE, manager, "Provider " + PROVIDER + ", method "
                     + VerificationMethod.PASSWORD + ": the person is already a member");

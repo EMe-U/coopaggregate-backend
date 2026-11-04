@@ -100,7 +100,8 @@ cd coopaggregate-backend
 | `MOSIP_REDIRECT_URI` | With `MOSIP_ENABLED` | The frontend page eSignet sends the member back to, exactly as registered, for example `http://localhost:5173/identity/callback` |
 | `MOSIP_PRIVATE_KEY_PATH` | With `MOSIP_ENABLED` | Path to the cooperative's RSA private key file (PKCS#8 PEM or JWK, detected from the content). Keep it outside the repository |
 | `MOSIP_KEY_ID` | With `MOSIP_ENABLED` | The `kid` of the matching public JWK |
-| `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL`. The name and phone are asked for with the `claims` parameter, so leave `MOSIP_SCOPE` out; the app warns at startup if it asks for more than `openid` and `phone` |
+| `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL`. The name and phone are asked for with the `claims` parameter, so leave `MOSIP_SCOPE` out; the app warns at startup if it asks for more than `openid` and `phone`. `MOSIP_ACR_VALUES` may hold several login methods, space-separated; it is sent as `acr_values` exactly as set |
+| `MOSIP_ALLOWED_ACRS` | No | The id_token `acr` values (login methods) that count as a verification, space-separated, compared exactly. Default: `mosip:idp:acr:generated-code` (the one-time code) |
 | `MOSIP_ISSUER` | No | The exact `iss` the ID token must carry (and the userinfo answer, unless the next one is set). Default: `MOSIP_BASE_URL` |
 | `MOSIP_USERINFO_ISSUER` | No | The exact `iss` the userinfo answer must carry, for an eSignet that signs it with another issuer than the ID token (the local one: ID token `http://localhost:8080`, userinfo `http://localhost:8088/v1/esignet`). Default: the ID token's issuer |
 | `PORT` | No | HTTP port. Default: `8080` |
@@ -634,6 +635,7 @@ every other feature do not depend on it.
 | `CLAIMS_MISSING` | 400 | eSignet gave no name or no phone |
 | `PHONE_NOT_RWANDAN` | 400 | The verified phone is not a Rwandan mobile number |
 | `NAME_TOO_LONG` | 400 | The verified name is longer than 150 characters |
+| `ACR_NOT_ALLOWED` | 400 | The id_token says the person logged in a way not in `MOSIP_ALLOWED_ACRS` (for example biometrics) |
 | `PROVIDER_FAILED` | 502 | eSignet failed or its answer could not be trusted |
 | `NOT_CONFIGURED` | 503 | Identity verification is switched off |
 
@@ -650,6 +652,18 @@ own name and phone. The change history gets `IDENTITY_VERIFIED`, `IDENTITY_DUPLI
 text. Older history rows may also show `IDENTITY_MISMATCH` from the comparison this replaced. Codes, states,
 tokens, assertions, claims, the verified details and the key are never logged; the server log only gets safe
 one-line descriptions of a failed call to eSignet (address without query, HTTP status, known OAuth error code).
+
+**Login method (acr).** eSignet can offer several ways to log in (one-time code, biometrics, wallet), asked for
+with `MOSIP_ACR_VALUES` (several values, space-separated, sent as `acr_values` exactly as set; starting a
+verification logs one INFO line with that value, and nothing else from the URL). The local eSignet mock accepts
+any biometric capture, so a biometric login proves nothing. When the ID token carries an `acr` claim, it must be
+one of `MOSIP_ALLOWED_ACRS` (default `mosip:idp:acr:generated-code`, the one-time code), compared exactly;
+anything else (including an empty or non-text `acr`) is refused with `ACR_NOT_ALLOWED`, before the duplicate
+check, and the history reason is `the login method (acr) is not in MOSIP_ALLOWED_ACRS`. When the ID token has no
+`acr`, nothing changes: it is not guessed from `acr_values`. Each callback logs one INFO line saying only whether
+the `acr` claim was present (`id_token acr claim present: true|false`), never its value. Note that the default
+`MOSIP_ACR_VALUES` (`mosip:idp:acr:password`) is not in the default `MOSIP_ALLOWED_ACRS`: if eSignet puts `acr` in
+the ID token, set both so the method asked for is one that is allowed.
 
 **Token checks.** Both tokens must carry exactly the expected `iss` (present, and compared character for
 character: no prefix or partial match), an `aud` containing `MOSIP_CLIENT_ID`, and a `sub`; the userinfo `sub`

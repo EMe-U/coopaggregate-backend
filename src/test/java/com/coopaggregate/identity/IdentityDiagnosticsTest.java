@@ -311,6 +311,21 @@ class IdentityDiagnosticsTest {
     }
 
     @Test
+    void startingAVerificationLogsTheAcrValuesAndNothingElseFromTheUrl(CapturedOutput output) {
+        String state = service.start(manager).state();
+        IdentityVerification verification = stored.get(IdentityVerificationService.sha256(state));
+
+        String logs = output.getAll();
+        assertTrue(logs.contains("Identity verification authorize request acr_values: mosip:idp:acr:password"
+                + System.lineSeparator()), logs);
+        assertFalse(logs.contains(state), "never the state");
+        assertFalse(logs.contains(verification.getNonce()), "never the nonce");
+        assertFalse(logs.contains(Pkce.challenge(verification.getCodeVerifier())), "never the code challenge");
+        assertFalse(logs.contains(verification.getCodeVerifier()), "never the verifier");
+        assertFalse(logs.contains("/oauth2/authorize?"), "never the URL");
+    }
+
+    @Test
     void anIdTokenOfTheUserinfoIssuerIsRefusedAndItsIssIsShown(CapturedOutput output) throws Exception {
         // MOSIP_USERINFO_ISSUER is for the userinfo answer only; the id_token must still carry MOSIP_BASE_URL.
         buildService(properties(null, ESIGNET_ISSUER));
@@ -649,7 +664,7 @@ class IdentityDiagnosticsTest {
 
     private static MosipProperties properties(String tokenEndpoint, String userinfoIssuer) {
         return new MosipProperties(true, BASE, "coopaggregate", "http://localhost:5173/identity/callback", "unused",
-                "coopaggregate-key", null, null, null, null, tokenEndpoint, null, null, null, userinfoIssuer);
+                "coopaggregate-key", null, null, null, null, tokenEndpoint, null, null, null, userinfoIssuer, null);
     }
 
     private static String tokenBody(String idToken) {

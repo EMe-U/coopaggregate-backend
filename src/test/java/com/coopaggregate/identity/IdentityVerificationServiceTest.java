@@ -328,6 +328,71 @@ class IdentityVerificationServiceTest {
         assertEquals("Provider MOSIP: missing details: name, phone", lastAudit().getDetails());
     }
 
+    // --- How the person logged in (the id_token acr)
+
+    private static final String OTP = "mosip:idp:acr:generated-code";
+    private static final String BIOMETRICS = "mosip:idp:acr:biometrics";
+
+    private void loggedInWith(String acr) {
+        when(client.fetchClaims(anyString(), anyString(), anyString()))
+                .thenReturn(new MosipClaims("pairwise-sub", "Uwimana Claudine", "+250788123456", acr));
+        when(client.isAllowedAcr(anyString())).thenAnswer(invocation -> OTP.equals(invocation.getArgument(0)));
+    }
+
+    @Test
+    void anAllowedAcrVerifiesThePerson() {
+        loggedInWith(OTP);
+        String state = service.start(manager).state();
+
+        VerifyResultResponse result = service.complete("the-code", state, manager);
+
+        assertTrue(result.verified());
+        assertTrue(stored.get(IdentityVerificationService.sha256(state)).isVerified());
+        verify(client).isAllowedAcr(OTP);
+    }
+
+    @Test
+    void anAcrThatIsNotAllowedVerifiesNobodyAndSaysWhyPlainly(CapturedOutput output) {
+        loggedInWith(BIOMETRICS);
+        String state = service.start(manager).state();
+
+        IdentityRequestException e = assertThrows(IdentityRequestException.class,
+                () -> service.complete("the-code", state, manager));
+
+        assertEquals("ACR_NOT_ALLOWED", e.errorCode());
+        assertEquals("This way of logging in at eSignet is not accepted for verifying a member. Start the "
+                + "verification again and log in with the one-time code.", e.getMessage());
+        IdentityVerification verification = stored.get(IdentityVerificationService.sha256(state));
+        assertFalse(verification.isVerified());
+        assertNotNull(verification.getUsedAt());
+        assertNull(verification.getVerifiedName());
+        assertEquals(AuditAction.IDENTITY_VERIFICATION_FAILED, lastAudit().getAction());
+        assertEquals("Provider MOSIP: the login method (acr) is not in MOSIP_ALLOWED_ACRS", lastAudit().getDetails());
+        verify(memberRepository, org.mockito.Mockito.never()).existsByIdentityToken(anyString());
+        assertFalse(output.getAll().contains("biometrics"), "the acr value is never logged");
+        assertFalse(output.getAll().contains("Uwimana"));
+    }
+
+    @Test
+    void anEmptyAcrIsNotAllowed() {
+        loggedInWith("");
+        String state = service.start(manager).state();
+
+        assertEquals("ACR_NOT_ALLOWED", assertThrows(IdentityRequestException.class,
+                () -> service.complete("the-code", state, manager)).errorCode());
+    }
+
+    @Test
+    void withoutAnAcrNothingChanges() {
+        loggedInWith(null);
+        String state = service.start(manager).state();
+
+        VerifyResultResponse result = service.complete("the-code", state, manager);
+
+        assertTrue(result.verified());
+        verify(client, org.mockito.Mockito.never()).isAllowedAcr(any());
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"0711111111", "+256772123456", "788123456", "07881234567"})
     void aPhoneThatIsNotARwandanMobileNumberVerifiesNobody(String phone, CapturedOutput output) {

@@ -10,7 +10,7 @@ class IdentityAvailabilityTest {
 
     private static IdentityAvailability availability(boolean enabled) {
         return new IdentityAvailability(new MosipProperties(enabled, "http://localhost:8080", "coopaggregate", "r", "k",
-                "kid", null, null, null, null, null, null, null, null, null));
+                "kid", null, null, null, null, null, null, null, null, null, null));
     }
 
     @Test

@@ -26,18 +26,30 @@ public record MosipProperties(
         String userinfoEndpoint,
         String jwksUri,
         String expectedIssuer,
-        String expectedUserinfoIssuer) {
+        String expectedUserinfoIssuer,
+        String allowedAcrs) {
 
     // Only openid: the name and phone are asked for with the claims parameter (see MosipClient), so no scope brings
     // in details the cooperative does not use.
     static final String DEFAULT_SCOPE = "openid";
     private static final List<String> NEEDED_SCOPES = List.of("openid", "phone");
     static final String DEFAULT_ACR = "mosip:idp:acr:password";
+    // Only the one-time code: the local eSignet mock accepts any biometric capture, so biometrics prove nothing.
+    static final String DEFAULT_ALLOWED_ACRS = "mosip:idp:acr:generated-code";
 
     public MosipProperties {
         baseUrl = isBlank(baseUrl) ? null : baseUrl.trim().replaceAll("/+$", "");
         scope = isBlank(scope) ? DEFAULT_SCOPE : scope.trim();
         acrValues = isBlank(acrValues) ? DEFAULT_ACR : acrValues.trim();
+        allowedAcrs = isBlank(allowedAcrs) ? DEFAULT_ALLOWED_ACRS : allowedAcrs.trim();
+    }
+
+    /**
+     * Whether an id_token "acr" (how the person logged in) is one of MOSIP_ALLOWED_ACRS (space-separated, compared
+     * exactly).
+     */
+    public boolean isAllowedAcr(String acr) {
+        return acr != null && java.util.Arrays.asList(allowedAcrs.split("\\s+")).contains(acr);
     }
 
     /** The environment variables that MOSIP_ENABLED=true needs but are empty. Names only, never values. */
@@ -142,6 +154,6 @@ public record MosipProperties(
         return "MosipProperties[enabled=" + enabled + ", baseUrl=" + baseUrl + ", clientId=" + clientId
                 + ", redirectUri=" + redirectUri + ", keyId=" + keyId + ", privateKeyPath="
                 + (isBlank(privateKeyPath) ? "(empty)" : "****") + ", scope=" + scope + ", acrValues=" + acrValues
-                + "]";
+                + ", allowedAcrs=" + allowedAcrs + "]";
     }
 }

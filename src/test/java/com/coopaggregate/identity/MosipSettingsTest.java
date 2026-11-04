@@ -73,7 +73,7 @@ class MosipSettingsTest {
     void scopesBeyondOpenidAndPhoneAreNamed() {
         MosipProperties properties = new MosipProperties(true, "http://localhost:8080", "coopaggregate",
                 "http://localhost:5173/identity/callback", "the-key.pem", "kid", "openid  profile email phone", null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
 
         assertEquals(List.of("profile", "email"), properties.extraScopes());
     }
@@ -81,7 +81,7 @@ class MosipSettingsTest {
     @Test
     void missingSettingsAreListedByNameOnly() {
         MosipProperties properties = new MosipProperties(true, " ", null, "", null, "", null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
 
         assertEquals(List.of("MOSIP_BASE_URL", "MOSIP_CLIENT_ID", "MOSIP_REDIRECT_URI", "MOSIP_PRIVATE_KEY_PATH",
                 "MOSIP_KEY_ID"), properties.missingRequired());
@@ -295,7 +295,7 @@ class MosipSettingsTest {
 
     private static MosipProperties properties(String baseUrl, String keyPath) {
         return new MosipProperties(true, baseUrl, "coopaggregate", "http://localhost:5173/identity/callback", keyPath,
-                "coopaggregate-key", null, null, null, null, null, null, null, null, null);
+                "coopaggregate-key", null, null, null, null, null, null, null, null, null, null);
     }
 
     private static String pem(byte[] der) {

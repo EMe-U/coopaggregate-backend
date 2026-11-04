@@ -33,6 +33,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -56,6 +57,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
 
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class MosipClientTest {
 
     private static final String BASE = "http://localhost:8080";
@@ -103,7 +105,7 @@ class MosipClientTest {
                 .andRespond(withSuccess(new JWKSet(providerKey.toPublicJWK()).toString(), MediaType.APPLICATION_JSON));
         MosipProperties properties = new MosipProperties(true, BASE, "coopaggregate",
                 "http://localhost:5173/identity/callback", "unused", "coopaggregate-key", null, null, null, null, null,
-                null, null, issuer, userinfoIssuer);
+                null, null, issuer, userinfoIssuer, null);
         client = new MosipClient(properties,
                 new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), "coopaggregate-key"), builder.build(),
                 jwksTemplate, Clock.systemUTC());
@@ -240,7 +242,8 @@ class MosipClientTest {
         MosipClaims result = client.fetchClaims(CODE, VERIFIER, NONCE);
 
         assertEquals("Uwimana Claudine", result.name());
-        assertEquals(List.of("name", "phoneNumber", "subject"), java.util.Arrays.stream(
+        // No birth date is kept: the name and phone, the pairwise sub, and how the person logged in (acr).
+        assertEquals(List.of("acr", "name", "phoneNumber", "subject"), java.util.Arrays.stream(
                 MosipClaims.class.getRecordComponents()).map(c -> c.getName()).sorted().toList());
     }
 
@@ -459,7 +462,7 @@ class MosipClientTest {
     @Test
     void withoutMosipIssuerTheBaseUrlIsTheIssuer() {
         assertEquals(BASE, new MosipProperties(true, BASE + "/", "c", "r", "k", "kid", null, null, null, null, null,
-                null, null, " ", null).issuer());
+                null, null, " ", null, null).issuer());
     }
 
     @Test
@@ -509,9 +512,9 @@ class MosipClientTest {
     @Test
     void theUserinfoIssuerDefaultsToTheIdTokenIssuer() {
         assertEquals(BASE, new MosipProperties(true, BASE + "/", "c", "r", "k", "kid", null, null, null, null, null,
-                null, null, null, " ").userinfoIssuer());
+                null, null, null, " ", null).userinfoIssuer());
         assertEquals(ESIGNET_ISSUER, new MosipProperties(true, BASE, "c", "r", "k", "kid", null, null, null, null, null,
-                null, null, ESIGNET_ISSUER, null).userinfoIssuer());
+                null, null, ESIGNET_ISSUER, null, null).userinfoIssuer());
     }
 
     @Test
@@ -650,7 +653,7 @@ class MosipClientTest {
         MockRestServiceServer keys = MockRestServiceServer.bindTo(template).build();
         keys.expect(ExpectedCount.manyTimes(), requestTo(BASE + "/oauth2/jwks")).andRespond(withServerError());
         MosipClient broken = new MosipClient(new MosipProperties(true, BASE, "coopaggregate", "r", "k", "kid", null,
-                null, null, null, null, null, null, null, null),
+                null, null, null, null, null, null, null, null, null),
                 new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), "kid"), builder.build(), template,
                 Clock.systemUTC());
         httpServer.expect(requestTo(BASE + "/oauth2/token"))
@@ -660,6 +663,84 @@ class MosipClientTest {
                 () -> broken.fetchClaims(CODE, VERIFIER, NONCE));
 
         assertEquals("The identity provider's answer could not be verified.", e.getMessage());
+    }
+
+    // --- How the person logged in: the id_token acr, and the acr_values asked for
+
+    @Test
+    void theIdTokenAcrIsPassedOnAndOnlyItsPresenceIsLogged(CapturedOutput output) throws Exception {
+        provider(idToken(idClaims().claim("acr", "mosip:idp:acr:biometrics")), userinfo(userinfoClaims()));
+
+        MosipClaims claims = client.fetchClaims(CODE, VERIFIER, NONCE);
+
+        assertEquals("mosip:idp:acr:biometrics", claims.acr());
+        assertTrue(output.getAll().contains("id_token acr claim present: true"), output.getAll());
+        assertFalse(output.getAll().contains("biometrics"), "never the acr value");
+    }
+
+    @Test
+    void anIdTokenWithoutAcrGivesNoAcr(CapturedOutput output) throws Exception {
+        provider(idToken(idClaims()), userinfo(userinfoClaims()));
+
+        assertNull(client.fetchClaims(CODE, VERIFIER, NONCE).acr());
+        assertTrue(output.getAll().contains("id_token acr claim present: false"), output.getAll());
+    }
+
+    @Test
+    void anAcrThatIsNotTextIsPresentButNeverAllowed() throws Exception {
+        provider(idToken(idClaims().claim("acr", List.of("mosip:idp:acr:generated-code"))),
+                userinfo(userinfoClaims()));
+
+        String acr = client.fetchClaims(CODE, VERIFIER, NONCE).acr();
+
+        assertEquals("", acr);
+        assertFalse(client.isAllowedAcr(acr));
+    }
+
+    @Test
+    void onlyTheOneTimeCodeIsAllowedByDefault() {
+        assertTrue(client.isAllowedAcr("mosip:idp:acr:generated-code"));
+        assertFalse(client.isAllowedAcr("mosip:idp:acr:biometrics"));
+        assertFalse(client.isAllowedAcr("mosip:idp:acr:linked-wallet"));
+        assertFalse(client.isAllowedAcr("mosip:idp:acr:password"));
+        assertFalse(client.isAllowedAcr(""));
+        assertFalse(client.isAllowedAcr(null));
+    }
+
+    @Test
+    void mosipAllowedAcrsIsASpaceSeparatedListComparedExactly() {
+        MosipProperties properties = acrProperties(null, "  mosip:idp:acr:generated-code   mosip:idp:acr:password ");
+
+        assertTrue(properties.isAllowedAcr("mosip:idp:acr:generated-code"));
+        assertTrue(properties.isAllowedAcr("mosip:idp:acr:password"));
+        assertFalse(properties.isAllowedAcr("mosip:idp:acr:generated"));
+        assertFalse(properties.isAllowedAcr("mosip:idp:acr:generated-code mosip:idp:acr:password"));
+        assertFalse(properties.isAllowedAcr("MOSIP:IDP:ACR:GENERATED-CODE"));
+        assertFalse(properties.isAllowedAcr("mosip:idp:acr:biometrics"));
+    }
+
+    @Test
+    void severalAcrValuesAreSentExactlyAsSetAndLoggedAlone(CapturedOutput output) {
+        String several = "mosip:idp:acr:generated-code mosip:idp:acr:biometrics mosip:idp:acr:linked-wallet";
+        MosipClient withSeveral = new MosipClient(acrProperties(several, null),
+                new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), "coopaggregate-key"),
+                RestClient.builder().build(), new RestTemplate(), Clock.systemUTC());
+
+        String url = withSeveral.authorizationUrl("the-state", NONCE, "the-challenge");
+
+        assertEquals(several, query(url.substring(url.indexOf('?') + 1)).get("acr_values"));
+        assertTrue(url.contains("&acr_values=mosip:idp:acr:generated-code%20mosip:idp:acr:biometrics%20"
+                + "mosip:idp:acr:linked-wallet&"), url);
+        String logs = output.getAll();
+        assertTrue(logs.contains("Identity verification authorize request acr_values: " + several), logs);
+        assertFalse(logs.contains("the-state"), "never the state");
+        assertFalse(logs.contains("the-challenge"), "never the code challenge");
+        assertFalse(logs.contains(NONCE), "never the nonce");
+    }
+
+    private static MosipProperties acrProperties(String acrValues, String allowedAcrs) {
+        return new MosipProperties(true, BASE, "coopaggregate", "http://localhost:5173/identity/callback", "unused",
+                "coopaggregate-key", null, acrValues, null, null, null, null, null, null, null, allowedAcrs);
     }
 
     @Test

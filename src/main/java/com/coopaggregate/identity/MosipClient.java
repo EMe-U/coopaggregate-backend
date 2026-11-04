@@ -110,6 +110,8 @@ public class MosipClient {
      * parameter asks for the name and phone only.
      */
     public String authorizationUrl(String state, String nonce, String codeChallenge) {
+        // Only the configured acr_values, as sent; nothing else from the URL (state, nonce, challenge) is logged.
+        log.info("Identity verification authorize request acr_values: {}", properties.acrValues());
         return UriComponentsBuilder.fromUriString(properties.authorizationUrl())
                 .queryParam("response_type", "code")
                 .queryParam("client_id", properties.clientId())
@@ -146,7 +148,24 @@ public class MosipClient {
             throw IdentityProviderException.failed(UNTRUSTED, "userinfo check failed: "
                     + userinfoDiagnostics.describe(answer.body(), answer.response(), id.getSubject(), null));
         }
-        return new MosipClaims(userinfo.getSubject(), claim(userinfo, "name"), claim(userinfo, "phone_number"));
+        return new MosipClaims(userinfo.getSubject(), claim(userinfo, "name"), claim(userinfo, "phone_number"),
+                acr(id));
+    }
+
+    /** Whether an id_token acr is one of MOSIP_ALLOWED_ACRS. */
+    public boolean isAllowedAcr(String acr) {
+        return properties.isAllowedAcr(acr);
+    }
+
+    // The id_token's acr, or null when it has none. Only its presence is logged. A value that is not text is kept as
+    // "" so it is present but never allowed.
+    private static String acr(Jwt id) {
+        Object acr = id.getClaims().get("acr");
+        log.info("Identity verification id_token acr claim present: {}", acr != null);
+        if (acr == null) {
+            return null;
+        }
+        return acr instanceof String text ? text : "";
     }
 
     private Map<String, Object> exchangeCode(String code, String codeVerifier) {

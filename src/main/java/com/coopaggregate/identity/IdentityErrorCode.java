@@ -16,6 +16,8 @@ public enum IdentityErrorCode {
     PHONE_NOT_RWANDAN,
     // 400: the verified name is longer than 150 characters.
     NAME_TOO_LONG,
+    // 400: the person logged in at eSignet in a way that is not in MOSIP_ALLOWED_ACRS (for example biometrics).
+    ACR_NOT_ALLOWED,
     // 502: eSignet failed or its answer could not be trusted.
     PROVIDER_FAILED,
     // 503: identity verification is switched off.
