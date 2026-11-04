@@ -1,6 +1,8 @@
 package com.coopaggregate.member;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -12,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.common.PageResponse;
 
 import io.swagger.v3.oas.annotations.Operation;
@@ -27,9 +30,11 @@ import jakarta.validation.Valid;
 public class MemberController {
 
     private final MemberService memberService;
+    private final AuthService authService;
 
-    public MemberController(MemberService memberService) {
+    public MemberController(MemberService memberService, AuthService authService) {
         this.memberService = memberService;
+        this.authService = authService;
     }
 
     @GetMapping
@@ -59,13 +64,13 @@ public class MemberController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Register a member. The member code (M-0001, ...) is generated. Every member needs an "
-            + "identity verification: send its verificationId and the member's birthDate (used for the check only, "
-            + "never saved). 400 if either is missing or the name, birth date or phone do not match the person who "
-            + "verified (three tries), 409 if the person is already a member, 503 if identity verification is not "
-            + "configured (no member can be registered then)")
-    public MemberResponse create(@Valid @RequestBody MemberRequest request) {
-        return memberService.create(request);
+    @Operation(summary = "Register a member from a completed identity verification (verificationId). The name and "
+            + "phone are the verified ones and must not be sent (400 if they are). The member code (M-0001, ...) is "
+            + "generated. 400 if the verification is unknown, another manager's or more than 30 minutes old, 409 if it "
+            + "was already used, the person is already a member, or the phone or national ID belongs to another "
+            + "member, 503 if identity verification is not configured (no member can be registered then)")
+    public MemberResponse create(@Valid @RequestBody NewMemberRequest request, @AuthenticationPrincipal Jwt jwt) {
+        return memberService.create(request, authService.currentManager(jwt.getSubject()));
     }
 
     @PutMapping("/{id}")

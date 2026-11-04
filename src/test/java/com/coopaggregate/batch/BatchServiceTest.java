@@ -25,6 +25,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.error.BadRequestException;
@@ -89,7 +90,7 @@ class BatchServiceTest {
         assertEquals(new BatchResponse(42L, "RCT-7K2Q", 5L, "M-0005", "Uwimana Claudine", "Big", 3L, "A-2026-01",
                 LotStatus.CLOSED, Instant.parse("2026-10-19T08:00:00Z"), new BigDecimal("120.50"),
                 new BigDecimal("100.00"), new BigDecimal("0.50"), new BigDecimal("20.00"), ConfirmationStatus.PENDING,
-                0, 0, 0, BatchPayment.AWAITING_SETTLEMENT),
+                0, 0, 0, BatchPayment.AWAITING_SETTLEMENT, List.of()),
                 response.batches().content().get(0));
         assertEquals(BatchEarnings.NONE, response.earnings());
     }
@@ -195,7 +196,7 @@ class BatchServiceTest {
 
     private BatchService service() {
         return new BatchService(batchRepository, memberRepository, gradeRepository, saleAllocationRepository,
-                lotShareRepository);
+                lotShareRepository, mock(LotPortionRepository.class));
     }
 
     // The database fills remainingKg; here it is set the way the database would.
@@ -210,6 +211,7 @@ class BatchServiceTest {
         delivery.setReceiptCode(receiptCode);
         delivery.setMember(member);
         delivery.setLot(lot);
+        delivery.setGrade(lot.getGrade());
         delivery.setDeliveredAt(Instant.parse("2026-10-19T08:00:00Z"));
         delivery.setQuantityKg(new BigDecimal(received));
         ReflectionTestUtils.setField(delivery, "soldKg", new BigDecimal(sold).setScale(2));

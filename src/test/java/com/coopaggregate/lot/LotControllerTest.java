@@ -59,13 +59,15 @@ class LotControllerTest {
     @Test
     void openLotReturns200() throws Exception {
         when(lotService.findOpenLot(1L)).thenReturn(
-                Optional.of(new OpenLotResponse(3L, "A-2026-01", "Big", new BigDecimal("1250.50"))));
+                Optional.of(new OpenLotResponse(3L, "A-2026-01", "Big", new BigDecimal("72.50"),
+                        new BigDecimal("100.00"))));
 
         mockMvc.perform(get("/api/lots/open").param("gradeId", "1").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("A-2026-01"))
                 .andExpect(jsonPath("$.gradeName").value("Big"))
-                .andExpect(jsonPath("$.totalKg").value(1250.50));
+                .andExpect(jsonPath("$.totalKg").value(72.50))
+                .andExpect(jsonPath("$.capacityKg").value(100.00));
     }
 
     @Test

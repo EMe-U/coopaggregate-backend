@@ -68,7 +68,7 @@ class DisputeControllerTest {
         when(disputeService.list(null, null, 0, 15)).thenReturn(new DisputesResponse(1, new BigDecimal("120.50"), 4,
                 new PageResponse<>(List.of(new DisputeItem(42L, "RCT-7K2Q", 5L, "Uwimana Claudine", "M-0005", "Big",
                         "A-2026-01", new BigDecimal("120.50"), DisputeReason.WRONG_KG, "It was 100 kg",
-                        Instant.parse("2026-10-23T08:00:00Z"), 3, true, null, null, null, null)), 0, 15, 1, 1)));
+                        Instant.parse("2026-10-23T08:00:00Z"), 3, true, null, null, null, null, List.of())), 0, 15, 1, 1)));
 
         mockMvc.perform(get("/api/disputes").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())

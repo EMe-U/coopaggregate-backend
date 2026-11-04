@@ -18,6 +18,8 @@ import com.coopaggregate.delivery.DeliveryConfirmedEvent;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.delivery.DisputeReason;
+import com.coopaggregate.grade.GradeRepository;
+import com.coopaggregate.lot.LotFiller;
 
 /**
  * Handles members' SMS replies: "1 RCT-7K2Q" confirms a delivery, "2 RCT-7K2Q <note>" disputes it. A reply only
@@ -32,10 +34,15 @@ public class InboundSmsService {
     private static final int MAX_NOTE_LENGTH = 500;
 
     private final DeliveryRepository deliveryRepository;
+    private final GradeRepository gradeRepository;
+    private final LotFiller lotFiller;
     private final ApplicationEventPublisher eventPublisher;
 
-    public InboundSmsService(DeliveryRepository deliveryRepository, ApplicationEventPublisher eventPublisher) {
+    public InboundSmsService(DeliveryRepository deliveryRepository, GradeRepository gradeRepository,
+                             LotFiller lotFiller, ApplicationEventPublisher eventPublisher) {
         this.deliveryRepository = deliveryRepository;
+        this.gradeRepository = gradeRepository;
+        this.lotFiller = lotFiller;
         this.eventPublisher = eventPublisher;
     }
 
@@ -52,7 +59,7 @@ public class InboundSmsService {
             return Result.IGNORED;
         }
         String receiptCode = reply.group(2).toUpperCase(Locale.ROOT);
-        Delivery delivery = deliveryRepository.findByReceiptCode(receiptCode).orElse(null);
+        Delivery delivery = deliveryRepository.findIdByReceiptCode(receiptCode).map(this::lock).orElse(null);
         if (delivery == null || delivery.isReversed() || !sentByOwner(delivery, fromPhone)) {
             log.info("Ignored SMS reply about {}", receiptCode);
             return Result.IGNORED;
@@ -63,6 +70,7 @@ public class InboundSmsService {
                 return Result.IGNORED;
             }
             delivery.confirm(ConfirmationMethod.SMS, Instant.now());
+            lotFiller.place(delivery);
             eventPublisher.publishEvent(new DeliveryConfirmedEvent(delivery.getId()));
             return Result.CONFIRMED;
         }
@@ -73,6 +81,15 @@ public class InboundSmsService {
         }
         delivery.dispute(DisputeReason.OTHER, note(reply.group(3)), Instant.now());
         return Result.DISPUTED;
+    }
+
+    // A "1" puts the delivery into a lot, so the locks are taken in the same order as for any confirmation: the grade,
+    // the grade's lot being filled, then the delivery.
+    private Delivery lock(Long deliveryId) {
+        Long gradeId = deliveryRepository.findGradeIdById(deliveryId).orElseThrow();
+        gradeRepository.findForUpdateById(gradeId);
+        lotFiller.lockFillingLot(gradeId);
+        return deliveryRepository.findForUpdateById(deliveryId).orElseThrow();
     }
 
     private static boolean sentByOwner(Delivery delivery, String fromPhone) {

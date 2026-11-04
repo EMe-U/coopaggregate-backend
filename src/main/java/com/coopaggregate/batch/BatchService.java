@@ -3,6 +3,7 @@ package com.coopaggregate.batch;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -17,6 +18,8 @@ import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
+import com.coopaggregate.lot.LotPortionRepository;
+import com.coopaggregate.lot.PortionResponse;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 import com.coopaggregate.share.LotShareRepository;
@@ -35,15 +38,17 @@ public class BatchService {
     private final GradeRepository gradeRepository;
     private final SaleAllocationRepository saleAllocationRepository;
     private final LotShareRepository lotShareRepository;
+    private final LotPortionRepository lotPortionRepository;
 
     public BatchService(BatchRepository batchRepository, MemberRepository memberRepository,
                         GradeRepository gradeRepository, SaleAllocationRepository saleAllocationRepository,
-                        LotShareRepository lotShareRepository) {
+                        LotShareRepository lotShareRepository, LotPortionRepository lotPortionRepository) {
         this.batchRepository = batchRepository;
         this.memberRepository = memberRepository;
         this.gradeRepository = gradeRepository;
         this.saleAllocationRepository = saleAllocationRepository;
         this.lotShareRepository = lotShareRepository;
+        this.lotPortionRepository = lotPortionRepository;
     }
 
     /** status is "all" (default) or "unsold" (only batches with kg left). */
@@ -66,19 +71,24 @@ public class BatchService {
                 withMoney(batchRepository.findGradeBatchesWithKgLeft(gradeId, pageOf(page, size))));
     }
 
-    // Two queries for the whole page: the credits of its batches, and which members have a share of their lots.
+    // Three queries for the whole page: the credits of its batches, which members have a share of their lots, and the
+    // batches' portions.
     private PageResponse<BatchResponse> withMoney(Page<Delivery> batches) {
         List<Delivery> content = batches.getContent();
         if (content.isEmpty()) {
-            return PageResponse.from(batches.map(batch -> BatchResponse.from(batch, null, false)));
+            return PageResponse.from(batches.map(batch -> BatchResponse.from(batch, null, false, List.of())));
         }
+        Map<Long, List<PortionResponse>> lots = PortionResponse.byDelivery(lotPortionRepository
+                .findWithLotByDeliveryIdIn(content.stream().map(Delivery::getId).toList()));
         Map<Long, BatchCredit> credits = saleAllocationRepository
                 .findCreditsOfBatches(content.stream().map(Delivery::getId).toList()).stream()
                 .collect(Collectors.toMap(BatchCredit::deliveryId, Function.identity()));
         Set<MemberLot> shared = new HashSet<>(lotShareRepository
-                .findSharedMemberLots(content.stream().map(batch -> batch.getLot().getId()).distinct().toList()));
+                .findSharedMemberLots(content.stream().map(Delivery::ownLotId).filter(Objects::nonNull)
+                        .distinct().toList()));
         return PageResponse.from(batches.map(batch -> BatchResponse.from(batch, credits.get(batch.getId()),
-                shared.contains(new MemberLot(batch.getMember().getId(), batch.getLot().getId())))));
+                shared.contains(new MemberLot(batch.getMember().getId(), batch.ownLotId())),
+                lots.getOrDefault(batch.getId(), List.of()))));
     }
 
     private static PageRequest pageOf(int page, int size) {

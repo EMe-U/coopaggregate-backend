@@ -9,6 +9,7 @@ import jakarta.validation.constraints.PastOrPresent;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+/** Updates a member's details. A new member is registered with NewMemberRequest instead. */
 public record MemberRequest(
         @NotBlank(message = "is required")
         @Size(max = 150, message = "must be at most 150 characters")
@@ -23,24 +24,17 @@ public record MemberRequest(
         @Pattern(regexp = "^(\\d{16})?$", message = "must be 16 digits")
         String nationalId,
 
-        @Size(max = 255, message = "must be at most 255 characters")
+        // 500, like a verified address, so a member with a long verified address can still be edited.
+        @Size(max = 500, message = "must be at most 500 characters")
         String address,
 
         @PastOrPresent(message = "cannot be in the future")
         LocalDate joinDate,
 
         @Pattern(regexp = "^(rw|en)$", message = "must be rw or en")
-        String preferredLanguage,
+        String preferredLanguage) {
 
-        // From POST /api/members/verify/callback. Required when registering; ignored when updating.
-        Long verificationId,
-
-        // Only for the identity check: required when registering, compared with the person who verified, and never
-        // saved. Ignored when updating.
-        @PastOrPresent(message = "cannot be in the future")
-        LocalDate birthDate) {
-
-    // Records print their fields; the birth date and the verification must never end up in a log line.
+    // Records print their fields; the member's details must never end up in a log line.
     @Override
     public String toString() {
         return "MemberRequest[****]";

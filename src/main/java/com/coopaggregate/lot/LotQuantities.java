@@ -2,7 +2,10 @@ package com.coopaggregate.lot;
 
 import java.math.BigDecimal;
 
-/** Totals for one lot, summed from its deliveries, losses and sales. Sums of no rows arrive as null. */
+/**
+ * Totals for one lot, summed from its portions of deliveries that are not reversed. deliveredKg is the kg in the lot.
+ * Sums of no rows arrive as null.
+ */
 public record LotQuantities(
         Long lotId,
         BigDecimal deliveredKg,

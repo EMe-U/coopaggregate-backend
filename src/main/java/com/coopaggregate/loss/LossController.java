@@ -36,7 +36,8 @@ public class LossController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Record a loss on an open or closed lot. It cannot be more than the lot's remaining kg")
+    @Operation(summary = "Record a loss after intake on a lot that still holds potatoes. It is shared across the "
+            + "members of the lot in proportion to their kg left, and cannot be more than the lot's confirmed kg left")
     public LossResponse record(@PathVariable Long lotId, @Valid @RequestBody LossRequest request,
                                @AuthenticationPrincipal Jwt jwt) {
         return lossService.record(lotId, request, authService.currentManager(jwt.getSubject()));

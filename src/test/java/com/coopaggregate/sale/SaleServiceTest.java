@@ -43,6 +43,7 @@ import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.loss.Loss;
+import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotStatus;
 
 import jakarta.persistence.criteria.CriteriaBuilder;
@@ -178,7 +179,7 @@ class SaleServiceTest {
         // The batch of the first sale is used up before the second sale starts.
         sell("50.00", 300L);
         SaleResponse second = service.record(new SaleRequest(UUID.randomUUID(), 1L, 2L, new BigDecimal("60.00"), 320L,
-                null, null, null), f.manager).sale();
+                null, null, null, null), f.manager).sale();
 
         assertEquals(List.of(1L), second.batches().stream().map(SaleResponse.BatchLine::deliveryId).toList());
         assertEquals(new BigDecimal("60.00"), f.deliveries.get(0).getSoldKg());
@@ -245,21 +246,22 @@ class SaleServiceTest {
     }
 
     @Test
-    void locksAreTakenGradeThenLotsInIdOrderThenBatchesThenLedger() {
+    void locksAreTakenGradeThenLotsInIdOrderThenPortionsThenDeliveriesThenLedger() {
         sell("120.00", 300L);
 
         // The oldest batch is in lot 4, but lot 3 is locked first.
-        assertEquals(List.of("grade:1", "lot:3", "lot:4", "batches", "sale", "allocation", "allocation",
-                "ledger:SALE", "ledger:SALE_CREDIT", "ledger:SALE_CREDIT"), f.calls);
+        assertEquals(List.of("grade:1", "lot:3", "lot:4", "portions", "deliveries", "sale", "allocation",
+                "allocation", "ledger:SALE", "ledger:SALE_CREDIT", "ledger:SALE_CREDIT"), f.calls);
     }
 
     @Test
     void lotsWithoutSellableBatchesAreNotLocked() {
         f.deliveries.get(1).addSoldKg(new BigDecimal("50.00"));
+        f.portionOf(f.deliveries.get(1), f.lotA2).addSoldKg(new BigDecimal("50.00"));
 
         sell("10.00", 300L);
 
-        assertEquals(List.of("grade:1", "lot:3", "batches"), f.calls.subList(0, 3));
+        assertEquals(List.of("grade:1", "lot:3", "portions", "deliveries"), f.calls.subList(0, 4));
         verify(f.lotRepository, never()).findForUpdateById(4L);
     }
 
@@ -285,20 +287,31 @@ class SaleServiceTest {
         assertEquals(List.of("grade:1"), f.calls);
     }
 
-    // --- Skipping the oldest batch ---
+    // --- Skipping whole lots ---
 
     @Test
-    void aSkippedBatchIsPassedOverAndTheSkipIsRecordedInTheAuditLog() {
-        SaleResponse sale = service.record(request(1L, 2L, "120.00", 300L, List.of(2L),
-                "  Customer wants potatoes from Alice only  "), f.manager).sale();
+    void aSkippedLotIsPassedOverAndTheSkipIsRecordedInTheAuditLog() {
+        SaleResponse sale = service.record(request(1L, 2L, "120.00", 300L, List.of(4L),
+                "  Customer wants potatoes from lot A-1 only  "), f.manager).sale();
 
         assertEquals(List.of(1L, 3L), sale.batches().stream().map(SaleResponse.BatchLine::deliveryId).toList());
         assertEquals(BigDecimal.ZERO, f.deliveries.get(1).getSoldKg());
         assertEquals(1, f.audits.size());
         assertEquals(AuditAction.SALE_FIFO_SKIPPED, f.audits.get(0).getAction());
-        assertEquals("Sale " + sale.saleCode() + ": skipped RCT-0002. Reason: Customer wants potatoes from Alice only",
-                f.audits.get(0).getDetails());
+        assertEquals("Sale " + sale.saleCode() + ": skipped lots A-2026-02. Reason: Customer wants potatoes from lot "
+                + "A-1 only", f.audits.get(0).getDetails());
         assertNull(f.audits.get(0).getMember());
+    }
+
+    @Test
+    void singleBatchesCanNoLongerBeSkipped() {
+        BadRequestException e = assertThrows(BadRequestException.class, () -> service.record(new SaleRequest(
+                CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, null, "Customer wants Alice's potatoes",
+                List.of(2L)), f.manager));
+
+        assertEquals("Single batches can no longer be skipped. Skip whole lots with skipLotIds.", e.getMessage());
+        assertTrue(f.calls.isEmpty());
+        assertNothingSaved();
     }
 
     @Test
@@ -310,10 +323,10 @@ class SaleServiceTest {
 
     @Test
     void skippingNeedsAReasonOf10To500Characters() {
-        String message = "A reason of 10 to 500 characters is needed to skip a batch.";
+        String message = "A reason of 10 to 500 characters is needed to skip a lot.";
         for (String reason : new String[] {null, "", "         ", "too short", "x".repeat(501)}) {
             assertEquals(message, assertThrows(BadRequestException.class, () -> service.record(
-                    request(1L, 2L, "120.00", 300L, List.of(2L), reason), f.manager)).getMessage(),
+                    request(1L, 2L, "120.00", 300L, List.of(4L), reason), f.manager)).getMessage(),
                     String.valueOf(reason));
         }
 
@@ -331,14 +344,170 @@ class SaleServiceTest {
     }
 
     @Test
-    void aSkippedBatchTheSaleWouldNotReachIsRefusedAndSavesNothing() {
+    void aSkippedLotTheSaleWouldNotReachIsRefusedAndSavesNothing() {
         BadRequestException e = assertThrows(BadRequestException.class, () -> service.record(
                 request(1L, 2L, "40.00", 300L, List.of(3L), "Wants the older potatoes"), f.manager));
 
-        assertEquals("Batch RCT-0003 would not be used by this sale, so it does not need to be skipped.",
+        assertEquals("Lot A-2026-01 would not be used by this sale, so it does not need to be skipped.",
                 e.getMessage());
         assertNothingSaved();
         assertTrue(f.audits.isEmpty());
+    }
+
+    // --- Fixed-size lots ---
+
+    // Grade Small has no older stock with kg here: B-1 is emptied, so only the fixed-size lots below are sold.
+    private void fixedLotsOfSmall() {
+        Lot first = f.fixedLot(20L, "B-2026-02", f.small, LotStatus.FULL);
+        Lot second = f.fixedLot(21L, "B-2026-03", f.small, LotStatus.FILLING);
+        f.batch(31L, first, f.alice, "2026-10-05T08:00:00Z", "60.00");
+        f.splitBatch(32L, f.bosco, "2026-10-04T08:00:00Z", first, "40.00", second, "10.00");
+        f.batch(33L, second, f.alice, "2026-10-06T08:00:00Z", "30.00");
+    }
+
+    @Test
+    void aSaleOf150KgTakesTheFirstLotWholeAndPartOfTheNextSharedInProportion() {
+        fixedLotsOfSmall();
+        Lot first = f.lots.get(20L);
+        Lot second = f.lots.get(21L);
+        Lot third = f.fixedLot(22L, "B-2026-04", f.small, LotStatus.FILLING);
+        second.setStatus(LotStatus.FULL);
+        f.batch(34L, second, f.bosco, "2026-10-07T08:00:00Z", "60.00");
+        f.batch(35L, third, f.alice, "2026-10-08T08:00:00Z", "20.00");
+
+        SaleResponse sale = service.record(request(2L, 2L, "150.00", 300L, null, null), f.manager).sale();
+
+        // Lot B-2026-02 (100 kg) whole, then 50 of the 100 kg of B-2026-03 in proportion: 10, 30 and 60 kg left give
+        // 5, 15 and 30 kg. B-2026-04 is not reached.
+        // Inside a lot, the older delivery (32, delivered on 4 October) is listed first.
+        assertEquals(List.of("B-2026-02:32:40.00", "B-2026-02:31:60.00", "B-2026-03:32:5.00", "B-2026-03:33:15.00",
+                "B-2026-03:34:30.00"), sale.batches().stream()
+                .map(line -> line.lotCode() + ":" + line.deliveryId() + ":" + line.kg().toPlainString()).toList());
+        assertEquals(new BigDecimal("45.00"), f.deliveries.get(f.deliveries.size() - 4).getSoldKg());
+        assertEquals(LotStatus.SOLD, first.getStatus());
+        assertEquals(LotStatus.FULL, second.getStatus());
+        assertEquals(0, f.portionOf(f.deliveries.get(f.deliveries.size() - 4), second).getSoldKg()
+                .compareTo(new BigDecimal("5.00")));
+        f.savedAllocations.forEach(allocation -> assertTrue(allocation.getLotPortion() != null));
+    }
+
+    @Test
+    void aLotStillBeingFilledCanSellAndKeepsFilling() {
+        fixedLotsOfSmall();
+        Lot second = f.lots.get(21L);
+
+        service.record(request(2L, 2L, "140.00", 300L, null, null), f.manager);
+
+        assertEquals(LotStatus.SOLD, f.lots.get(20L).getStatus());
+        assertEquals(LotStatus.FILLING, second.getStatus(), "a lot being filled is never marked sold");
+        assertEquals(0, f.lotPortionRepository.remainingKg(21L).signum());
+    }
+
+    @Test
+    void olderLotsAreSoldFirstOldestDeliveryFirstThenTheFixedSizeLots() {
+        Lot fixed = f.fixedLot(20L, "A-2026-03", f.big, LotStatus.FULL);
+        // Delivered before every batch of the older lots, but in a fixed-size lot: still sold after them.
+        f.batch(40L, fixed, f.alice, "2026-09-01T08:00:00Z", "100.00");
+
+        SaleResponse sale = sell("260.00", 300L).sale();
+
+        assertEquals(List.of(2L, 1L, 3L, 40L), sale.batches().stream().map(SaleResponse.BatchLine::deliveryId).toList());
+        assertEquals(new BigDecimal("10.00"), sale.batches().get(3).kg());
+    }
+
+    @Test
+    void disputedPortionsAreHeldBackFromSalesButStayInTheirLot() {
+        fixedLotsOfSmall();
+        Delivery disputed = f.deliveries.get(f.deliveries.size() - 3);
+        disputed.dispute(com.coopaggregate.delivery.DisputeReason.WRONG_KG, null, java.time.Instant.now());
+
+        // Delivery 31 (60 kg) is disputed: of the 140 kg in the two lots, 80 can be sold.
+        assertThrows(BadRequestException.class, () -> service.record(request(2L, 2L, "80.01", 300L, null, null),
+                f.manager));
+        SaleResponse sale = service.record(request(2L, 2L, "80.00", 300L, null, null), f.manager).sale();
+
+        assertTrue(sale.batches().stream().noneMatch(line -> line.deliveryId().equals(disputed.getId())));
+        assertEquals(BigDecimal.ZERO, disputed.getSoldKg());
+        assertEquals(new BigDecimal("60.00"), f.lotPortionRepository.remainingKg(20L), "its 60 kg are still in B-2026-02");
+    }
+
+    @Test
+    void skippingAFixedSizeLotPassesOverAllOfItsPortions() {
+        fixedLotsOfSmall();
+
+        SaleResponse sale = service.record(request(2L, 2L, "30.00", 300L, List.of(20L), "Buyer wants the newer lot"),
+                f.manager).sale();
+
+        assertTrue(sale.batches().stream().allMatch(line -> "B-2026-03".equals(line.lotCode())));
+        assertEquals("Sale " + sale.saleCode() + ": skipped lots B-2026-02. Reason: Buyer wants the newer lot",
+                f.audits.get(0).getDetails());
+    }
+
+    @Test
+    void manyMembersAwkwardKilosAndPricesStillAddUpExactly() {
+        Lot lot = f.fixedLot(20L, "B-2026-02", f.small, LotStatus.FULL);
+        String[] kilos = {"7.13", "11.17", "13.19", "17.23", "19.29", "3.11", "5.07", "23.81"};
+        for (int i = 0; i < kilos.length; i++) {
+            f.batch(50L + i, lot, i % 2 == 0 ? f.alice : f.bosco, "2026-10-0" + (1 + i) + "T08:00:00Z", kilos[i]);
+        }
+
+        SaleResponse sale = service.record(request(2L, 2L, "61.37", 293L, null, null), f.manager).sale();
+
+        assertEquals(0, new BigDecimal("61.37").compareTo(sale.batches().stream().map(SaleResponse.BatchLine::kg)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)));
+        long total = new BigDecimal("61.37").multiply(BigDecimal.valueOf(293)).setScale(0, java.math.RoundingMode.HALF_UP)
+                .longValueExact();
+        assertEquals(total, sale.totalAmountRwf());
+        assertEquals(total, sale.batches().stream().mapToLong(SaleResponse.BatchLine::grossRwf).sum());
+        assertEquals(307L, sale.totalDeductionRwf(), "5 RWF per kg of 61.37 kg, rounded once");
+        assertEquals(total, sale.totalDeductionRwf() + sale.totalNetRwf());
+        assertLedgerAddsUp();
+        f.portions.forEach(portion -> assertTrue(portion.unallocatedKg().signum() >= 0));
+    }
+
+    @Test
+    void randomSalesAlwaysAddUpExactlyToTheirLedgerEntries() {
+        java.util.Random random = new java.util.Random(4);
+        long nextId = 100;
+        for (int lotNumber = 0; lotNumber < 6; lotNumber++) {
+            Lot lot = f.fixedLot(30L + lotNumber, "B-2026-" + (10 + lotNumber), f.small, LotStatus.FULL);
+            int left = 10_000;
+            while (left > 0) {
+                int kg = Math.min(left, 1 + random.nextInt(4_000));
+                f.batch(nextId++, lot, random.nextBoolean() ? f.alice : f.bosco, "2026-10-01T08:00:00Z",
+                        BigDecimal.valueOf(kg, 2).toPlainString());
+                left -= kg;
+            }
+        }
+        for (int sale = 0; sale < 12; sale++) {
+            f.ledger.clear();
+            String kg = BigDecimal.valueOf(1 + random.nextInt(4_900), 2).toPlainString();
+            service.record(new SaleRequest(UUID.randomUUID(), 2L, 2L, new BigDecimal(kg), 6L + random.nextInt(997),
+                    null, null, null, null), f.manager);
+            assertLedgerAddsUp();
+        }
+        f.portions.forEach(portion -> assertTrue(portion.unallocatedKg().signum() >= 0, portion.toString()));
+        f.deliveries.forEach(delivery -> assertEquals(0, delivery.getSoldKg().compareTo(f.portions.stream()
+                .filter(portion -> portion.getDelivery() == delivery).map(portion -> portion.getSoldKg())
+                .reduce(BigDecimal.ZERO, BigDecimal::add)), "a delivery's sold kg are its portions' sold kg"));
+    }
+
+    // The credits of the last sale: their kg add up to the SALE entry's kg, their gross (net + deduction) to its amount.
+    private void assertLedgerAddsUp() {
+        SaleTestFixture.Ledgered saleEntry = f.ledger.stream()
+                .filter(entry -> entry.type() == LedgerEntryType.SALE).reduce((a, b) -> b).orElseThrow();
+        List<SaleAllocation> allocations = f.savedAllocations.stream()
+                .filter(allocation -> allocation.getSale().getId().equals(saleEntry.relatedId())).toList();
+        assertEquals(0, saleEntry.kg().compareTo(allocations.stream().map(SaleAllocation::getQuantityKg)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)));
+        assertEquals(saleEntry.amount().longValue(), allocations.stream().mapToLong(SaleAllocation::getGrossRwf).sum());
+        assertEquals(saleEntry.amount().longValue(), allocations.stream()
+                .mapToLong(allocation -> allocation.netRwf() + allocation.getDeductionRwf()).sum());
+        assertEquals(allocations.size(), f.credits().stream()
+                .filter(credit -> allocations.stream().anyMatch(a -> a.getId().equals(credit.relatedId()))).count());
+        for (SaleAllocation allocation : allocations) {
+            assertTrue(allocation.netRwf() >= 0 && allocation.getDeductionRwf() >= 0);
+        }
     }
 
     // --- A sale and a loss on the same lot ---
@@ -348,32 +517,30 @@ class SaleServiceTest {
         sell("120.00", 300L);
         // The sale took 70 kg from batch 1 (lot A-1) and all of batch 2 (lot A-2).
         LossAllocationRepository lossAllocations = mock(LossAllocationRepository.class);
-        when(f.batchRepository.lockBatchesWithKgLeft(3L)).thenAnswer(invocation -> f.deliveries.stream()
-                .filter(d -> d.getLot() == f.lotA1 && d.unallocatedKg().signum() > 0)
-                .sorted(java.util.Comparator.comparing(Delivery::getDeliveredAt).thenComparing(Delivery::getId))
-                .toList());
         Loss loss = new Loss();
         ReflectionTestUtils.setField(loss, "id", 1L);
         loss.setLot(f.lotA1);
         loss.setQuantityKg(new BigDecimal("40.00"));
 
-        new BatchAllocator(f.batchRepository, lossAllocations).allocateLoss(loss);
+        new BatchAllocator(f.lotPortionRepository, lossAllocations, f.deliveryRepository).allocateLoss(loss);
 
+        // Batch 1 has 30 kg left and batch 3 has 100: the 40 kg are shared 30 to 100, the sold kg carry none.
         Delivery first = f.deliveries.get(0);
         Delivery third = f.deliveries.get(2);
         assertEquals(new BigDecimal("70.00"), first.getSoldKg());
-        assertEquals(new BigDecimal("30.00"), first.getLostKg());
-        assertEquals(new BigDecimal("10.00"), third.getLostKg());
-        assertEquals(0, first.unallocatedKg().signum());
-        assertEquals(new BigDecimal("90.00"), third.unallocatedKg());
+        assertEquals(new BigDecimal("9.23"), first.getLostKg());
+        assertEquals(new BigDecimal("30.77"), third.getLostKg());
+        assertEquals(new BigDecimal("20.77"), first.unallocatedKg());
+        assertEquals(new BigDecimal("69.23"), third.unallocatedKg());
         verify(lossAllocations, times(2)).save(any(LossAllocation.class));
-        // The lot has 200 kg: 70 sold, 40 lost, 90 left.
-        assertEquals(new BigDecimal("90.00"), f.lotService.quantitiesOf(List.of(f.lotA1)).get(3L).remainingKg());
+        // The lot has 200 kg: 70 sold, 40 lost, 90 left; the portions say the same.
+        assertEquals(new BigDecimal("90.00"), f.lotPortionRepository.remainingKg(3L));
     }
 
     @Test
     void aSaleAfterALossOnTheSameLotOnlyTakesWhatTheLossLeft() {
         f.deliveries.get(0).addLostKg(new BigDecimal("60.00"));
+        f.portionOf(f.deliveries.get(0), f.lotA1).addLostKg(new BigDecimal("60.00"));
 
         SaleResponse sale = sell("140.00", 300L).sale();
 
@@ -443,8 +610,9 @@ class SaleServiceTest {
 
         CriteriaBuilder cb = applyListFilters("Kalisa", null, root);
 
-        // Buyer name, lot code (the lot of an older sale, or a lot of a sale batches) and sale code.
-        verify(cb, times(4)).like(any(), eq("%kalisa%"));
+        // Buyer name, lot code (the lot of an older sale, or the lot of a sale's batches: their portion's lot, or the
+        // delivery's own lot for credits from before fixed-size lots) and sale code.
+        verify(cb, times(5)).like(any(), eq("%kalisa%"));
         verify(cb, never()).equal(eq(id), any(Object.class));
     }
 
@@ -456,7 +624,7 @@ class SaleServiceTest {
         CriteriaBuilder cb = applyListFilters("42", null, root);
 
         verify(cb).equal(id, 42L);
-        verify(cb, times(4)).like(any(), eq("%42%"));
+        verify(cb, times(5)).like(any(), eq("%42%"));
     }
 
     @Test
@@ -501,8 +669,8 @@ class SaleServiceTest {
     }
 
     private static SaleRequest request(Long gradeId, Long buyerId, String quantityKg, long pricePerKg,
-                                       List<Long> skipDeliveryIds, String skipReason) {
+                                       List<Long> skipLotIds, String skipReason) {
         return new SaleRequest(CLIENT_UUID, gradeId, buyerId, new BigDecimal(quantityKg), pricePerKg, null,
-                skipDeliveryIds, skipReason);
+                skipLotIds, skipReason, null);
     }
 }

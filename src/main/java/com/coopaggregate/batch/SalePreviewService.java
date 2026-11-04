@@ -10,29 +10,33 @@ import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.setting.SettingRepository;
 
 import jakarta.persistence.EntityNotFoundException;
 
-/** Shows which batches a sale of a grade would use and what each member would be credited. Saves nothing. */
+/** Shows which portions a sale of a grade would use and what each member would be credited. Saves nothing. */
 @Service
 public class SalePreviewService {
 
     private static final BigDecimal MAX_KG = new BigDecimal("9999999999.99");
 
     private final BatchRepository batchRepository;
+    private final LotPortionRepository lotPortionRepository;
     private final GradeRepository gradeRepository;
     private final SettingRepository settingRepository;
 
-    public SalePreviewService(BatchRepository batchRepository, GradeRepository gradeRepository,
-                              SettingRepository settingRepository) {
+    public SalePreviewService(BatchRepository batchRepository, LotPortionRepository lotPortionRepository,
+                              GradeRepository gradeRepository, SettingRepository settingRepository) {
         this.batchRepository = batchRepository;
+        this.lotPortionRepository = lotPortionRepository;
         this.gradeRepository = gradeRepository;
         this.settingRepository = settingRepository;
     }
 
+    /** skipLotIds are whole lots to pass over. */
     @Transactional(readOnly = true)
-    public SalePreviewResponse preview(Long gradeId, BigDecimal quantityKg, Long pricePerKg, List<Long> skipIds) {
+    public SalePreviewResponse preview(Long gradeId, BigDecimal quantityKg, Long pricePerKg, List<Long> skipLotIds) {
         checkQuantity(quantityKg);
         if (pricePerKg == null || pricePerKg <= 0) {
             throw new BadRequestException("pricePerKg is required and must be more than 0.");
@@ -43,11 +47,11 @@ public class SalePreviewService {
                 .orElseThrow(() -> new IllegalStateException("The settings row is missing."))
                 .getDeductionPerKg();
 
-        List<SellableBatch> sellable = batchRepository.findSellableBatches(gradeId).stream()
+        List<SellableBatch> sellable = lotPortionRepository.findSellable(gradeId).stream()
                 .map(SellableBatch::from)
                 .toList();
         SalePlan plan = SalePlanner.plan(sellable, quantityKg, pricePerKg, deductionPerKg,
-                skipIds == null ? List.of() : skipIds);
+                skipLotIds == null ? List.of() : skipLotIds);
         BigDecimal waitingKg = batchRepository.gradeRemainingKgWithStatus(gradeId, ConfirmationStatus.PENDING);
         BigDecimal disputedKg = batchRepository.gradeRemainingKgWithStatus(gradeId, ConfirmationStatus.DISPUTED);
 
@@ -73,13 +77,12 @@ public class SalePreviewService {
 
     private static SalePreviewResponse.Line line(SalePlan.Line line) {
         SellableBatch batch = line.batch();
-        return new SalePreviewResponse.Line(batch.deliveryId(), batch.receiptCode(), batch.lotId(), batch.lotCode(),
-                batch.memberId(), batch.memberNumber(), batch.memberName(), batch.deliveredAt(), line.kg(),
-                line.remainingAfterKg(), line.grossRwf(), line.deductionRwf(), line.netRwf());
+        return new SalePreviewResponse.Line(batch.deliveryId(), batch.portionId(), batch.receiptCode(), batch.lotId(),
+                batch.lotCode(), batch.memberId(), batch.memberNumber(), batch.memberName(), batch.deliveredAt(),
+                line.kg(), line.remainingAfterKg(), line.grossRwf(), line.deductionRwf(), line.netRwf());
     }
 
-    private static SalePreviewResponse.Skipped skipped(SellableBatch batch) {
-        return new SalePreviewResponse.Skipped(batch.deliveryId(), batch.receiptCode(), batch.lotCode(),
-                batch.memberName(), batch.deliveredAt(), batch.remainingKg());
+    private static SalePreviewResponse.Skipped skipped(SalePlan.SkippedLot lot) {
+        return new SalePreviewResponse.Skipped(lot.lotId(), lot.lotCode(), lot.sellableKg());
     }
 }

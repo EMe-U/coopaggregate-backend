@@ -111,17 +111,27 @@ class BatchControllerTest {
     }
 
     @Test
-    void salePreviewPassesTheQuantityPriceAndSkippedBatches() throws Exception {
+    void salePreviewPassesTheQuantityPriceAndSkippedLots() throws Exception {
         when(salePreviewService.preview(1L, new BigDecimal("180.50"), 300L, List.of(12L, 15L)))
                 .thenReturn(new SalePreviewResponse(1L, "Big", new BigDecimal("180.50"), 300L, false, 5L,
                         new BigDecimal("400.00"), BigDecimal.ZERO, BigDecimal.ZERO, true, null, 54_150L, 903L,
                         53_247L, List.of(), List.of()));
 
         mockMvc.perform(get("/api/grades/1/sale-preview").param("quantityKg", "180.50").param("pricePerKg", "300")
-                        .param("skip", "12,15").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                        .param("skipLots", "12,15").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.enough").value(true))
                 .andExpect(jsonPath("$.totalNetRwf").value(53247));
+    }
+
+    @Test
+    void skippingSingleBatchesInThePreviewIsRefused() throws Exception {
+        mockMvc.perform(get("/api/grades/1/sale-preview").param("quantityKg", "180.50").param("pricePerKg", "300")
+                        .param("skip", "12,15").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        "Single batches can no longer be skipped. Skip whole lots with skipLots."));
+        verifyNoInteractions(salePreviewService);
     }
 
     @Test
@@ -147,6 +157,6 @@ class BatchControllerTest {
         return new BatchResponse(42L, "RCT-7K2Q", 5L, "M-0005", "Uwimana Claudine", "Big", 3L, "A-2026-01",
                 LotStatus.CLOSED, Instant.parse("2026-10-19T08:00:00Z"), new BigDecimal("120.50"),
                 new BigDecimal("100.00"), new BigDecimal("0.50"), new BigDecimal("20.00"), ConfirmationStatus.CONFIRMED,
-                30000, 500, 29500, BatchPayment.BATCH);
+                30000, 500, 29500, BatchPayment.BATCH, List.of());
     }
 }

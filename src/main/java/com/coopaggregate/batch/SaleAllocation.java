@@ -6,6 +6,8 @@ import java.time.Instant;
 import org.hibernate.annotations.CreationTimestamp;
 
 import com.coopaggregate.delivery.Delivery;
+import com.coopaggregate.lot.Lot;
+import com.coopaggregate.lot.LotPortion;
 import com.coopaggregate.sale.Sale;
 
 import jakarta.persistence.Column;
@@ -29,6 +31,11 @@ public class SaleAllocation {
 
     @ManyToOne(fetch = FetchType.LAZY)
     private Delivery delivery;
+
+    // The portion of the delivery the kg came from. Null for sales made before fixed-size lots: their delivery has
+    // one portion, in its own lot.
+    @ManyToOne(fetch = FetchType.LAZY)
+    private LotPortion lotPortion;
 
     private BigDecimal quantityKg;
 
@@ -68,6 +75,19 @@ public class SaleAllocation {
 
     public Delivery getDelivery() {
         return delivery;
+    }
+
+    public LotPortion getLotPortion() {
+        return lotPortion;
+    }
+
+    public void setLotPortion(LotPortion lotPortion) {
+        this.lotPortion = lotPortion;
+    }
+
+    /** The lot the kg came from: the portion's, or for allocations from before fixed-size lots, the delivery's own. */
+    public Lot lot() {
+        return lotPortion != null ? lotPortion.getLot() : delivery.getLot();
     }
 
     public BigDecimal getQuantityKg() {

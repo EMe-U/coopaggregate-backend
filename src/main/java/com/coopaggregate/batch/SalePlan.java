@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * Which batches a sale of one grade takes its kg from, and what each member is credited. When the sellable kg are
+ * Which portions a sale of one grade takes its kg from, and what each member is credited. When the sellable kg are
  * not enough, enough is false, lines is empty and nothing may be saved.
  */
 public record SalePlan(
@@ -15,11 +15,15 @@ public record SalePlan(
         boolean enough,
         long totalAmountRwf,
         List<Line> lines,
-        List<SellableBatch> skipped) {
+        List<SkippedLot> skipped) {
 
-    /** kg taken from one batch: gross is its part of the sale amount, the deduction is per kg taken. */
+    /** kg taken from one portion: gross is its part of the sale amount, the deduction its part of the deduction. */
     public record Line(SellableBatch batch, BigDecimal kg, BigDecimal remainingAfterKg, long grossRwf,
                        long deductionRwf, long netRwf) {
+    }
+
+    /** A lot the manager chose not to sell from, with the sellable kg it has. */
+    public record SkippedLot(Long lotId, String lotCode, BigDecimal sellableKg) {
     }
 
     public long totalDeductionRwf() {
@@ -35,7 +39,7 @@ public record SalePlan(
         String message = "Only " + sellableKg.toPlainString() + " kg of " + gradeName + " can be sold now, but "
                 + quantityKg.toPlainString() + " kg were asked for.";
         if (!skipped.isEmpty()) {
-            message += " Skipped batches are not counted.";
+            message += " Skipped lots are not counted.";
         }
         if (waitingKg.signum() > 0) {
             message += " " + waitingKg.toPlainString() + " kg are waiting for their members to confirm them.";

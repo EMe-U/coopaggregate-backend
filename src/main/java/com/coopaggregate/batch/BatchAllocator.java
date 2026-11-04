@@ -1,39 +1,65 @@
 package com.coopaggregate.batch;
 
 import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.List;
-import java.util.function.BiConsumer;
 
 import org.springframework.stereotype.Component;
 
+import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.Delivery;
+import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.loss.Loss;
 import com.coopaggregate.lot.Lot;
+import com.coopaggregate.lot.LotPortion;
+import com.coopaggregate.lot.LotPortionRepository;
+import com.coopaggregate.lot.ProportionalKg;
 
 /**
- * Keeps the batches (deliveries) in step with the lot's losses: a loss takes its kg from the lot's oldest batches
- * first (by delivered time, then id) and records which ones; the member of those batches bears it. The sum of a
- * lot's batches always equals the lot's own remaining kg. The caller must hold the lot's lock. Sales do not use this:
- * they take kg by grade (see SaleService).
+ * Keeps the lot portions in step with the lot's losses. A loss belongs to the members whose potatoes are in the
+ * lot: it is shared across the lot's portions in proportion to what each has left (see ProportionalKg), and each part
+ * is recorded as a loss allocation of that portion. Only confirmed kg carry a loss, disputed ones included because
+ * they are still in the lot; kg already sold never do, and neither do kg still waiting for their member (only lots
+ * from before fixed-size lots hold any). The caller must hold the grade's lock and the lot's; this locks the portions
+ * and their deliveries next, so the order stays grade, lot, portions, deliveries, ledger.
  */
 @Component
 public class BatchAllocator {
 
-    private final BatchRepository batchRepository;
-    private final LossAllocationRepository lossAllocationRepository;
+    private static final Comparator<LotPortion> OLDEST_FIRST = Comparator
+            .comparing((LotPortion portion) -> portion.getDelivery().getDeliveredAt())
+            .thenComparing(portion -> portion.getDelivery().getId())
+            .thenComparing(LotPortion::getId);
 
-    public BatchAllocator(BatchRepository batchRepository, LossAllocationRepository lossAllocationRepository) {
-        this.batchRepository = batchRepository;
+    private final LotPortionRepository lotPortionRepository;
+    private final LossAllocationRepository lossAllocationRepository;
+    private final DeliveryRepository deliveryRepository;
+
+    public BatchAllocator(LotPortionRepository lotPortionRepository, LossAllocationRepository lossAllocationRepository,
+                          DeliveryRepository deliveryRepository) {
+        this.lotPortionRepository = lotPortionRepository;
         this.lossAllocationRepository = lossAllocationRepository;
+        this.deliveryRepository = deliveryRepository;
+    }
+
+    /** The kg of the lot that a loss can be taken from now. */
+    public BigDecimal lossCarryingKg(Lot lot) {
+        return lossCarryingKg(lot, null);
+    }
+
+    /** The same, without the portions of leftOut: what would carry its lost kg if it were reversed. */
+    public BigDecimal lossCarryingKg(Lot lot, Delivery leftOut) {
+        return carriers(lot, leftOut).stream().map(LotPortion::unallocatedKg).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     public void allocateLoss(Loss loss) {
-        take(loss.getLot(), loss.getQuantityKg(), (batch, kg) -> addLoss(loss, batch, kg));
+        spread(loss, carriers(loss.getLot(), null), loss.getQuantityKg());
     }
 
     /**
-     * A reversed delivery is no batch any more. Its lost kg go to the lot's other batches, oldest first, so the lot's
-     * lost kg stay the same. It cannot hold sold kg: a delivery whose lot has sales cannot be reversed.
+     * A reversed delivery is no batch any more. Its lost kg go to the other portions of the same lots, in proportion
+     * to what each has left, so each lot's lost kg stay the same. It cannot hold sold kg: a delivery with sold kg
+     * cannot be reversed.
      */
     public void releaseLosses(Delivery reversed) {
         if (reversed.getLostKg().signum() == 0) {
@@ -41,37 +67,57 @@ public class BatchAllocator {
         }
         List<LossAllocation> held = lossAllocationRepository.findByDeliveryIdOrderById(reversed.getId());
         reversed.releaseLostKg();
+        lotPortionRepository.findByDeliveryIdOrderById(reversed.getId()).forEach(LotPortion::releaseLostKg);
         lossAllocationRepository.deleteAll(held);
         for (LossAllocation allocation : held) {
-            take(reversed.getLot(), allocation.getQuantityKg(),
-                    (batch, kg) -> addLoss(allocation.getLoss(), batch, kg));
+            Loss loss = allocation.getLoss();
+            spread(loss, carriers(loss.getLot(), reversed), allocation.getQuantityKg());
         }
     }
 
-    private void addLoss(Loss loss, Delivery batch, BigDecimal kg) {
-        batch.addLostKg(kg);
-        lossAllocationRepository.findByLossIdAndDeliveryId(loss.getId(), batch.getId())
-                .ifPresentOrElse(existing -> existing.addKg(kg),
-                        () -> lossAllocationRepository.save(new LossAllocation(loss, batch, kg)));
+    // Shares kg of the loss across the portions in proportion to what each has left, oldest delivery first on a tie.
+    private void spread(Loss loss, List<LotPortion> portions, BigDecimal kg) {
+        BigDecimal carrying = portions.stream().map(LotPortion::unallocatedKg).reduce(BigDecimal.ZERO, BigDecimal::add);
+        // The checks before this make it impossible; if it ever happens, the whole change is rolled back.
+        if (kg.compareTo(carrying) > 0) {
+            throw new IllegalStateException("Lot " + loss.getLot().getLotCode() + " holds only "
+                    + carrying.toPlainString() + " kg that can carry a loss, not " + kg.toPlainString()
+                    + " kg. Nothing was saved.");
+        }
+        List<BigDecimal> parts = ProportionalKg.split(portions.stream().map(LotPortion::unallocatedKg).toList(), kg);
+        for (int i = 0; i < portions.size(); i++) {
+            if (parts.get(i).signum() > 0) {
+                addLoss(loss, portions.get(i), parts.get(i));
+            }
+        }
     }
 
-    // Oldest batch first, as much as each has left, until the kg are covered.
-    private void take(Lot lot, BigDecimal kgNeeded, BiConsumer<Delivery, BigDecimal> use) {
-        BigDecimal left = kgNeeded;
-        for (Delivery batch : batchRepository.lockBatchesWithKgLeft(lot.getId())) {
-            if (left.signum() == 0) {
-                break;
-            }
-            BigDecimal kg = batch.unallocatedKg().min(left);
-            if (kg.signum() > 0) {
-                use.accept(batch, kg);
-                left = left.subtract(kg);
-            }
+    private void addLoss(Loss loss, LotPortion portion, BigDecimal kg) {
+        portion.addLostKg(kg);
+        portion.getDelivery().addLostKg(kg);
+        lossAllocationRepository.findByLossIdAndDeliveryId(loss.getId(), portion.getDelivery().getId())
+                .ifPresentOrElse(existing -> existing.addKg(kg), () -> {
+                    LossAllocation allocation = new LossAllocation(loss, portion.getDelivery(), kg);
+                    allocation.setLotPortion(portion);
+                    lossAllocationRepository.save(allocation);
+                });
+    }
+
+    // The lot's portions that can carry a loss, oldest delivery first, locked with their deliveries. leftOut is a
+    // delivery being reversed, whose portions no longer count.
+    private List<LotPortion> carriers(Lot lot, Delivery leftOut) {
+        List<LotPortion> portions = lotPortionRepository.findLossCarriers(lot.getId()).stream()
+                .filter(portion -> portion.getDelivery() != leftOut && !portion.getDelivery().isReversed()
+                        && portion.unallocatedKg().signum() > 0
+                        && (portion.getDelivery().getConfirmationStatus() == ConfirmationStatus.CONFIRMED
+                                || portion.getDelivery().getConfirmationStatus() == ConfirmationStatus.DISPUTED))
+                .sorted(OLDEST_FIRST)
+                .toList();
+        if (!portions.isEmpty()) {
+            lotPortionRepository.lockByIds(portions.stream().map(LotPortion::getId).sorted().toList());
+            deliveryRepository.lockByIds(portions.stream().map(portion -> portion.getDelivery().getId())
+                    .distinct().sorted().toList());
         }
-        // The lot check before this makes it impossible; if it ever happens, the whole change is rolled back.
-        if (left.signum() > 0) {
-            throw new IllegalStateException("The batches of lot " + lot.getLotCode() + " are " + left.toPlainString()
-                    + " kg short of the lot's total. Nothing was saved.");
-        }
+        return portions;
     }
 }

@@ -2,6 +2,8 @@ package com.coopaggregate.member;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.hibernate.annotations.CreationTimestamp;
 
@@ -48,6 +50,22 @@ public class Member {
 
     // The identity provider's pseudonymous id for this person, never an ID number. Unique: one person, one member.
     private String identityToken;
+
+    // Details only the identity check gives (V38); null when eSignet did not release them.
+    private LocalDate birthDate;
+
+    private String gender;
+
+    private String email;
+
+    // Which details came from the identity check. The name and phone of a verified member always do (identityVerified).
+    private boolean birthDateVerified;
+
+    private boolean genderVerified;
+
+    private boolean emailVerified;
+
+    private boolean addressVerified;
 
     @CreationTimestamp
     @Column(updatable = false)
@@ -146,5 +164,80 @@ public class Member {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public LocalDate getBirthDate() {
+        return birthDate;
+    }
+
+    public String getGender() {
+        return gender;
+    }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public boolean isBirthDateVerified() {
+        return birthDateVerified;
+    }
+
+    public boolean isGenderVerified() {
+        return genderVerified;
+    }
+
+    public boolean isEmailVerified() {
+        return emailVerified;
+    }
+
+    public boolean isAddressVerified() {
+        return addressVerified;
+    }
+
+    /** Sets the verified birth date, gender and email, each only when it was released, and marks them verified. */
+    public void setVerifiedDetails(LocalDate birthDate, String gender, String email) {
+        this.birthDate = birthDate;
+        this.birthDateVerified = birthDate != null;
+        this.gender = gender;
+        this.genderVerified = gender != null;
+        this.email = email;
+        this.emailVerified = email != null;
+    }
+
+    /** Sets the verified address and marks it verified. */
+    public void setVerifiedAddress(String address) {
+        this.address = address;
+        this.addressVerified = address != null;
+    }
+
+    /** The address is no longer the verified one (the manager changed it). */
+    public void unmarkAddressVerified() {
+        this.addressVerified = false;
+    }
+
+    /**
+     * The names of the details that came from the identity check, out of fullName, phone, birthdate, gender, email
+     * and address. Empty for a member who was never verified.
+     */
+    public List<String> verifiedFields() {
+        List<String> fields = new ArrayList<>();
+        if (!identityVerified) {
+            return List.of();
+        }
+        fields.add("fullName");
+        fields.add("phone");
+        if (birthDateVerified) {
+            fields.add("birthdate");
+        }
+        if (genderVerified) {
+            fields.add("gender");
+        }
+        if (emailVerified) {
+            fields.add("email");
+        }
+        if (addressVerified) {
+            fields.add("address");
+        }
+        return List.copyOf(fields);
     }
 }

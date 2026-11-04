@@ -13,6 +13,7 @@ import org.springframework.data.jpa.repository.Query;
 
 import com.coopaggregate.batch.BatchRepository;
 import com.coopaggregate.delivery.DeliveryRepository;
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.payment.ProducePaymentRepository;
 import com.coopaggregate.share.LotShareRepository;
@@ -28,7 +29,7 @@ class ReversedRecordsAreNotCountedTest {
             // repository, method, number of times the query reads deliveries or payments
             "LotRepository, totalDeliveredKg, 1",
             "LotRepository, totalPendingConfirmationKg, 1",
-            "LotRepository, findQuantities, 3",
+            "LotRepository, findQuantities, 5",
             "LotRepository, findMembers, 1",
             "LotRepository, deliveredKgBetween, 1",
             "LotRepository, deliveryCountBetween, 1",
@@ -40,15 +41,16 @@ class ReversedRecordsAreNotCountedTest {
             "ProducePaymentRepository, paidTo, 1",
             "ProducePaymentRepository, paidBetween, 1",
             // Batches: reversed deliveries are not batches.
-            "BatchRepository, lockBatchesWithKgLeft, 1",
             "BatchRepository, findMemberBatches, 1",
             "BatchRepository, memberTotals, 1",
             "BatchRepository, findGradeBatchesWithKgLeft, 1",
             "BatchRepository, gradeRemainingKg, 1",
-            "BatchRepository, findSellableBatches, 1",
             "BatchRepository, gradeRemainingKgWithStatus, 1",
-            "BatchRepository, findLotIdsWithSellableBatches, 1",
-            "BatchRepository, lockSellableBatches, 1"
+            // Lot portions: the portions of reversed deliveries are left out too.
+            "LotPortionRepository, findSellable, 1",
+            "LotPortionRepository, findLotIdsWithSellable, 1",
+            "LotPortionRepository, remainingKg, 1",
+            "LotPortionRepository, findLossCarriers, 1"
     })
     void countingQueryLeavesOutReversedRecords(String repository, String methodName, int expectedFilters) {
         List<Query> queries = Arrays.stream(repositoryClass(repository).getMethods())
@@ -71,6 +73,7 @@ class ReversedRecordsAreNotCountedTest {
             case "DeliveryRepository" -> DeliveryRepository.class;
             case "ProducePaymentRepository" -> ProducePaymentRepository.class;
             case "BatchRepository" -> BatchRepository.class;
+            case "LotPortionRepository" -> LotPortionRepository.class;
             default -> throw new IllegalArgumentException(name);
         };
     }

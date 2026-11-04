@@ -34,6 +34,9 @@ public class Setting {
 
     private BigDecimal minOrderKg = new BigDecimal("100");
 
+    // The capacity of each lot opened from now on. Lots already opened keep their own capacity.
+    private BigDecimal lotSizeKg = new BigDecimal("100");
+
     public Long getId() {
         return id;
     }
@@ -87,6 +90,14 @@ public class Setting {
 
     public void setMinOrderKg(BigDecimal minOrderKg) {
         this.minOrderKg = minOrderKg;
+    }
+
+    public BigDecimal getLotSizeKg() {
+        return lotSizeKg;
+    }
+
+    public void setLotSizeKg(BigDecimal lotSizeKg) {
+        this.lotSizeKg = lotSizeKg;
     }
 
     public String getCooperativeName() {

@@ -43,7 +43,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BadRequestException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public ApiError handleBadRequest(BadRequestException e) {
-        return new ApiError(e.getMessage());
+        return ApiError.of(e);
     }
 
     @ExceptionHandler({IllegalArgumentException.class, EntityNotFoundException.class})
@@ -55,14 +55,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public ApiError handleBusinessRule(IllegalStateException e) {
-        return new ApiError(e.getMessage());
+        return ApiError.of(e);
     }
 
     // The identity provider is not set up (503) or failed (502). The message never carries the provider's answer.
     @ExceptionHandler(IdentityProviderException.class)
     public ResponseEntity<ApiError> handleIdentityProvider(IdentityProviderException e) {
         HttpStatus status = e.isNotConfigured() ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.BAD_GATEWAY;
-        return ResponseEntity.status(status).body(new ApiError(e.getMessage()));
+        return ResponseEntity.status(status).body(ApiError.of(e));
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)

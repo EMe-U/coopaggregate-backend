@@ -3,8 +3,12 @@ package com.coopaggregate.member;
 import java.time.LocalDate;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -12,13 +16,20 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.audit.AuditAction;
+import com.coopaggregate.audit.AuditLog;
+import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.RwandanPhoneNumber;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.identity.IdentityAvailability;
+import com.coopaggregate.identity.IdentityErrorCode;
 import com.coopaggregate.identity.IdentityProviderException;
+import com.coopaggregate.identity.IdentityRequestException;
 import com.coopaggregate.identity.IdentityVerificationService;
+import com.coopaggregate.identity.VerifiedDetails;
+import com.coopaggregate.manager.Manager;
 
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.Predicate;
@@ -31,12 +42,15 @@ public class MemberService {
     private final MemberRepository memberRepository;
     private final IdentityAvailability identityAvailability;
     private final IdentityVerificationService identityVerificationService;
+    private final AuditLogRepository auditLogRepository;
 
     public MemberService(MemberRepository memberRepository, IdentityAvailability identityAvailability,
-                         IdentityVerificationService identityVerificationService) {
+                         IdentityVerificationService identityVerificationService,
+                         AuditLogRepository auditLogRepository) {
         this.memberRepository = memberRepository;
         this.identityAvailability = identityAvailability;
         this.identityVerificationService = identityVerificationService;
+        this.auditLogRepository = auditLogRepository;
     }
 
     @Transactional(readOnly = true)
@@ -69,37 +83,117 @@ public class MemberService {
         return MemberResponse.from(findMember(id));
     }
 
+    /**
+     * Registers a member from a completed identity verification: the name and phone are the verified ones, never typed.
+     * Everything happens in one transaction, so a registration refused for another reason (a phone or national ID
+     * already used) leaves the verification usable until its 30 minutes are over.
+     */
     @Transactional
-    public MemberResponse create(MemberRequest request) {
-        // Every member is registered with a verified identity. Without the identity provider nobody can be registered.
+    public MemberResponse create(NewMemberRequest request, Manager manager) {
+        // Every member is registered with a verified identity. Without the identity provider nobody can be registered,
+        // unless MEMBER_REGISTER_UNVERIFIED allows a member who is stored as not verified. A provider that is on but
+        // cannot be reached never leads here: that is only decided by the settings.
         if (!identityAvailability.isAvailable()) {
+            if (identityAvailability.isUnverifiedAllowed()) {
+                return createUnverified(request, manager);
+            }
             throw IdentityProviderException.notConfigured(
                     "Member registration needs identity verification, which is not configured.");
         }
         if (request.verificationId() == null) {
             throw new BadRequestException("verificationId is required. Verify the person's identity first.");
         }
-        if (request.birthDate() == null) {
-            throw new BadRequestException("birthDate is required.");
-        }
-        // Before anything is saved. A mismatch is counted and refuses the registration.
-        identityVerificationService.checkDetails(request.verificationId(), request.fullName(), request.birthDate(),
-                request.phone());
+        VerifiedDetails verified = identityVerificationService.verifiedDetails(request.verificationId(), manager);
+        refuseVerifiedFieldsInTheRequest(request, verified, Set.of("address"));
         Member member = new Member();
-        applyDetails(member, request);
+        applyDetails(member, verified.fullName(), verified.phone(), request.nationalId(),
+                verified.address() != null ? verified.address() : request.address(), request.preferredLanguage());
+        member.setVerifiedDetails(verified.birthdate(), verified.gender(), verified.email());
+        if (verified.address() != null) {
+            member.setVerifiedAddress(verified.address());
+        }
         member.setJoinDate(request.joinDate() != null ? request.joinDate() : KigaliTime.today());
         // Continues from the highest existing number. If two members were created at the same moment and got
         // the same code, the unique member_code would reject the second one with 409.
         member.setMemberCode(String.format("M-%04d", memberRepository.highestMemberNumber() + 1));
         Member saved = memberRepository.save(member);
-        identityVerificationService.attach(request.verificationId(), saved);
+        identityVerificationService.attach(request.verificationId(), manager, saved);
         return MemberResponse.from(saved);
+    }
+
+    // FOR DEMOS AND FALLBACKS ONLY (MEMBER_REGISTER_UNVERIFIED=true with MOSIP_ENABLED=false): the name and phone are
+    // typed, with the same rules as editing a member, and the member is stored as not verified (identity_verified
+    // false, no verification method, verifiedFields empty). The birth date, gender and email only ever come from the
+    // identity check, so they are refused here too. An audit row records the registration.
+    private MemberResponse createUnverified(NewMemberRequest request, Manager manager) {
+        if (request.verificationId() != null) {
+            throw new BadRequestException("verificationId: must not be sent: identity verification is switched off");
+        }
+        String fullName = request.fullName() == null ? "" : request.fullName().trim();
+        if (fullName.isEmpty()) {
+            throw new BadRequestException("fullName: is required");
+        }
+        if (fullName.length() > 150) {
+            throw new BadRequestException("fullName: must be at most 150 characters");
+        }
+        if (request.phone() == null || request.phone().isBlank()) {
+            throw new BadRequestException("phone: is required");
+        }
+        if (!RwandanPhoneNumber.isValid(request.phone())) {
+            throw new BadRequestException(
+                    "phone: must be a Rwandan mobile number: 07XXXXXXXX, 2507XXXXXXXX or +2507XXXXXXXX");
+        }
+        refuseVerifiedFieldsInTheRequest(request, VerifiedDetails.NONE, Set.of("fullName", "phone", "address"));
+        Member member = new Member();
+        applyDetails(member, fullName, request.phone(), request.nationalId(), request.address(),
+                request.preferredLanguage());
+        member.setJoinDate(request.joinDate() != null ? request.joinDate() : KigaliTime.today());
+        member.setMemberCode(String.format("M-%04d", memberRepository.highestMemberNumber() + 1));
+        Member saved = memberRepository.save(member);
+        auditLogRepository.save(AuditLog.of(AuditAction.MEMBER_REGISTERED_UNVERIFIED, saved, manager,
+                "registered without identity verification"));
+        return MemberResponse.from(saved);
+    }
+
+    // A detail the identity check verified comes only from the verification. A value for it in the request is refused,
+    // whatever it is, and the message never repeats the verified value. A birth date, gender or email that was not
+    // verified cannot be typed either: those only come from the check. Any value counts, even an empty one (as before
+    // for the name and phone); only a field left out or null is not sent. typable names the fields that may be typed
+    // when the check did not verify them.
+    private static void refuseVerifiedFieldsInTheRequest(NewMemberRequest request, VerifiedDetails verified,
+                                                         Set<String> typable) {
+        Set<String> verifiedFields = Set.copyOf(verified.verifiedFields());
+        Map<String, Object> sent = new LinkedHashMap<>();
+        sent.put("fullName", request.fullName());
+        sent.put("phone", request.phone());
+        sent.put("birthdate", request.birthDate());
+        sent.put("gender", request.gender());
+        sent.put("email", request.email());
+        sent.put("address", request.address());
+        for (Map.Entry<String, Object> field : sent.entrySet()) {
+            if (field.getValue() == null) {
+                continue;
+            }
+            if (verifiedFields.contains(field.getKey())) {
+                throw new IdentityRequestException(IdentityErrorCode.VERIFIED_FIELD_LOCKED,
+                        "This detail came from the identity check and cannot be changed here.");
+            }
+            if (!typable.contains(field.getKey())) {
+                throw new BadRequestException((field.getKey().equals("birthdate") ? "birthDate" : field.getKey())
+                        + ": must not be sent: it only comes from the identity check");
+            }
+        }
     }
 
     @Transactional
     public MemberResponse update(Long id, MemberRequest request) {
         Member member = findMember(id);
-        applyDetails(member, request);
+        // A changed address is no longer the verified one.
+        if (member.isAddressVerified() && !Objects.equals(member.getAddress(), trimToNull(request.address()))) {
+            member.unmarkAddressVerified();
+        }
+        applyDetails(member, request.fullName(), request.phone(), request.nationalId(), request.address(),
+                request.preferredLanguage());
         if (request.joinDate() != null) {
             member.setJoinDate(request.joinDate());
         }
@@ -113,9 +207,10 @@ public class MemberService {
         return MemberResponse.from(member);
     }
 
-    private void applyDetails(Member member, MemberRequest request) {
-        String phone = RwandanPhoneNumber.normalize(request.phone());
-        String nationalId = trimToNull(request.nationalId());
+    private void applyDetails(Member member, String fullName, String rawPhone, String rawNationalId, String address,
+                              String preferredLanguage) {
+        String phone = RwandanPhoneNumber.normalize(rawPhone);
+        String nationalId = trimToNull(rawNationalId);
 
         memberRepository.findByPhone(phone)
                 .filter(other -> !other.getId().equals(member.getId()))
@@ -132,12 +227,12 @@ public class MemberService {
                     });
         }
 
-        member.setFullName(request.fullName().trim());
+        member.setFullName(fullName.trim());
         member.setPhone(phone);
         member.setNationalId(nationalId);
-        member.setAddress(trimToNull(request.address()));
-        if (request.preferredLanguage() != null) {
-            member.setPreferredLanguage(request.preferredLanguage());
+        member.setAddress(trimToNull(address));
+        if (preferredLanguage != null) {
+            member.setPreferredLanguage(preferredLanguage);
         }
     }
 

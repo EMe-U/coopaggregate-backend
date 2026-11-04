@@ -15,13 +15,9 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
-import com.coopaggregate.grade.Grade;
-
 import jakarta.persistence.LockModeType;
 
 public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificationExecutor<Lot> {
-
-    Optional<Lot> findFirstByGradeAndStatus(Grade grade, LotStatus status);
 
     Optional<Lot> findFirstByGradeIdAndStatus(Long gradeId, LotStatus status);
 
@@ -31,6 +27,11 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<Lot> findForUpdateById(Long id);
+
+    // SELECT ... FOR UPDATE on the grade's lot being filled; there is at most one (unique index).
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT l FROM Lot l WHERE l.grade.id = :gradeId AND l.status = com.coopaggregate.lot.LotStatus.FILLING")
+    Optional<Lot> findFillingForUpdate(Long gradeId);
 
     @Query("SELECT l.grade.id FROM Lot l WHERE l.id = :id")
     Optional<Long> findGradeIdById(Long id);
@@ -46,44 +47,49 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
     @EntityGraph(attributePaths = "grade")
     Page<Lot> findAll(Specification<Lot> spec, Pageable pageable);
 
-    // One query for a whole page of lots; the remaining kg is derived from these sums, never stored.
-    // Sold kg are the kg that sales took from the lot's batches. A sale by grade has no lot of its own, so they are
-    // not summed from the sale rows. The sale amount is the total of the sales made from this lot before sales by
-    // grade, plus what sales by grade credited for its batches.
+    // One query for a whole page of lots, summed from the lot's portions of deliveries that are not reversed; the
+    // remaining kg is derived from these sums, never stored. The sale amount is the total of the sales made from this
+    // lot before sales by grade, plus what sales by grade credited for its portions (allocations from before
+    // fixed-size lots have no portion and are found through their delivery's own lot).
     @Query("""
             SELECT new com.coopaggregate.lot.LotQuantities(
                 l.id,
-                (SELECT SUM(d.quantityKg) FROM Delivery d WHERE d.lot.id = l.id AND d.reversedAt IS NULL),
-                (SELECT SUM(x.quantityKg) FROM Loss x WHERE x.lot.id = l.id),
-                (SELECT SUM(a.quantityKg) FROM SaleAllocation a WHERE a.delivery.lot.id = l.id),
+                (SELECT SUM(p.quantityKg) FROM LotPortion p WHERE p.lot.id = l.id AND p.delivery.reversedAt IS NULL),
+                (SELECT SUM(p2.lostKg) FROM LotPortion p2 WHERE p2.lot.id = l.id AND p2.delivery.reversedAt IS NULL),
+                (SELECT SUM(p3.soldKg) FROM LotPortion p3 WHERE p3.lot.id = l.id AND p3.delivery.reversedAt IS NULL),
                 (COALESCE((SELECT SUM(s2.totalAmount) FROM Sale s2 WHERE s2.lot.id = l.id), 0)
-                    + COALESCE((SELECT SUM(a2.grossRwf) FROM SaleAllocation a2 WHERE a2.delivery.lot.id = l.id), 0)),
-                (SELECT COUNT(DISTINCT d2.member.id) FROM Delivery d2
-                    WHERE d2.lot.id = l.id AND d2.reversedAt IS NULL),
-                (SELECT SUM(d3.quantityKg) FROM Delivery d3
-                    WHERE d3.lot.id = l.id AND d3.reversedAt IS NULL
-                    AND d3.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.PENDING))
+                    + COALESCE((SELECT SUM(a.grossRwf) FROM SaleAllocation a WHERE a.lotPortion.lot.id = l.id), 0)
+                    + COALESCE((SELECT SUM(a2.grossRwf) FROM SaleAllocation a2
+                                WHERE a2.lotPortion IS NULL AND a2.delivery.lot.id = l.id), 0)),
+                (SELECT COUNT(DISTINCT p4.delivery.member.id) FROM LotPortion p4
+                    WHERE p4.lot.id = l.id AND p4.delivery.reversedAt IS NULL),
+                (SELECT SUM(p5.quantityKg) FROM LotPortion p5
+                    WHERE p5.lot.id = l.id AND p5.delivery.reversedAt IS NULL
+                    AND p5.delivery.confirmationStatus = com.coopaggregate.delivery.ConfirmationStatus.PENDING))
             FROM Lot l
             WHERE l.id IN :lotIds
             """)
     List<LotQuantities> findQuantities(Collection<Long> lotIds);
 
-    // Kg left per grade, read from the batches (deliveries) whatever their lot, split by confirmation status. Reversed
-    // deliveries are not batches. Only confirmed kg can be sold.
+    // Kg left per grade, read from the batches (deliveries) whether or not they are in a lot yet, split by confirmation
+    // status. Reversed deliveries are not batches. Only confirmed kg can be sold.
     @Query("""
             SELECT new com.coopaggregate.lot.GradeKgLeft(g.code, g.name, d.confirmationStatus, SUM(d.remainingKg))
-            FROM Delivery d JOIN d.lot l JOIN l.grade g
+            FROM Delivery d JOIN d.grade g
             WHERE d.reversedAt IS NULL AND d.remainingKg > 0
             GROUP BY g.code, g.name, d.confirmationStatus
             """)
     List<GradeKgLeft> findKgLeftByGradeAndStatus();
 
+    // Each member's kg in the lot, and how much of it was sold, lost and is left, from their portions of deliveries
+    // that are not reversed.
     @Query("""
-            SELECT new com.coopaggregate.lot.LotMemberResponse(m.id, m.fullName, m.memberCode, SUM(d.quantityKg))
-            FROM Delivery d JOIN d.member m
-            WHERE d.lot.id = :lotId AND d.reversedAt IS NULL
+            SELECT new com.coopaggregate.lot.LotMemberResponse(m.id, m.fullName, m.memberCode, SUM(p.quantityKg),
+                SUM(p.soldKg), SUM(p.lostKg), SUM(p.quantityKg - p.soldKg - p.lostKg))
+            FROM LotPortion p JOIN p.delivery d JOIN d.member m
+            WHERE p.lot.id = :lotId AND d.reversedAt IS NULL
             GROUP BY m.id, m.fullName, m.memberCode
-            ORDER BY SUM(d.quantityKg) DESC, m.fullName
+            ORDER BY SUM(p.quantityKg) DESC, m.fullName
             """)
     List<LotMemberResponse> findMembers(Long lotId);
 

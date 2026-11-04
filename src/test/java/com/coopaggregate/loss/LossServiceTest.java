@@ -4,8 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -16,17 +18,17 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.batch.BatchAllocator;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
+import com.coopaggregate.grade.GradeRepository;
 import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.ledger.LedgerService;
 import com.coopaggregate.lot.Lot;
-import com.coopaggregate.lot.LotQuantities;
 import com.coopaggregate.lot.LotRepository;
-import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 
@@ -37,6 +39,8 @@ class LossServiceTest {
     private BatchAllocator batchAllocator;
 
     private LossRepository lossRepository;
+    private GradeRepository gradeRepository;
+    private LotRepository lotRepository;
     private LedgerService ledgerService;
     private Lot lot;
     private Manager manager;
@@ -45,19 +49,17 @@ class LossServiceTest {
     @BeforeEach
     void setUp() {
         lossRepository = mock(LossRepository.class);
-        LotRepository lotRepository = mock(LotRepository.class);
-        LotService lotService = mock(LotService.class);
+        lotRepository = mock(LotRepository.class);
+        gradeRepository = mock(GradeRepository.class);
         ledgerService = mock(LedgerService.class);
 
         lot = new Lot();
         ReflectionTestUtils.setField(lot, "id", 3L);
         lot.setLotCode("A-2026-01");
         lot.setStatus(LotStatus.CLOSED);
+        when(lotRepository.findGradeIdById(3L)).thenReturn(Optional.of(1L));
         when(lotRepository.findForUpdateById(3L)).thenReturn(Optional.of(lot));
-        when(lotRepository.findForUpdateById(99L)).thenReturn(Optional.empty());
-        // 1000 delivered, 25.50 lost, 400 sold: 574.50 kg remain.
-        when(lotService.quantitiesOf(lot)).thenReturn(new LotQuantities(3L, new BigDecimal("1000.00"),
-                new BigDecimal("25.50"), new BigDecimal("400.00"), 120000L, 4L));
+        when(lotRepository.findGradeIdById(99L)).thenReturn(Optional.empty());
         when(lossRepository.save(any(Loss.class))).thenAnswer(invocation -> {
             Loss loss = invocation.getArgument(0);
             ReflectionTestUtils.setField(loss, "id", 8L);
@@ -66,7 +68,9 @@ class LossServiceTest {
 
         manager = new Manager();
         batchAllocator = mock(BatchAllocator.class);
-        service = new LossService(lossRepository, lotRepository, lotService, ledgerService, batchAllocator);
+        // 574.50 kg of confirmed potatoes are left in the lot; sold kg and waiting kg are not counted.
+        when(batchAllocator.lossCarryingKg(lot)).thenReturn(new BigDecimal("574.50"));
+        service = new LossService(lossRepository, lotRepository, gradeRepository, ledgerService, batchAllocator);
     }
 
     @Test
@@ -90,12 +94,25 @@ class LossServiceTest {
     }
 
     @Test
-    void lossIsAllowedOnOpenLot() {
-        lot.setStatus(LotStatus.OPEN);
+    void lossIsAllowedOnEveryLotThatStillHoldsPotatoes() {
+        for (LotStatus status : new LotStatus[] {LotStatus.FILLING, LotStatus.FULL, LotStatus.OPEN, LotStatus.CLOSED}) {
+            lot.setStatus(status);
 
+            service.record(3L, request("30.00", null), manager);
+        }
+
+        verify(lossRepository, times(4)).save(any(Loss.class));
+    }
+
+    @Test
+    void theGradeIsLockedBeforeTheLotAndTheLossIsSharedBeforeTheLedgerEntry() {
         service.record(3L, request("30.00", null), manager);
 
-        verify(lossRepository).save(any(Loss.class));
+        InOrder order = inOrder(gradeRepository, lotRepository, batchAllocator, ledgerService);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(lotRepository).findForUpdateById(3L);
+        order.verify(batchAllocator).allocateLoss(any(Loss.class));
+        order.verify(ledgerService).record(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -110,19 +127,23 @@ class LossServiceTest {
         BadRequestException e = assertThrows(BadRequestException.class,
                 () -> service.record(3L, request("574.51", null), manager));
 
-        assertEquals("Only 574.50 kg remain in lot A-2026-01.", e.getMessage());
+        assertEquals("Only 574.50 kg of confirmed potatoes remain in lot A-2026-01.", e.getMessage());
         verify(lossRepository, never()).save(any());
         verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
-    void lossOnSoldLotIsRejected() {
-        lot.setStatus(LotStatus.SOLD);
+    void lossOnSoldOrSharedLotIsRejected() {
+        for (LotStatus status : new LotStatus[] {LotStatus.SOLD, LotStatus.SHARED}) {
+            lot.setStatus(status);
 
-        IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> service.record(3L, request("10.00", null), manager));
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                    () -> service.record(3L, request("10.00", null), manager));
 
-        assertEquals("Lot A-2026-01 is SOLD. Losses can only be recorded on open or closed lots.", e.getMessage());
+            assertEquals("Lot A-2026-01 is " + status + ". Losses can only be recorded on lots that still hold "
+                    + "potatoes.", e.getMessage());
+        }
+        verify(lossRepository, never()).save(any());
     }
 
     @Test

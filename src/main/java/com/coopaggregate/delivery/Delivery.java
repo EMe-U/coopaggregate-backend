@@ -9,6 +9,7 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.Generated;
 import org.hibernate.generator.EventType;
 
+import com.coopaggregate.grade.Grade;
 import com.coopaggregate.ledger.LedgerEntry;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.member.Member;
@@ -38,6 +39,11 @@ public class Delivery {
     @ManyToOne(fetch = FetchType.LAZY)
     private Member member;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    private Grade grade;
+
+    // Only deliveries from before fixed-size lots have a lot of their own. Newer ones are in lots through their
+    // portions (LotPortion), once confirmed.
     @ManyToOne(fetch = FetchType.LAZY)
     private Lot lot;
 
@@ -121,12 +127,30 @@ public class Delivery {
         this.member = member;
     }
 
+    public Grade getGrade() {
+        return grade;
+    }
+
+    public void setGrade(Grade grade) {
+        this.grade = grade;
+    }
+
     public Lot getLot() {
         return lot;
     }
 
     public void setLot(Lot lot) {
         this.lot = lot;
+    }
+
+    /** The id of the delivery's own lot, or null: only deliveries from before fixed-size lots have one. */
+    public Long ownLotId() {
+        return lot == null ? null : lot.getId();
+    }
+
+    /** The code of the delivery's own lot, or null: only deliveries from before fixed-size lots have one. */
+    public String ownLotCode() {
+        return lot == null ? null : lot.getLotCode();
     }
 
     public Instant getDeliveredAt() {

@@ -2,7 +2,6 @@ package com.coopaggregate.lot;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,7 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
-import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
 
 import jakarta.persistence.EntityNotFoundException;
@@ -32,10 +30,13 @@ public class LotService {
     private static final int MAX_PAGE_SIZE = 100;
 
     private final LotRepository lotRepository;
+    private final LotPortionRepository lotPortionRepository;
     private final GradeRepository gradeRepository;
 
-    public LotService(LotRepository lotRepository, GradeRepository gradeRepository) {
+    public LotService(LotRepository lotRepository, LotPortionRepository lotPortionRepository,
+                      GradeRepository gradeRepository) {
         this.lotRepository = lotRepository;
+        this.lotPortionRepository = lotPortionRepository;
         this.gradeRepository = gradeRepository;
     }
 
@@ -54,31 +55,13 @@ public class LotService {
         return LotDetailResponse.from(lot, lotRepository.findMembers(id));
     }
 
-    @Transactional
-    public LotResponse close(Long id) {
-        Long gradeId = lotRepository.findGradeIdById(id)
-                .orElseThrow(() -> new EntityNotFoundException("Lot " + id + " does not exist."));
-        // Deliveries lock the grade too. Taking that lock before reading the lot means a delivery in progress
-        // finishes in this lot first, and a later delivery finds no open lot and starts a new one.
-        gradeRepository.findForUpdateById(gradeId);
-
-        Lot lot = findLot(id);
-        if (lot.getStatus() != LotStatus.OPEN) {
-            throw new IllegalStateException("Lot " + lot.getLotCode() + " is " + lot.getStatus()
-                    + ". Only an open lot can be closed.");
-        }
-        lot.setStatus(LotStatus.CLOSED);
-        lot.setCloseDate(KigaliTime.today());
-        return toResponse(lot);
-    }
-
-    // The kg left are read per grade from the batches, whatever their lot, split into sellable (confirmed), waiting
-    // (pending) and disputed kg. The delivered, sold and lost totals cover all lots, so delivered - lost - sold still
-    // equals the remaining kg. The lot counts below are only for information: a lot does not have to be closed to be
-    // sold.
+    // The kg left are read per grade from the batches, whether or not they are in a lot, split into sellable
+    // (confirmed), waiting (pending, in no lot) and disputed kg. The delivered, sold and lost totals cover all
+    // batches, so delivered - lost - sold still equals the remaining kg. The lot counts are only for information.
     @Transactional(readOnly = true)
     public StockResponse stock() {
-        List<Lot> lots = lotRepository.findByStatusIn(List.of(LotStatus.OPEN, LotStatus.CLOSED));
+        List<Lot> lots = lotRepository.findByStatusIn(List.of(LotStatus.FILLING, LotStatus.OPEN, LotStatus.FULL,
+                LotStatus.CLOSED));
 
         // By grade code, so the grades are listed in the same order as before.
         Map<String, String> gradeNameByCode = new TreeMap<>();
@@ -111,7 +94,9 @@ public class LotService {
                         entry.getValue()[0], entry.getValue()[1], entry.getValue()[2]))
                 .toList();
         BigDecimal totalRemainingKg = totalSellableKg.add(totalWaitingKg).add(totalDisputedKg);
-        long openLots = lots.stream().filter(lot -> lot.getStatus() == LotStatus.OPEN).count();
+        long openLots = lots.stream()
+                .filter(lot -> lot.getStatus() == LotStatus.FILLING || lot.getStatus() == LotStatus.OPEN)
+                .count();
 
         Instant startOfToday = KigaliTime.today().atStartOfDay(KigaliTime.ZONE).toInstant();
         Instant startOfTomorrow = KigaliTime.today().plusDays(1).atStartOfDay(KigaliTime.ZONE).toInstant();
@@ -136,34 +121,9 @@ public class LotService {
         if (!gradeRepository.existsById(gradeId)) {
             throw new EntityNotFoundException("Grade " + gradeId + " does not exist.");
         }
-        return lotRepository.findFirstByGradeIdAndStatus(gradeId, LotStatus.OPEN)
+        return lotRepository.findFirstByGradeIdAndStatus(gradeId, LotStatus.FILLING)
                 .map(lot -> new OpenLotResponse(lot.getId(), lot.getLotCode(), lot.getGrade().getName(),
-                        lotRepository.totalDeliveredKg(lot.getId())));
-    }
-
-    /**
-     * Returns the open lot for the grade, or opens a new one. The caller must hold the grade's
-     * row lock (GradeRepository.findForUpdateById), so two deliveries cannot open two lots at once.
-     */
-    @Transactional
-    public Lot findOrOpenLot(Grade grade) {
-        return lotRepository.findFirstByGradeAndStatus(grade, LotStatus.OPEN)
-                .orElseGet(() -> openLot(grade));
-    }
-
-    // Lot code: grade code, year the lot opened, and the number of that grade's lot in that year,
-    // for example A-2026-01 for the first grade A lot of 2026.
-    private Lot openLot(Grade grade) {
-        LocalDate today = KigaliTime.today();
-        String prefix = grade.getCode() + "-" + today.getYear() + "-";
-        long lotsThisYear = lotRepository.countByLotCodeStartingWith(prefix);
-
-        Lot lot = new Lot();
-        lot.setLotCode(prefix + String.format("%02d", lotsThisYear + 1));
-        lot.setGrade(grade);
-        lot.setOpenDate(today);
-        lot.setStatus(LotStatus.OPEN);
-        return lotRepository.save(lot);
+                        lotPortionRepository.filledKg(lot.getId()), lot.getCapacityKg()));
     }
 
     Lot findLot(Long id) {

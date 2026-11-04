@@ -26,6 +26,7 @@ import org.springframework.web.client.RestClient;
 
 import com.nimbusds.jose.jwk.RSAKey;
 
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class MosipSettingsTest {
 
     private static KeyPair keyPair;
@@ -60,17 +61,74 @@ class MosipSettingsTest {
     }
 
     @Test
+    void mosipPublicAuthorizeUrlChangesOnlyTheAuthorizeUrl() {
+        MosipProperties properties = withPublicAuthorizeUrl("https://abc.tunnel.example",
+                " http://localhost:8080/oauth2/authorize ");
+
+        assertEquals("http://localhost:8080/oauth2/authorize", properties.authorizationUrl());
+        assertEquals("MOSIP_PUBLIC_AUTHORIZE_URL", properties.authorizationUrlSource());
+        assertEquals("https://abc.tunnel.example/oauth2/token", properties.tokenUrl());
+        assertEquals("https://abc.tunnel.example/oauth2/userinfo", properties.userinfoUrl());
+        assertEquals("https://abc.tunnel.example/oauth2/jwks", properties.jwksUrl());
+        assertEquals("https://abc.tunnel.example", properties.issuer());
+        assertEquals("https://abc.tunnel.example", properties.audience());
+        assertTrue(properties.insecure().isEmpty());
+    }
+
+    @Test
+    void anEmptyMosipPublicAuthorizeUrlMeansTheBaseUrl() {
+        MosipProperties properties = withPublicAuthorizeUrl("https://abc.tunnel.example", "");
+
+        assertEquals("https://abc.tunnel.example/oauth2/authorize", properties.authorizationUrl());
+        assertEquals("MOSIP_BASE_URL", properties.authorizationUrlSource());
+    }
+
+    @Test
+    void mosipPublicAuthorizeUrlMayUsePlainHttpOnlyForLocalhost() {
+        assertEquals(List.of("MOSIP_PUBLIC_AUTHORIZE_URL"),
+                withPublicAuthorizeUrl("https://esignet.example", "http://esignet.example/authorize").insecure());
+        assertTrue(withPublicAuthorizeUrl("https://esignet.example", "http://127.0.0.1:8080/oauth2/authorize")
+                .insecure().isEmpty());
+    }
+
+    @Test
+    void theAppStartsWithAPublicAuthorizeUrlOnLocalhostAndAnHttpsBase() throws IOException {
+        Path file = directory.resolve("key.pem");
+        Files.writeString(file, pem(keyPair.getPrivate().getEncoded()));
+
+        runner.withPropertyValues(allSettings(file.toString()))
+                .withPropertyValues("app.identity.mosip.base-url=https://abc.tunnel.example",
+                        "app.identity.mosip.authorization-endpoint=http://localhost:8080/oauth2/authorize")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    MosipProperties properties = context.getBean(MosipProperties.class);
+                    assertEquals("http://localhost:8080/oauth2/authorize", properties.authorizationUrl());
+                    assertEquals("https://abc.tunnel.example/oauth2/token", properties.tokenUrl());
+                });
+    }
+
+    @Test
     void scopeAndAcrHaveTheDefaultsOfTheCooperative() {
         MosipProperties properties = properties("http://localhost:8080", "the-key.pem");
 
-        assertEquals("openid profile email phone", properties.scope());
+        assertEquals("openid", properties.scope());
         assertEquals("mosip:idp:acr:password", properties.acrValues());
+        assertEquals(List.of(), properties.extraScopes());
+    }
+
+    @Test
+    void scopesBeyondOpenidAndPhoneAreNamed() {
+        MosipProperties properties = new MosipProperties(true, "http://localhost:8080", "coopaggregate",
+                "http://localhost:5173/identity/callback", "the-key.pem", "kid", "openid  profile email phone", null,
+                null, null, null, null, null, null, null, null, null, null, false);
+
+        assertEquals(List.of("profile", "email"), properties.extraScopes());
     }
 
     @Test
     void missingSettingsAreListedByNameOnly() {
         MosipProperties properties = new MosipProperties(true, " ", null, "", null, "", null, null, null, null, null,
-                null, null);
+                null, null, null, null, null, null, null, false);
 
         assertEquals(List.of("MOSIP_BASE_URL", "MOSIP_CLIENT_ID", "MOSIP_REDIRECT_URI", "MOSIP_PRIVATE_KEY_PATH",
                 "MOSIP_KEY_ID"), properties.missingRequired());
@@ -247,6 +305,32 @@ class MosipSettingsTest {
         });
     }
 
+    @Test
+    void extraScopesAreNamedAtStartupButDoNotStopTheApp(
+            org.springframework.boot.test.system.CapturedOutput output) throws IOException {
+        Path file = directory.resolve("key.pem");
+        Files.writeString(file, pem(keyPair.getPrivate().getEncoded()));
+
+        runner.withPropertyValues(allSettings(file.toString()))
+                .withPropertyValues("app.identity.mosip.scope=openid profile email").run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertTrue(output.getAll().contains("MOSIP_SCOPE asks eSignet for more than the name and phone "
+                            + "(profile, email); they are never used. Set MOSIP_SCOPE=openid or leave it out."));
+                });
+    }
+
+    @Test
+    void theDefaultScopeLogsNoWarning(org.springframework.boot.test.system.CapturedOutput output) throws IOException {
+        Path file = directory.resolve("key.pem");
+        Files.writeString(file, pem(keyPair.getPrivate().getEncoded()));
+
+        runner.withPropertyValues(allSettings(file.toString()))
+                .withPropertyValues("app.identity.mosip.scope=openid").run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertFalse(output.getAll().contains("MOSIP_SCOPE asks eSignet"));
+                });
+    }
+
     private static String[] allSettings(String keyPath) {
         return new String[] {"app.identity.mosip.enabled=true",
                 "app.identity.mosip.base-url=http://localhost:8080",
@@ -258,7 +342,13 @@ class MosipSettingsTest {
 
     private static MosipProperties properties(String baseUrl, String keyPath) {
         return new MosipProperties(true, baseUrl, "coopaggregate", "http://localhost:5173/identity/callback", keyPath,
-                "coopaggregate-key", null, null, null, null, null, null, null);
+                "coopaggregate-key", null, null, null, null, null, null, null, null, null, null, null, null, false);
+    }
+
+    private static MosipProperties withPublicAuthorizeUrl(String baseUrl, String publicAuthorizeUrl) {
+        return new MosipProperties(true, baseUrl, "coopaggregate", "http://localhost:5173/identity/callback", "k",
+                "coopaggregate-key", null, null, null, publicAuthorizeUrl, null, null, null, null, null, null, null,
+                null, false);
     }
 
     private static String pem(byte[] der) {

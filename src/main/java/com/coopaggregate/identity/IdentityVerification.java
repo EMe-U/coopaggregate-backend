@@ -1,6 +1,7 @@
 package com.coopaggregate.identity;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 import org.hibernate.annotations.CreationTimestamp;
 
@@ -51,15 +52,19 @@ public class IdentityVerification {
 
     private String identityToken;
 
-    // Salted hashes of the provider's claims (name, birth date, phone), never the claims. They let the registration
-    // be compared with the person who verified, and are cleared once the member is saved, spent or expired.
-    private String salt;
-    private String nameHash;
-    private String birthHash;
-    private String phoneHash;
+    // The columns salt, name_hash, birth_hash, phone_hash and attempts of the old comparison stay in the table, emptied
+    // by V37, but are no longer used.
 
-    // Registrations refused because the details did not match. The verification is spent after three.
-    private int attempts;
+    // The verified name and phone (+2507XXXXXXXX) from the provider. Kept only until the member is saved or for at most
+    // 30 minutes, then cleared. Never logged, never in the change history.
+    private String verifiedName;
+    private String verifiedPhone;
+    // The optional verified details (V38), each null when the member did not allow it or it did not fit. Kept and
+    // cleared together with the name and phone.
+    private LocalDate verifiedBirthdate;
+    private String verifiedGender;
+    private String verifiedEmail;
+    private String verifiedAddress;
 
     // The member registered with this verification. Set once, so one verification gives one member.
     @ManyToOne(fetch = FetchType.LAZY)
@@ -118,41 +123,6 @@ public class IdentityVerification {
         this.codeVerifier = codeVerifier;
     }
 
-    public String getSalt() {
-        return salt;
-    }
-
-    public String getNameHash() {
-        return nameHash;
-    }
-
-    public String getBirthHash() {
-        return birthHash;
-    }
-
-    public String getPhoneHash() {
-        return phoneHash;
-    }
-
-    public void setFingerprints(String salt, String nameHash, String birthHash, String phoneHash) {
-        this.salt = salt;
-        this.nameHash = nameHash;
-        this.birthHash = birthHash;
-        this.phoneHash = phoneHash;
-    }
-
-    public void clearFingerprints() {
-        setFingerprints(null, null, null, null);
-    }
-
-    public int getAttempts() {
-        return attempts;
-    }
-
-    public void countFailedAttempt() {
-        this.attempts++;
-    }
-
     public Instant getVerifiedAt() {
         return verifiedAt;
     }
@@ -185,5 +155,63 @@ public class IdentityVerification {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public String getVerifiedName() {
+        return verifiedName;
+    }
+
+    public String getVerifiedPhone() {
+        return verifiedPhone;
+    }
+
+    public LocalDate getVerifiedBirthdate() {
+        return verifiedBirthdate;
+    }
+
+    public String getVerifiedGender() {
+        return verifiedGender;
+    }
+
+    public String getVerifiedEmail() {
+        return verifiedEmail;
+    }
+
+    public String getVerifiedAddress() {
+        return verifiedAddress;
+    }
+
+    /** The name and phone only, without optional details. */
+    public void setVerifiedDetails(String name, String phone) {
+        setVerifiedDetails(new VerifiedDetails(name, phone));
+    }
+
+    public void setVerifiedDetails(VerifiedDetails details) {
+        this.verifiedName = details.fullName();
+        this.verifiedPhone = details.phone();
+        this.verifiedBirthdate = details.birthdate();
+        this.verifiedGender = details.gender();
+        this.verifiedEmail = details.email();
+        this.verifiedAddress = details.address();
+    }
+
+    public VerifiedDetails verifiedDetails() {
+        return new VerifiedDetails(verifiedName, verifiedPhone, verifiedBirthdate, verifiedGender, verifiedEmail,
+                verifiedAddress);
+    }
+
+    public boolean hasVerifiedDetails() {
+        return verifiedName != null && verifiedPhone != null;
+    }
+
+    /** Clears every verified detail: the name, phone, birth date, gender, email and address. */
+    public void clearVerifiedDetails() {
+        setVerifiedDetails(VerifiedDetails.NONE);
+    }
+
+    // Never the verified details, the state or the verifier.
+    @Override
+    public String toString() {
+        return "IdentityVerification[id=" + id + "]";
     }
 }

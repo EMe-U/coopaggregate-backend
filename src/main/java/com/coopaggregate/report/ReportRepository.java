@@ -19,7 +19,7 @@ public interface ReportRepository extends Repository<Delivery, Long> {
 
     @Query("""
             SELECT new com.coopaggregate.report.GradeCount(g.name, COUNT(d))
-            FROM Delivery d JOIN d.lot l JOIN l.grade g
+            FROM Delivery d JOIN d.grade g
             WHERE d.deliveredAt >= :from AND d.deliveredAt < :to AND d.reversedAt IS NULL
             GROUP BY g.name
             """)
@@ -27,7 +27,7 @@ public interface ReportRepository extends Repository<Delivery, Long> {
 
     @Query("""
             SELECT new com.coopaggregate.report.MemberGradeKg(m.id, m.memberCode, m.fullName, g.name, SUM(d.quantityKg))
-            FROM Delivery d JOIN d.member m JOIN d.lot l JOIN l.grade g
+            FROM Delivery d JOIN d.member m JOIN d.grade g
             WHERE d.deliveredAt >= :from AND d.deliveredAt < :to AND d.reversedAt IS NULL
             GROUP BY m.id, m.memberCode, m.fullName, g.name
             """)
@@ -49,10 +49,11 @@ public interface ReportRepository extends Repository<Delivery, Long> {
             """)
     List<Sale> findSalesBetween(LocalDate from, LocalDate to);
 
-    // The lots that the week's sales by grade took kg from (they have no lot of their own).
+    // The lots that the week's sales by grade took kg from (they have no lot of their own): the portion's lot, or for
+    // allocations from before fixed-size lots, the delivery's own lot.
     @Query("""
-            SELECT new com.coopaggregate.report.SaleLotCode(a.sale.id, a.delivery.lot.lotCode)
-            FROM SaleAllocation a
+            SELECT new com.coopaggregate.report.SaleLotCode(a.sale.id, COALESCE(pl.lotCode, dl.lotCode))
+            FROM SaleAllocation a LEFT JOIN a.lotPortion p LEFT JOIN p.lot pl JOIN a.delivery d LEFT JOIN d.lot dl
             WHERE a.sale.saleDate BETWEEN :from AND :to
             """)
     List<SaleLotCode> findSaleLotCodesBetween(LocalDate from, LocalDate to);

@@ -1,5 +1,6 @@
 package com.coopaggregate.lot;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 import com.coopaggregate.grade.Grade;
@@ -31,6 +32,9 @@ public class Lot {
 
     @Enumerated(EnumType.STRING)
     private LotStatus status = LotStatus.OPEN;
+
+    // The lot size when the lot was opened; null for lots from before fixed-size lots.
+    private BigDecimal capacityKg;
 
     public Long getId() {
         return id;
@@ -74,5 +78,13 @@ public class Lot {
 
     public void setStatus(LotStatus status) {
         this.status = status;
+    }
+
+    public BigDecimal getCapacityKg() {
+        return capacityKg;
+    }
+
+    public void setCapacityKg(BigDecimal capacityKg) {
+        this.capacityKg = capacityKg;
     }
 }

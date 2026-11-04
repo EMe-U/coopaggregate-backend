@@ -1,9 +1,9 @@
 package com.coopaggregate.identity;
 
 /** The verified person is already a member. 409, without saying which member. */
-public class DuplicateIdentityException extends IllegalStateException {
+public class DuplicateIdentityException extends IdentityConflictException {
 
     public DuplicateIdentityException() {
-        super("This person is already a member.");
+        super(IdentityErrorCode.ALREADY_MEMBER, "This person is already a member.");
     }
 }

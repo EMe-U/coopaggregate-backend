@@ -1,6 +1,7 @@
 package com.coopaggregate.delivery;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -47,7 +48,6 @@ import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.auth.AuthService;
 import com.coopaggregate.batch.BatchAllocator;
-import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
@@ -59,8 +59,11 @@ import com.coopaggregate.ledger.ReverseRequest;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotQuantities;
-import com.coopaggregate.lot.LotService;
+import com.coopaggregate.lot.LotPortion;
+import com.coopaggregate.lot.LotPortionRepository;
+import com.coopaggregate.lot.LotFiller;
 import com.coopaggregate.lot.LotStatus;
+import com.coopaggregate.lot.PortionResponse;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
@@ -93,6 +96,8 @@ class DeliveryServiceTest {
     private Grade grade;
     private Member member;
     private Manager manager;
+    private LotFiller lotFiller;
+    private LotPortionRepository lotPortionRepository;
     private DeliveryService service;
 
     @BeforeEach
@@ -134,9 +139,11 @@ class DeliveryServiceTest {
         confirmationCodes = new ConfirmationCodes(encoder);
         auditLogRepository = mock(AuditLogRepository.class);
         batchAllocator = mock(BatchAllocator.class);
+        lotFiller = mock(LotFiller.class);
+        lotPortionRepository = mock(LotPortionRepository.class);
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
-                new LotService(lotRepository, gradeRepository), ledgerService, lotRepository,
-                ledgerEntryRepository, confirmationCodes, auditLogRepository, batchAllocator, eventPublisher);
+                ledgerService, lotRepository, ledgerEntryRepository, confirmationCodes, auditLogRepository,
+                batchAllocator, lotFiller, lotPortionRepository, eventPublisher);
     }
 
     @ParameterizedTest
@@ -158,31 +165,14 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void deliveryGoesToOpenLotOfItsGrade() {
-        Lot openLot = givenOpenLot();
-
+    void aNewDeliveryIsInNoLotUntilItIsConfirmed() {
         DeliveryResponse response = record("100").delivery();
 
-        assertEquals(openLot.getId(), response.lotId());
-        assertEquals("A-2026-01", response.lotCode());
+        assertNull(response.lotId());
+        assertNull(response.lotCode());
+        assertEquals("Big", response.gradeName());
         verify(lotRepository, never()).save(any());
-    }
-
-    @Test
-    void newLotIsOpenedWhenGradeHasNoOpenLot() {
-        int year = KigaliTime.today().getYear();
-        when(lotRepository.findFirstByGradeAndStatus(grade, LotStatus.OPEN)).thenReturn(Optional.empty());
-        when(lotRepository.countByLotCodeStartingWith("A-" + year + "-")).thenReturn(2L);
-
-        DeliveryResponse response = record("100").delivery();
-
-        ArgumentCaptor<Lot> lot = ArgumentCaptor.forClass(Lot.class);
-        verify(lotRepository).save(lot.capture());
-        assertEquals("A-" + year + "-03", lot.getValue().getLotCode());
-        assertEquals(LotStatus.OPEN, lot.getValue().getStatus());
-        assertEquals(KigaliTime.today(), lot.getValue().getOpenDate());
-        assertEquals(grade, lot.getValue().getGrade());
-        assertEquals("A-" + year + "-03", response.lotCode());
+        verify(lotFiller, never()).place(any());
     }
 
     @Test
@@ -222,6 +212,7 @@ class DeliveryServiceTest {
         ReflectionTestUtils.setField(existing, "id", 42L);
         existing.setClientUuid(CLIENT_UUID);
         existing.setMember(member);
+        existing.setGrade(lot.getGrade());
         existing.setLot(lot);
         existing.setQuantityKg(new BigDecimal("80.00"));
         existing.setDeductionAmount(400L);
@@ -390,27 +381,11 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void offlineDeliveryGoesToTheLotThatIsOpenWhenItSyncs() {
-        Lot openNow = givenOpenLot();
-
+    void anOfflineDeliveryIsAlsoInNoLotUntilItIsConfirmed() {
         DeliveryResponse response = recordAt(Instant.now().minus(Duration.ofDays(2))).delivery();
 
-        assertEquals(openNow.getId(), response.lotId());
-    }
-
-    @Test
-    void offlineDeliveryOpensANewLotWhenItsLotWasClosedBeforeSync() {
-        int year = KigaliTime.today().getYear();
-        when(lotRepository.findFirstByGradeAndStatus(grade, LotStatus.OPEN)).thenReturn(Optional.empty());
-        when(lotRepository.countByLotCodeStartingWith("A-" + year + "-")).thenReturn(1L);
-
-        DeliveryResponse response = recordAt(Instant.now().minus(Duration.ofDays(2))).delivery();
-
-        ArgumentCaptor<Lot> lot = ArgumentCaptor.forClass(Lot.class);
-        verify(lotRepository).save(lot.capture());
-        assertEquals("A-" + year + "-02", response.lotCode());
-        // The new lot opens on the sync day, not on the day the delivery was recorded offline.
-        assertEquals(KigaliTime.today(), lot.getValue().getOpenDate());
+        assertNull(response.lotId());
+        verify(lotFiller, never()).place(any());
     }
 
     @Test
@@ -542,16 +517,132 @@ class DeliveryServiceTest {
 
     @Test
     void reversalThatWouldLeaveLessThanZeroKgIsRefused() {
-        givenStoredDelivery("100.00");
-        // The lot holds 150 kg, of which 80 kg were lost: only 70 kg remain, less than the 100 kg delivery.
-        when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
-                new BigDecimal("150.00"), new BigDecimal("80.00"), null, null, null)));
+        Delivery delivery = givenStoredDelivery("100.00");
+        // 30 kg of the delivery were lost, and the lot's other portions have only 20 kg left to take them.
+        LotPortion portion = givenPortion(delivery, delivery.getLot(), "100.00", 5L);
+        portion.addLostKg(new BigDecimal("30.00"));
+        when(batchAllocator.lossCarryingKg(delivery.getLot(), delivery)).thenReturn(new BigDecimal("20.00"));
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> service.reverse(42L, "Weighed twice", manager));
 
         assertEquals("Lot A-2026-01 would have less than 0 kg left, because some of its potatoes were already "
                 + "recorded as lost.", e.getMessage());
+        assertFalse(delivery.isReversed());
+        verify(ledgerService, never()).reverse(any(), any(), any());
+    }
+
+    @Test
+    void aWaitingDeliveryInNoLotCanBeReversed() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.setLot(null);
+        when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.empty());
+        when(ledgerService.reverse(77L, "Weighed twice", manager)).thenReturn(reversalEntry("Weighed twice"));
+
+        service.reverse(42L, "Weighed twice", manager);
+
+        assertTrue(delivery.isReversed());
+        verify(gradeRepository).findForUpdateById(1L);
+    }
+
+    // --- A delivery in fixed-size lots ---
+
+    @Test
+    void aDeliverySplitAcrossTwoLotsIsReversedWithTheLocksInOrderAndItsLossesHandedOn() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.setLot(null);
+        when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.empty());
+        Lot full = fixedLot(7L, "A-2026-05", LotStatus.FULL);
+        Lot filling = fixedLot(6L, "A-2026-04", LotStatus.FILLING);
+        LotPortion inFull = givenPortion(delivery, full, "40.00", 70L);
+        givenPortion(delivery, filling, "60.00", 71L);
+        inFull.addLostKg(new BigDecimal("4.00"));
+        when(batchAllocator.lossCarryingKg(full, delivery)).thenReturn(new BigDecimal("50.00"));
+        when(lotPortionRepository.remainingKg(7L)).thenReturn(new BigDecimal("46.00"));
+        when(ledgerService.reverse(77L, "Wrong member", manager)).thenReturn(reversalEntry("Wrong member"));
+
+        service.reverse(42L, "Wrong member", manager);
+
+        assertTrue(delivery.isReversed());
+        InOrder order = inOrder(gradeRepository, lotRepository, deliveryRepository, batchAllocator, ledgerService);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(lotRepository).findForUpdateById(6L);
+        order.verify(lotRepository).findForUpdateById(7L);
+        order.verify(deliveryRepository).findForUpdateById(42L);
+        order.verify(ledgerService).reverse(77L, "Wrong member", manager);
+        order.verify(batchAllocator).releaseLosses(delivery);
+        // The full lot keeps its shortfall and is never filled again; the lot being filled gets the space back.
+        assertEquals(LotStatus.FULL, full.getStatus());
+        assertEquals(LotStatus.FILLING, filling.getStatus());
+    }
+
+    @Test
+    void aFullLotThatTheReversalLeavesWithNothingToSellIsSoldOut() {
+        Delivery delivery = givenStoredDelivery("40.00");
+        delivery.setLot(null);
+        when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.empty());
+        Lot full = fixedLot(7L, "A-2026-05", LotStatus.FULL);
+        givenPortion(delivery, full, "40.00", 70L);
+        when(lotPortionRepository.remainingKg(7L)).thenReturn(BigDecimal.ZERO);
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Wrong"));
+
+        service.reverse(42L, "Wrong", manager);
+
+        assertEquals(LotStatus.SOLD, full.getStatus());
+    }
+
+    @Test
+    void aDeliveryInLotsWithSoldKgCannotBeReversedOrCorrected() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.setLot(null);
+        givenPortion(delivery, fixedLot(7L, "A-2026-05", LotStatus.FULL), "100.00", 70L).addSoldKg(BigDecimal.ONE);
+        delivery.addSoldKg(BigDecimal.ONE);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.reverse(42L, "Wrong", manager));
+        assertThrows(IllegalStateException.class, () -> service.correct(42L,
+                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager));
+
+        assertEquals("Delivery RCT-7K2Q already has 1 kg sold, so it can no longer be reversed or corrected.",
+                e.getMessage());
+        verify(ledgerService, never()).reverse(any(), any(), any());
+        verify(batchAllocator, never()).releaseLosses(any());
+    }
+
+    @Test
+    void aCorrectionToAnotherGradeLocksBothGradesInIdOrderThenTheLots() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        Grade normal = new Grade();
+        ReflectionTestUtils.setField(normal, "id", 2L);
+        normal.setCode("B");
+        normal.setName("Normal");
+        when(gradeRepository.findForUpdateById(2L)).thenReturn(Optional.of(normal));
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Wrong grade"));
+
+        service.correct(42L, new CorrectDeliveryRequest("Wrong grade", 5L, 2L, new BigDecimal("100.00")), manager);
+
+        InOrder order = inOrder(gradeRepository, lotRepository, deliveryRepository);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(gradeRepository).findForUpdateById(2L);
+        order.verify(lotRepository).findForUpdateById(3L);
+        order.verify(deliveryRepository).findForUpdateById(42L);
+        assertEquals(normal, lastSaved().getGrade());
+        assertTrue(delivery.isReversed());
+    }
+
+    @Test
+    void disputingADeliveryLocksTheGradeFirstSoNoSaleSellsItMeanwhile() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+
+        service.dispute(42L, DisputeReason.WRONG_KG, null);
+
+        InOrder order = inOrder(gradeRepository, deliveryRepository);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(deliveryRepository).findForUpdateById(42L);
+        assertEquals(ConfirmationStatus.DISPUTED, delivery.getConfirmationStatus());
+        // Its kg stay in their lot; a resolved dispute does not place it again.
+        verify(lotFiller, never()).place(any());
     }
 
     @Test
@@ -576,11 +667,6 @@ class DeliveryServiceTest {
         normal.setCode("B");
         normal.setName("Normal");
         when(gradeRepository.findForUpdateById(2L)).thenReturn(Optional.of(normal));
-        Lot lotB = new Lot();
-        ReflectionTestUtils.setField(lotB, "id", 8L);
-        lotB.setLotCode("B-2026-01");
-        lotB.setGrade(normal);
-        when(lotRepository.findFirstByGradeAndStatus(normal, LotStatus.OPEN)).thenReturn(Optional.of(lotB));
         when(ledgerService.reverse(77L, "Wrong member and grade", manager)).thenReturn(reversalEntry("Wrong"));
 
         service.correct(42L,
@@ -589,7 +675,10 @@ class DeliveryServiceTest {
 
         assertTrue(original.isReversed());
         assertEquals(bosco, corrected.getMember());
-        assertEquals(lotB, corrected.getLot());
+        assertEquals(normal, corrected.getGrade());
+        // Like any new delivery, the correction waits for the member and only then goes into a lot.
+        assertNull(corrected.getLot());
+        assertEquals(ConfirmationStatus.PENDING, corrected.getConfirmationStatus());
         assertEquals(new BigDecimal("95.50"), corrected.getQuantityKg());
         assertEquals(478L, corrected.getDeductionAmount());
         assertEquals(original, corrected.getCorrects());
@@ -601,19 +690,18 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void correctionInTheSameOpenLotCountsItsOwnKilograms() {
-        givenStoredDelivery("100.00");
-        // 150 kg delivered and 80 kg lost: removing the 100 kg delivery alone would go below 0,
-        // but the corrected 90 kg go back into the same lot.
-        when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
-                new BigDecimal("150.00"), new BigDecimal("80.00"), null, null, null)));
-        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
+    void aCorrectionNoLongerPutsItsKilogramsBackIntoTheOldLot() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        // 30 kg of the delivery were lost and the lot's others have only 20 kg left to take them. The corrected 90 kg
+        // wait for the member's confirmation and then go into a fixed-size lot, not back into this one.
+        givenPortion(delivery, delivery.getLot(), "100.00", 5L).addLostKg(new BigDecimal("30.00"));
+        when(batchAllocator.lossCarryingKg(delivery.getLot(), delivery)).thenReturn(new BigDecimal("20.00"));
 
-        service.correct(42L,
-                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
-        Delivery corrected = lastSaved();
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.correct(42L,
+                new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager));
 
-        assertEquals(new BigDecimal("90.00"), corrected.getQuantityKg());
+        assertEquals("Lot A-2026-01 would have less than 0 kg left, because some of its potatoes were already "
+                + "recorded as lost.", e.getMessage());
     }
 
     @Test
@@ -653,10 +741,11 @@ class DeliveryServiceTest {
         Delivery delivery = existingDelivery(lot);
         delivery.setQuantityKg(new BigDecimal(quantityKg));
         delivery.setDeliveredAt(Instant.parse("2026-10-14T07:30:00Z"));
+        when(deliveryRepository.findGradeIdById(42L)).thenReturn(Optional.of(1L));
         when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.of(3L));
-        when(lotRepository.findGradeIdById(3L)).thenReturn(Optional.of(1L));
         when(lotRepository.findForUpdateById(3L)).thenReturn(Optional.of(lot));
         when(deliveryRepository.findById(42L)).thenReturn(Optional.of(delivery));
+        when(deliveryRepository.findForUpdateById(42L)).thenReturn(Optional.of(delivery));
         when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
                 new BigDecimal("500.00"), null, null, null, null)));
         LedgerEntry entry = new LedgerEntry();
@@ -688,6 +777,50 @@ class DeliveryServiceTest {
     }
 
     @Test
+    void aDeliverySplitAcrossTwoLotsListsBothFirstLotFirst() {
+        Delivery delivery = givenStoredDelivery("50.00");
+        delivery.setLot(null);
+        Lot third = fixedLot(7L, "A-2026-03", LotStatus.FULL);
+        Lot fourth = fixedLot(8L, "A-2026-04", LotStatus.FILLING);
+        LotPortion inFourth = new LotPortion(fourth, delivery, new BigDecimal("20.00"));
+        inFourth.addSoldKg(new BigDecimal("5.00"));
+        when(lotPortionRepository.findWithLotByDeliveryIdIn(List.of(42L))).thenReturn(List.of(inFourth,
+                new LotPortion(third, delivery, new BigDecimal("30.00"))));
+
+        DeliveryResponse response = service.get(42L);
+
+        assertEquals(7L, response.lotId());
+        assertEquals("A-2026-03", response.lotCode());
+        assertEquals(List.of(
+                new PortionResponse(7L, "A-2026-03", LotStatus.FULL, new BigDecimal("30.00"), BigDecimal.ZERO,
+                        BigDecimal.ZERO, new BigDecimal("30.00")),
+                new PortionResponse(8L, "A-2026-04", LotStatus.FILLING, new BigDecimal("20.00"),
+                        new BigDecimal("5.00"), BigDecimal.ZERO, new BigDecimal("15.00"))), response.lots());
+    }
+
+    @Test
+    void aWaitingDeliveryIsInNoLot() {
+        Delivery delivery = givenStoredDelivery("50.00");
+        delivery.setLot(null);
+
+        DeliveryResponse response = service.get(42L);
+
+        assertNull(response.lotId());
+        assertEquals(List.of(), response.lots());
+    }
+
+    @Test
+    void aNewDeliveryKeepsItsOwnGrade() {
+        givenOpenLot();
+
+        record("100");
+
+        ArgumentCaptor<Delivery> saved = ArgumentCaptor.forClass(Delivery.class);
+        verify(deliveryRepository).save(saved.capture());
+        assertEquals(grade, saved.getValue().getGrade());
+    }
+
+    @Test
     void correctCodeConfirmsTheDelivery() {
         Delivery delivery = givenDeliveryWithCode();
         String code = confirmationCodes.issue(delivery, Instant.now());
@@ -698,6 +831,7 @@ class DeliveryServiceTest {
         assertEquals(ConfirmationMethod.OTP, delivery.getConfirmationMethod());
         assertEquals("Confirmed by member with the SMS code", delivery.getConfirmationMethod().label());
         assertEquals(null, delivery.getConfirmationCodeHash());
+        verify(lotFiller).place(delivery);
         verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
     }
 
@@ -712,6 +846,7 @@ class DeliveryServiceTest {
         assertEquals("Wrong code. 2 tries left.", e.getMessage());
         assertEquals(1, delivery.getConfirmationCodeFailedAttempts());
         assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+        verify(lotFiller, never()).place(any());
         verify(eventPublisher, never()).publishEvent(any(DeliveryConfirmedEvent.class));
     }
 
@@ -730,6 +865,37 @@ class DeliveryServiceTest {
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, code));
         assertEquals("Delivery RCT-7K2Q has no valid code. Send the member a new code.", e.getMessage());
         assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void everyConfirmationLocksTheGradeThenItsLotBeingFilledThenTheDeliveryAndOnlyThenFillsTheLot() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+
+        service.confirmWithCode(42L, code);
+
+        InOrder order = inOrder(gradeRepository, lotFiller, deliveryRepository);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(lotFiller).lockFillingLot(1L);
+        order.verify(deliveryRepository).findForUpdateById(42L);
+        order.verify(lotFiller).place(delivery);
+    }
+
+    @Test
+    void theManagersReviewAndAResolvedDisputeTakeTheSameLocksInTheSameOrder() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        setting.setSmsEnabled(false);
+        service.reviewPending(42L, "Checked", manager);
+        delivery.dispute(DisputeReason.WRONG_KG, null, Instant.now());
+        service.resolveDispute(42L, "Checked again");
+
+        InOrder order = inOrder(gradeRepository, lotFiller, deliveryRepository);
+        for (int i = 0; i < 2; i++) {
+            order.verify(gradeRepository).findForUpdateById(1L);
+            order.verify(lotFiller).lockFillingLot(1L);
+            order.verify(deliveryRepository).findForUpdateById(42L);
+            order.verify(lotFiller).place(delivery);
+        }
     }
 
     @Test
@@ -798,6 +964,46 @@ class DeliveryServiceTest {
         assertEquals("Delivery RCT-7K2Q confirmed with the demo code", audit.getValue().getDetails());
         assertEquals(member, audit.getValue().getMember());
         assertFalse(audit.getValue().getDetails().contains(demo));
+    }
+
+    @Test
+    void demoCodePutsTheDeliveryIntoItsLotsLikeANormalConfirmation() {
+        Delivery delivery = givenDeliveryWithCode();
+        String demo = otherCode(confirmationCodes.issue(delivery, Instant.now()));
+        useDemoCode(demo);
+        AtomicReference<ConfirmationStatus> statusWhenPlaced = new AtomicReference<>();
+        doAnswer(invocation -> {
+            statusWhenPlaced.set(invocation.<Delivery>getArgument(0).getConfirmationStatus());
+            return List.of();
+        }).when(lotFiller).place(delivery);
+
+        service.confirmWithCode(42L, demo);
+
+        // The same filling path as the member's code: the confirmed delivery goes to the lot filler, once, before the
+        // demo audit entry and the event that sends the receipt SMS.
+        assertEquals(ConfirmationStatus.CONFIRMED, statusWhenPlaced.get());
+        InOrder order = inOrder(lotFiller, auditLogRepository, eventPublisher);
+        order.verify(lotFiller).place(delivery);
+        order.verify(auditLogRepository).save(org.mockito.ArgumentMatchers.argThat(
+                entry -> entry.getAction() == AuditAction.DEMO_CODE_CONFIRMATION));
+        order.verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
+        verify(lotFiller, times(1)).place(any());
+    }
+
+    @Test
+    void aRefusedDemoCodePutsNothingIntoLots() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+        String demo = otherCode(code);
+        String wrong = code.equals("222222") || demo.equals("222222") ? "333333" : "222222";
+        useDemoCode(demo);
+
+        for (int i = 0; i < 3; i++) {
+            assertThrows(WrongCodeException.class, () -> service.confirmWithCode(42L, wrong));
+        }
+        assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, demo));
+
+        verify(lotFiller, never()).place(any());
     }
 
     @Test
@@ -964,6 +1170,7 @@ class DeliveryServiceTest {
         verify(auditLogRepository).save(audit.capture());
         assertEquals(AuditAction.DELIVERY_REVIEWED, audit.getValue().getAction());
         assertEquals("Delivery RCT-7K2Q: Weighed again with the member", audit.getValue().getDetails());
+        verify(lotFiller).place(delivery);
         verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
     }
 
@@ -1122,6 +1329,7 @@ class DeliveryServiceTest {
         assertEquals(ConfirmationMethod.MANAGER_REVIEW, delivery.getConfirmationMethod());
         assertEquals("Scale receipt shows 100 kg", delivery.getResolutionNote());
         assertEquals(DisputeReason.WRONG_KG, delivery.getDisputeReason());
+        verify(lotFiller).place(delivery);
         verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
     }
 
@@ -1221,6 +1429,7 @@ class DeliveryServiceTest {
         ReflectionTestUtils.setField(existing, "id", 42L);
         existing.setClientUuid(CLIENT_UUID);
         existing.setMember(member);
+        existing.setGrade(lot.getGrade());
         existing.setLot(lot);
         existing.setQuantityKg(new BigDecimal("80.00"));
         existing.setDeductionAmount(400L);
@@ -1234,12 +1443,12 @@ class DeliveryServiceTest {
 
     // --- Responses are built inside the transaction ---
     // Open-in-view is off, so a lazy lot or grade can only load while a @Transactional method runs. These tests
-    // drive the real controller through a proxy that opens a "session" only for @Transactional calls, with a lot
+    // drive the real controller through a proxy that opens a "session" only for @Transactional calls, with a grade
     // that fails like a Hibernate proxy outside one. Building the response after the service returned (the 500
     // seen on confirm and resend-code) fails here the same way.
 
     @Test
-    void lazyLotReallyFailsOutsideATransaction() {
+    void lazyGradeReallyFailsOutsideATransaction() {
         Delivery delivery = givenLazyDelivery();
 
         assertThrows(LazyInitializationException.class, () -> DeliveryResponse.from(delivery));
@@ -1282,10 +1491,8 @@ class DeliveryServiceTest {
 
     @Test
     void correctBuildsItsResponseInsideTheTransaction() {
-        Delivery delivery = givenLazyDelivery();
+        givenLazyDelivery();
         when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
-        when(lotRepository.findFirstByGradeAndStatus(grade, LotStatus.OPEN))
-                .thenReturn(Optional.of(delivery.getLot()));
 
         assertEquals("Big", controller().correct(42L,
                 new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), jwt()).gradeName());
@@ -1301,17 +1508,17 @@ class DeliveryServiceTest {
 
     private final AtomicBoolean inTransaction = new AtomicBoolean(false);
 
-    // A stored delivery whose lot behaves like an uninitialised Hibernate proxy outside a transaction.
+    // A stored delivery whose grade behaves like an uninitialised Hibernate proxy outside a transaction.
     private Delivery givenLazyDelivery() {
         Delivery delivery = givenDeliveryWithCode();
-        Lot lazyLot = spy(delivery.getLot());
+        Grade lazyGrade = spy(delivery.getGrade());
         doAnswer(invocation -> {
             if (!inTransaction.get()) {
-                throw new LazyInitializationException("Could not initialize proxy [Lot#3] - no session");
+                throw new LazyInitializationException("Could not initialize proxy [Grade#1] - no session");
             }
             return invocation.callRealMethod();
-        }).when(lazyLot).getGrade();
-        delivery.setLot(lazyLot);
+        }).when(lazyGrade).getName();
+        delivery.setGrade(lazyGrade);
         return delivery;
     }
 
@@ -1341,12 +1548,32 @@ class DeliveryServiceTest {
         return Jwt.withTokenValue("token").header("alg", "HS256").subject("manager@example.com").build();
     }
 
+    private LotPortion givenPortion(Delivery delivery, Lot lot, String kg, Long id) {
+        LotPortion portion = new LotPortion(lot, delivery, new BigDecimal(kg));
+        ReflectionTestUtils.setField(portion, "id", id);
+        List<LotPortion> portions = new java.util.ArrayList<>(lotPortionRepository.findByDeliveryIdOrderById(42L));
+        portions.add(portion);
+        when(lotPortionRepository.findByDeliveryIdOrderById(42L)).thenReturn(portions);
+        return portion;
+    }
+
+    private Lot fixedLot(Long id, String code, LotStatus status) {
+        Lot lot = new Lot();
+        ReflectionTestUtils.setField(lot, "id", id);
+        lot.setLotCode(code);
+        lot.setGrade(grade);
+        lot.setStatus(status);
+        lot.setCapacityKg(new BigDecimal("100.00"));
+        when(lotRepository.findForUpdateById(id)).thenReturn(Optional.of(lot));
+        return lot;
+    }
+
+    // A lot from before fixed-size lots, which deliveries of that time are in.
     private Lot givenOpenLot() {
         Lot lot = new Lot();
         ReflectionTestUtils.setField(lot, "id", 3L);
         lot.setLotCode("A-2026-01");
         lot.setGrade(grade);
-        when(lotRepository.findFirstByGradeAndStatus(grade, LotStatus.OPEN)).thenReturn(Optional.of(lot));
         return lot;
     }
 }

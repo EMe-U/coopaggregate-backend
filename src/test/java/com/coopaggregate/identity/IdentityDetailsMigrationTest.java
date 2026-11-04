@@ -54,20 +54,22 @@ class IdentityDetailsMigrationTest {
     }
 
     @Test
-    void usingTheStateClearsTheCodeVerifierAndFingerprintsAreRemovable() {
+    void usingTheStateClearsTheCodeVerifier() {
         IdentityVerification verification = new IdentityVerification();
         verification.setCodeVerifier("verifier");
-        verification.setFingerprints("salt", "n", "b", "p");
 
         verification.markUsed(Instant.now());
-        verification.clearFingerprints();
 
         assertNull(verification.getCodeVerifier());
-        assertNull(verification.getSalt());
-        assertNull(verification.getNameHash());
-        assertNull(verification.getBirthHash());
-        assertNull(verification.getPhoneHash());
-        assertEquals(0, verification.getAttempts());
+    }
+
+    @Test
+    void theOldColumnsAreNoLongerMapped() {
+        java.util.List<String> fields = java.util.Arrays.stream(IdentityVerification.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName).toList();
+        for (String old : new String[] {"salt", "nameHash", "birthHash", "phoneHash", "attempts"}) {
+            assertFalse(fields.contains(old), old);
+        }
     }
 
     private static int count(String text, String part) {

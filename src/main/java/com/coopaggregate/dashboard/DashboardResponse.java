@@ -31,7 +31,8 @@ public record DashboardResponse(
         BigDecimal waitingKg,
         BigDecimal disputedKg,
         long gradesWithSellableKg,
-        List<GradeStockKg> stockByGradeDetail) {
+        List<GradeStockKg> stockByGradeDetail,
+        List<LotBeingFilled> lotsBeingFilled) {
 
     public record GradeKg(String gradeName, BigDecimal kg) {
     }
@@ -40,7 +41,12 @@ public record DashboardResponse(
                                BigDecimal disputedKg) {
     }
 
+    /** openLots lists the lots being filled, as lotsBeingFilled does with their fill level. */
     public record OpenLot(Long id, String code, String gradeName) {
+    }
+
+    /** A lot being filled: filledKg of its capacityKg so far. */
+    public record LotBeingFilled(Long id, String code, String gradeName, BigDecimal filledKg, BigDecimal capacityKg) {
     }
 
     public record WeekDeliveries(LocalDate weekStart, List<GradeKg> grades) {

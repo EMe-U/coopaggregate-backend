@@ -94,13 +94,21 @@ cd coopaggregate-backend
 | `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
 | `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
 | `SMS_DEMO_CODE` | No | **Temporary, for the demo only.** 6 digits also accepted as the code of any pending delivery. Not set by default (see Delivery confirmation) |
-| `MOSIP_ENABLED` | To register members | `true` switches member identity verification on. Registering a member needs it, so with the default `false` no member can be registered (see Identity verification) |
-| `MOSIP_BASE_URL` | With `MOSIP_ENABLED` | The eSignet issuer, for example `http://localhost:8080`. Plain `http` only for localhost. The authorize, token, userinfo and JWKS URLs follow from it |
+| `MOSIP_ENABLED` | To register members | `true` switches member identity verification on. Registering a member needs it, so with the default `false` no member can be registered (see Identity verification), unless `MEMBER_REGISTER_UNVERIFIED=true` |
+| `MEMBER_REGISTER_UNVERIFIED` | No | **For demos and fallbacks only.** `true` lets the manager register a member with a typed name and phone, stored as **not verified**, but only while `MOSIP_ENABLED=false`. Ignored (with a startup warning) while `MOSIP_ENABLED=true`, even when eSignet cannot be reached. Default `false` (see Members) |
+| `MOSIP_BASE_URL` | With `MOSIP_ENABLED` | The eSignet issuer, for example `http://localhost:8080`. Plain `http` only for localhost. The token, userinfo and JWKS URLs follow from it, and the authorize URL unless the next one is set |
+| `MOSIP_PUBLIC_AUTHORIZE_URL` | No | The full authorize address the member's browser is sent to, when it differs from the address the backend uses, for example a backend on Render reaching a local eSignet through a tunnel (`MOSIP_BASE_URL=https://<tunnel-host>`) while the browser opens `http://localhost:8080/oauth2/authorize`. Default (and when empty): `MOSIP_BASE_URL` + `/oauth2/authorize`. Plain `http` only for localhost. The startup log names the authorize host and which setting it came from. With a tunnel, also set `MOSIP_ISSUER` and `MOSIP_ASSERTION_AUDIENCE` to eSignet's own address, since their default is `MOSIP_BASE_URL` |
 | `MOSIP_CLIENT_ID` | With `MOSIP_ENABLED` | The client id registered with eSignet |
 | `MOSIP_REDIRECT_URI` | With `MOSIP_ENABLED` | The frontend page eSignet sends the member back to, exactly as registered, for example `http://localhost:5173/identity/callback` |
 | `MOSIP_PRIVATE_KEY_PATH` | With `MOSIP_ENABLED` | Path to the cooperative's RSA private key file (PKCS#8 PEM or JWK, detected from the content). Keep it outside the repository |
 | `MOSIP_KEY_ID` | With `MOSIP_ENABLED` | The `kid` of the matching public JWK |
-| `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid profile email phone`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL` |
+| `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL`. The details are asked for with the `claims` parameter, so leave `MOSIP_SCOPE` out (`profile` would also release the picture); the app warns at startup if it asks for more than `openid` and `phone`. `MOSIP_ACR_VALUES` may hold several login methods, space-separated; it is sent as `acr_values` exactly as set |
+| `MOSIP_OPTIONAL_CLAIMS` | No | The optional details asked for besides the name and phone, space-separated. Default (and when empty): `birthdate gender email address`. Only those four can be asked for; any other name, `picture` included, is left out and named in a startup warning |
+| `MOSIP_NATIONAL_ID_CLAIM` | No | The claim name of the national ID, asked for as optional. Default: empty, not asked for (the local eSignet does not release it). The national ID stays entered by the manager either way |
+| `MOSIP_PROMPT_CONSENT` | No | Demo setting. `true` adds `prompt=consent` so eSignet shows its Allow page on every login, not only the first. Default `false` |
+| `MOSIP_ALLOWED_ACRS` | No | The id_token `acr` values (login methods) that count as a verification, space-separated, compared exactly. Default: `mosip:idp:acr:generated-code` (the one-time code) |
+| `MOSIP_ISSUER` | No | The exact `iss` the ID token must carry (and the userinfo answer, unless the next one is set). Default: `MOSIP_BASE_URL` |
+| `MOSIP_USERINFO_ISSUER` | No | The exact `iss` the userinfo answer must carry, for an eSignet that signs it with another issuer than the ID token (the local one: ID token `http://localhost:8080`, userinfo `http://localhost:8088/v1/esignet`). Default: the ID token's issuer |
 | `PORT` | No | HTTP port. Default: `8080` |
 
 The manager is the only user who logs in. On startup, if the `manager` table is empty,
@@ -205,6 +213,31 @@ ERD: see `docs/erd.png`.
 - **V35** gives each `sms_log` row a `message_type`: `DELIVERY_CODE` (every existing row) or
   `RECEIPT`, and makes the unique index one message per delivery, type and send number. No row is
   changed. Run it before the new build starts: the new build reads and writes the column.
+- **V36** brings fixed-size lots (see Lots and losses). It adds:
+  - `setting.lot_size_kg` (default 100, more than 0);
+  - `lot.capacity_kg` and the statuses `FILLING` and `FULL`, with at most one `FILLING` lot per grade;
+  - `delivery.grade_id`, and makes `delivery.lot_id` optional (only deliveries from before have one);
+  - the table `lot_portion` (the kg of one delivery in one lot, with sold, lost and a generated
+    remaining kg);
+  - `lot_portion_id` on `sale_allocation` and `loss_allocation`, and a sale unique per portion instead
+    of per delivery.
+
+  It fills in every delivery's grade from its lot (the only row update) and gives every existing
+  delivery one portion in the lot it is in, with the same kg. Existing lots keep their size and
+  status and get no new kg. No ledger row is touched. A check at the end compares grades, portions
+  and lot totals and rolls the whole migration back on any difference. Run it before the new build
+  starts. `docs/fixed-lots-checks.sql` checks the result afterwards (read only).
+- **V37** adds `verified_name` and `verified_phone` to the identity verification table: the verified
+  details a new member is registered with, kept for at most 30 minutes (both set or both empty). It
+  empties the salted hashes and the attempts of the old comparison (the only row update); those
+  columns stay, unused. A verification started before V37 cannot be used and is simply done again.
+  Run it before the new build starts.
+- **V38** keeps every detail eSignet can release (see Identity verification). It adds
+  `verified_birthdate`, `verified_gender`, `verified_email` and `verified_address` to the identity
+  verification table, and `birth_date`, `gender`, `email` and the flags `birth_date_verified`,
+  `gender_verified`, `email_verified` and `address_verified` (default `false`) to `member`. The member's
+  existing `address` column is reused and made longer (255 to 500 characters), which keeps every value.
+  No row is changed. Run it before the new build starts: the new build reads and writes the columns.
 - Applied migrations are never edited; a change is a new migration.
 
 ## API endpoints
@@ -215,7 +248,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/auth/login` | None | Body `{"email", "password"}`. Returns `{token, expiresAt, managerName}` |
 | GET | `/api/auth/me` | JWT | Returns `{name, email}` of the logged-in manager |
 | POST | `/api/auth/change-password` | JWT | Body `{"currentPassword", "newPassword"}`. Returns `204` (see Authentication) |
-| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, cooperativeName, cooperativePhone}` |
+| GET | `/api/settings` | JWT | `{smsEnabled, cooperativeEmail, location, minOrderKg, committeeEmails, deductionPerKg, cooperativeName, cooperativePhone, lotSizeKg}` |
 | PUT | `/api/settings` | JWT | Saves the settings (see Settings and change history) |
 | GET | `/api/settings/history?page=0&size=20` | JWT | Change history, newest first (max 100 per page) |
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
@@ -224,21 +257,21 @@ ERD: see `docs/erd.png`.
 | GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional. Without `nationalId` |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member, including `nationalId` |
-| POST | `/api/members` | JWT | Registers a member and returns it with `201`. Needs a `verificationId` and a `birthDate` (see Identity verification); `503` when verification is not configured |
-| GET | `/api/members/verify/status` | JWT | `{available, required}`: both are `true` when `MOSIP_ENABLED=true`, both `false` otherwise (registering a member needs verification) |
+| POST | `/api/members` | JWT | Registers a member from a verification and returns it with `201`. Body `{verificationId, nationalId?, address?, joinDate?, preferredLanguage?}`; every verified detail (name, phone, birth date, gender, email, address) comes from the verification and must not be sent (`400 VERIFIED_FIELD_LOCKED`, see Identity verification); `503` when verification is not configured. With `MEMBER_REGISTER_UNVERIFIED=true` and verification off: body `{fullName, phone, nationalId?, address?, joinDate?, preferredLanguage?}`, member stored as not verified (see Members) |
+| GET | `/api/members/verify/status` | JWT | `{available, required, unverifiedAllowed}`: `available` and `required` are both `true` when `MOSIP_ENABLED=true`, both `false` otherwise (registering a member needs verification). `unverifiedAllowed` is `true` only when `MOSIP_ENABLED=false` and `MEMBER_REGISTER_UNVERIFIED=true`: the frontend then shows the plain form |
 | POST | `/api/members/verify/start` | JWT | Starts a verification: `{provider, authorizationUrl, state, expiresAt}`. `503` if not available |
-| POST | `/api/members/verify/callback` | JWT | Body `{code, state}` from eSignet's redirect. Returns `{verificationId, verified, method, useBefore}` |
+| POST | `/api/members/verify/callback` | JWT | Body `{code, state}` from eSignet's redirect. Returns `{verificationId, verified, method, fullName, phone, useBefore, birthdate, gender, email, address, verifiedFields}` |
+| POST | `/api/members/verify/cancel` | JWT | Body `{state, error}` when eSignet's redirect has an error instead of a code. Returns `{reason, message}` |
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
 | GET | `/api/grades?includeInactive=false` | JWT | Grades `{id, code, name, nameRw, active, floorPricePerKg, description, sizeInfo, packaging}`, sorted by code. Only active ones unless `includeInactive=true`. `floorPricePerKg` is `null` when not set |
 | PUT | `/api/grades/{id}` | JWT | Body `{"name", "nameRw", "active", "floorPricePerKg", "description", "sizeInfo", "packaging"}`. Edits a grade. Grades A, B and C are fixed: they cannot be created or deleted |
-| GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold, remaining and pending-confirmation kg |
-| GET | `/api/lots/{id}` | JWT | One lot, with the kilograms each member delivered |
+| GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with capacity, space left or shortfall, and kg in the lot, lost, sold, remaining and pending confirmation |
+| GET | `/api/lots/{id}` | JWT | One lot, with each member's kg in it and how much of it was sold, lost and is left |
 | GET | `/api/lots/stock` | JWT | Stock: kg left in total and per grade, read from the batches and split into sellable, waiting and disputed kg; delivered, sold, lost and pending-confirmation kg, today's deliveries and lot counts |
-| GET | `/api/lots/open?gradeId=` | JWT | Open lot of the grade `{id, code, gradeName, totalKg}`. `204` if none is open yet, `404` if the grade does not exist |
-| PATCH | `/api/lots/{id}/close` | JWT | Closes an open lot (optional: sales do not need it). The next delivery of that grade starts a new lot |
-| POST | `/api/lots/{id}/losses` | JWT | Records a loss on an open or closed lot, returns `201`. The member of the lot's oldest batches bears it |
+| GET | `/api/lots/open?gradeId=` | JWT | The lot being filled for the grade `{id, code, gradeName, totalKg, capacityKg}`. `204` if none yet, `404` if the grade does not exist |
+| POST | `/api/lots/{id}/losses` | JWT | Records a loss on a lot that still holds potatoes, returns `201`. Shared across the lot's members in proportion to their kg left |
 | GET | `/api/lots/{id}/losses` | JWT | Losses of a lot, newest first |
 | GET | `/api/buyers?search=` | JWT | Buyers sorted by name. `search` matches name or phone |
 | POST | `/api/buyers` | JWT | Adds a buyer, returns `201` |
@@ -250,10 +283,10 @@ ERD: see `docs/erd.png`.
 | GET | `/api/buyer-requests/{id}` | JWT | One request with the buyer's contact details and how to contact them |
 | PATCH | `/api/buyer-requests/{id}/status` | JWT | Body `{"status", "publicMessage"}` (message optional). Changes the status; kept in the change history |
 | POST | `/api/buyer-requests/{id}/buyer` | JWT | Turns the request into a buyer record, or links it to the buyer with the same phone |
-| POST | `/api/sales` | JWT | Records a sale of a grade from the oldest sellable batches and credits each batch's member (see Sales). `201` when new, `200` when the same `clientUuid` was already recorded |
+| POST | `/api/sales` | JWT | Records a sale of a grade, first in first out by lot, and credits each portion's member (see Sales). `201` when new, `200` when the same `clientUuid` was already recorded |
 | POST | `/api/sales/orders` | JWT | One buyer order for several grades (each once), one sale per grade. Same rules and status codes |
-| GET | `/api/grades/{id}/sale-preview?quantityKg=&pricePerKg=&skip=` | JWT | The batches a sale would use and what each member would be credited. Saves nothing |
-| GET | `/api/grades/{id}/batches?page=0&size=20` | JWT | The grade's batches that still have kg, oldest first (the order sales take them in) |
+| GET | `/api/grades/{id}/sale-preview?quantityKg=&pricePerKg=&skipLots=` | JWT | The portions a sale would use and what each member would be credited. Saves nothing |
+| GET | `/api/grades/{id}/batches?page=0&size=20` | JWT | The grade's batches that still have kg, oldest delivery first, each with its lots |
 | GET | `/api/members/{id}/batches?status=all&page=0&size=20` | JWT | A member's batches, newest first, with kg and money earned per batch. `status=unsold` keeps batches with kg left |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
@@ -265,7 +298,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/payments/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a payment; the member is owed the amount again |
 | GET | `/api/members/{id}/statement` | JWT | A member's sale credits, shares, deductions, payments and amount owed |
 | POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
-| GET | `/api/deliveries?memberId=&lotId=&from=&to=&includeReversed=false&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional. Reversed deliveries only with `includeReversed=true` |
+| GET | `/api/deliveries?memberId=&lotId=&from=&to=&includeReversed=false&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page), each with its `lots`. All filters are optional; `lotId` finds every delivery with kg in that lot. Reversed deliveries only with `includeReversed=true` |
 | GET | `/api/deliveries/{id}` | JWT | One delivery, also when it was reversed |
 | POST | `/api/deliveries/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a delivery recorded by mistake |
 | POST | `/api/deliveries/{id}/correct` | JWT | Body `{"reason", "memberId", "gradeId", "quantityKg"}`. Replaces a wrong delivery, returns the corrected one with `201` |
@@ -278,7 +311,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/reports/weekly?weekStart=2026-10-19` | JWT | Weekly report: deliveries, stock, sales, money and confirmations (see Weekly report) |
 | GET | `/api/reports/weeks` | JWT | The weeks of the last 52 with any activity, newest first: `[{weekStart, weekEnd}]` |
 | POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
-| GET | `/api/dashboard` | JWT | Numbers for the home screen: stock split into sellable, waiting and disputed kg, grades with sellable kg, disputed deliveries and confirmations pending for more than 48 hours |
+| GET | `/api/dashboard` | JWT | Numbers for the home screen: stock split into sellable, waiting and disputed kg, grades with sellable kg, the lots being filled with their fill level (`lotsBeingFilled`), disputed deliveries and confirmations pending for more than 48 hours |
 
 More endpoints coming soon.
 
@@ -302,6 +335,13 @@ The manager logs in with `POST /api/auth/login` and receives a JWT that is valid
   (`07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`), stored as `+2507XXXXXXXX`; empty clears it. `minOrderKg` (default 100) must be more than 0.
 - `cooperativeName` (default "Koperative Intagamburuzwa") is shown on the public pages. Optional
   in the request; left out or empty keeps the current name.
+- `lotSizeKg` (default 100, more than 0, at most 100,000, 2 decimals) is the size of new lots (see
+  Lots and losses). Optional in the request; left out keeps the current size. It can change at any
+  time, with `lotSizeReason` (10 to 500 characters, otherwise `400`; ignored when the size does not
+  change). The new size applies only to lots opened afterwards: every lot keeps the capacity it was
+  opened with, so the lot being filled keeps its size and the next lot gets the new one. Each
+  change is written to the change history as `LOT_SIZE_CHANGED`, for example
+  `Lot size: 100 kg -> 50 kg, for new lots only. Reason: …`.
 - `committeeEmails` holds at most 10 valid emails. They are saved in lowercase without
   duplicates, in the `committee_emails` column of the `setting` table, separated by commas.
 - Every change to the settings or a grade, every password change, every new code sent for
@@ -483,12 +523,20 @@ anywhere: lot kilograms, stock, the dashboard, sharing, member statements and ba
 - **Delivery:** `POST /api/deliveries/{id}/reverse`. Only while none of its kg are sold,
   because its member was already credited for sold kg (otherwise `409`). Other deliveries of a
   lot that has sales can still be reversed, but not those of a `SHARED` lot. Also `409` when the
-  delivery is already reversed, or when the lot's recorded losses would leave it with less than
-  0 kg.
+  delivery is already reversed, or when its lost kg would not fit in what the rest of its lot has
+  left ("would have less than 0 kg left").
+- **A delivery that is in lots** leaves them: its lost kg are handed to the other portions of
+  each lot, in proportion to what each has left, so the lot's losses stay the same. A lot still
+  being filled gets the space back. A `FULL` lot keeps the shortfall (for example capacity 100,
+  80 kg in it) and is never filled again; it becomes `SOLD` if nothing is left in it. Its
+  portions stay as a record but no longer count. A waiting delivery is in no lot, so nothing
+  else changes.
 - **Correction:** `POST /api/deliveries/{id}/correct` reverses the delivery and saves the
-  corrected one in the same transaction: new receipt code, the open lot of its grade, the
-  same `deliveredAt`, its own `DELIVERY` ledger entry. The two are linked by `correctsId`
-  (on the new delivery) and `correctedById` (on the original). Same rules as a reversal.
+  corrected one in the same transaction: new receipt code, the same `deliveredAt`, its own
+  `DELIVERY` ledger entry. Like any new delivery it waits for the member's confirmation and only
+  then goes into a lot. The two are linked by `correctsId` (on the new delivery) and
+  `correctedById` (on the original). Same rules as a reversal. A correction to another grade
+  locks both grades, in id order.
 - **Payment:** `POST /api/payments/{id}/reverse`. The member's balance goes back up.
 - **Ledger:** `POST /api/ledger/{id}/reverse` does the same as the endpoints above for
   `DELIVERY` and `PAYMENT` entries. `SHARE`, `SALE`, `SALE_CREDIT` and `LOSS` entries cannot
@@ -497,7 +545,24 @@ anywhere: lot kilograms, stock, the dashboard, sharing, member statements and ba
 
 ### Members
 
-Request body for `POST` and `PUT`:
+`POST /api/members` registers a member from a completed identity verification (see Identity
+verification). Every verified detail is taken from the verification, never from the body: sending a
+value for one of them (`fullName`, `phone`, `birthDate`, `gender`, `email`, or `address` when the
+address was verified) is refused with `400` and code `VERIFIED_FIELD_LOCKED`, whatever the value, even
+empty. Leave them out. A birth date, gender or email can only come from the check, so sending one that
+was not verified is refused too (`400`, no code). An address that was not verified may be typed:
+
+```json
+{
+  "verificationId": 9,
+  "nationalId": "1199880012345678",
+  "address": "Busogo",
+  "joinDate": "2026-10-08",
+  "preferredLanguage": "rw"
+}
+```
+
+`PUT /api/members/{id}` updates a member:
 
 ```json
 {
@@ -506,22 +571,65 @@ Request body for `POST` and `PUT`:
   "nationalId": "1199880012345678",
   "address": "Busogo",
   "joinDate": "2026-10-08",
-  "preferredLanguage": "rw",
-  "verificationId": 9,
-  "birthDate": "1990-05-17"
+  "preferredLanguage": "rw"
 }
 ```
 
 | Field | Rules |
 |-------|-------|
-| `fullName` | Required, at most 150 characters |
-| `phone` | Required. A Rwandan mobile number (072, 073, 078 or 079) written as `07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`. Always stored and returned as `+2507XXXXXXXX` |
+| `verificationId` | Create only, required: the `verificationId` from `POST /api/members/verify/callback` |
+| `fullName` | Update only: required, at most 150 characters. On create it is the verified name and must not be sent |
+| `phone` | Update only: required. A Rwandan mobile number (072, 073, 078 or 079) written as `07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`. On create it is the verified phone and must not be sent. Always stored and returned as `+2507XXXXXXXX` |
 | `nationalId` | Optional: leave it out or empty. When given, 16 digits and unique. Only returned for one member, never in the list |
-| `address` | Optional, at most 255 characters |
+| `address` | Optional. On create at most 255 characters, and only when the check did not verify an address. On update at most 500 (a verified address can be that long); changing a verified address removes it from `verifiedFields` |
 | `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
-| `verificationId` | Required on create: the `verificationId` from `POST /api/members/verify/callback`. Ignored on update |
-| `birthDate` | Required on create, not in the future. Only used to check the person who verified; never saved, never returned. Ignored on update |
+
+A member (from create, update, `GET /api/members/{id}`, activate and deactivate) looks like this;
+the list items are the same without `nationalId`:
+
+```json
+{
+  "id": 1, "memberCode": "M-0001", "fullName": "Uwimana Claudine", "phone": "+250788123456",
+  "nationalId": "1199880012345678", "address": "KG 7 Ave, Kacyiru, Gasabo, Rwanda",
+  "joinDate": "2026-11-04", "status": "ACTIVE", "preferredLanguage": "rw",
+  "createdAt": "2026-11-04T08:00:00Z", "verified": true, "verificationMethod": "PASSWORD",
+  "verifiedAt": "2026-11-04T07:58:00Z",
+  "birthDate": "1990-05-17", "gender": "Female", "email": null,
+  "verifiedFields": ["fullName", "phone", "birthdate", "gender", "address"]
+}
+```
+
+`birthDate`, `gender` and `email` are `null` when the check did not give them. `verifiedFields` names
+the details that came from the check, in the order `fullName`, `phone`, `birthdate`, `gender`, `email`,
+`address`; it is `[]` for a member who was never verified. The name and phone of a verified member are
+always verified (members verified before V38 show just those two).
+
+**Registering without verification: for demos and fallbacks only.** With `MOSIP_ENABLED=false` and
+`MEMBER_REGISTER_UNVERIFIED=true` (`GET /api/members/verify/status` then says `"unverifiedAllowed": true`),
+`POST /api/members` takes the name and phone from the body instead, with the same rules as an update:
+
+```json
+{
+  "fullName": "Uwimana Claudine",
+  "phone": "0788123456",
+  "nationalId": "1199880012345678",
+  "address": "Busogo",
+  "joinDate": "2026-10-08",
+  "preferredLanguage": "rw"
+}
+```
+
+**Such a member is unverified:** nobody checked that the name and phone belong to the person. The member is
+stored with `identity_verified = false` and returned with `"verified": false`, `"verificationMethod": null`,
+`"verifiedAt": null` and `"verifiedFields": []`, which the frontend should show as "Not verified". The change
+history gets a `MEMBER_REGISTERED_UNVERIFIED` row ("registered without identity verification") naming the
+member. `fullName` and `phone` are required (`400` with `fullName: is required`, `phone: must be a Rwandan
+mobile number...`, and so on), a `verificationId` is refused, and so are `birthDate`, `gender` and `email`,
+which only ever come from the identity check. Duplicate phones and national IDs are refused as for any member.
+The setting is ignored while `MOSIP_ENABLED=true`: if eSignet is on but cannot be reached, nothing falls back
+by itself; switching to this path is a deliberate change of both settings. A verification can only be attached
+at registration, so such a member stays unverified.
 
 - The member code is generated on create as `M-` and 4 digits (`M-0001`, `M-0002`, ...):
   the highest existing number plus one. It never changes.
@@ -542,32 +650,178 @@ Request body for `POST` and `PUT`:
 
 ### Identity verification
 
-Every new member is checked against MOSIP eSignet before they are registered; there is no setting to skip it.
-Existing members, updating members and every other feature do not depend on it.
+Every new member is verified with MOSIP eSignet first, and is registered with every detail eSignet releases
+(name, phone, and when allowed the birth date, gender, email and address); while it is on there is no setting to
+skip it and nothing to type or compare. Only with it switched off can `MEMBER_REGISTER_UNVERIFIED` register
+unverified members, for demos and fallbacks (see Members). Existing members, updating members and every other feature do not depend on it.
 
-1. `POST /api/members/verify/start` returns `authorizationUrl`: eSignet's login page, with a one-use `state`
-   (valid 10 minutes), a `nonce` and PKCE (S256). The frontend keeps the form values, sends the member there,
-   and eSignet sends them back to `MOSIP_REDIRECT_URI` with `code` and `state`.
-2. `POST /api/members/verify/callback` with `{code, state}`. The backend exchanges the code at the token endpoint
-   with a client assertion (PS256, signed with the private key in `MOSIP_PRIVATE_KEY_PATH`, with the `kid` of
-   `MOSIP_KEY_ID`), then checks the ID token and the signed userinfo answer against eSignet's JWKS (PS256 only:
-   signature, issuer, audience, expiry, nonce, and the same `sub` in both). Nothing is encrypted; both come back
-   signed only. It returns `{verificationId, verified: true, method: "PASSWORD", useBefore}` (30 minutes).
-   `400` unknown or expired state, `409` state already used or the person is already a member, `502` eSignet
-   failed or its answer could not be trusted, `503` not available.
-3. `POST /api/members` with `verificationId` and `birthDate` (both always required). The name, birth date and phone typed for the member
-   must **all** match the person who verified. After normalising (no case, accents, punctuation or word order for
-   the name; `yyyy/MM/dd` or `yyyy-MM-dd` for the date; `+2507XXXXXXXX` for the phone) they are compared exactly.
-   On a mismatch the member is not created, the `400` message names the fields that differ (never their values)
-   and the attempt is counted; the third mismatch uses the verification up and the person must verify again.
+1. **Start.** "Add member" calls `POST /api/members/verify/start`, which returns `authorizationUrl`: eSignet's
+   login page, with a one-use `state` (valid 10 minutes), a `nonce`, PKCE (S256), `scope=openid` only (`profile`
+   would also release the picture) and the OIDC `claims` parameter, URL-encoded. With the defaults it is:
+
+   ```json
+   {"userinfo":{"name":{"essential":true},"phone_number":{"essential":true},
+                "birthdate":null,"gender":null,"email":null,"address":null}}
+   ```
+
+   `name` and `phone_number` are essential, so eSignet's consent screen shows them as required; the optional
+   ones come from `MOSIP_OPTIONAL_CLAIMS` and the member may refuse each of them. `picture` is never asked for
+   or kept. With `MOSIP_NATIONAL_ID_CLAIM` set, that claim is added as optional (`"<name>":null`); it is empty
+   by default because this eSignet does not release the national ID, which stays entered by the manager. With
+   `MOSIP_PROMPT_CONSENT=true` (a demo setting) the URL also carries `prompt=consent`, so the Allow page shows
+   every time. The frontend sends the member there; eSignet sends them back to `MOSIP_REDIRECT_URI` with
+   `code` and `state`, or with `error` and `state`.
+2. **Back with a code:** `POST /api/members/verify/callback` with `{code, state}`. The backend exchanges the code
+   at the token endpoint with a client assertion (PS256, signed with the private key in `MOSIP_PRIVATE_KEY_PATH`,
+   with the `kid` of `MOSIP_KEY_ID`), then checks the ID token and the signed userinfo answer against eSignet's
+   JWKS (signature, issuer, audience, expiry, nonce, and the same `sub` in both; see "Token checks" below). Only
+   the claims that were asked for are read; anything else eSignet sends (`picture`, `given_name`, `nickname`,
+   `zoneinfo`, ...) is not stored, logged or passed on. Control characters are removed from every text value.
+   What eSignet sends, as measured on the real one, and how it is read:
+
+   | Claim | Sent as | Kept as |
+   |-------|---------|---------|
+   | `name` | One plain string (`given_name` and the like are ignored) | Trimmed, runs of spaces made one; at most 150 characters (`NAME_TOO_LONG`). A language-tagged one (`name#eng`) is used only when the plain one is missing (with several, the first language code alphabetically) |
+   | `phone_number` | `"+2507…"` | Must be a Rwandan mobile number (`PHONE_NOT_RWANDAN`), stored as `+2507XXXXXXXX` |
+   | `birthdate` | `yyyy/MM/dd` (`yyyy-MM-dd` also accepted) | A date. Not a real date, in the future or before 1900: left out |
+   | `gender` | A plain string, for example `"Female"` | As given, trimmed. Longer than 20 characters: left out |
+   | `email` | A plain string | Trimmed. No `@` or longer than 254 characters: left out |
+   | `address` | A JSON object with `street_address`, `locality`, `region`, `country` (`postal_code` may be missing); a plain string is also accepted | One line: the parts present, in that order, joined with `, ` (`postal_code` and `formatted` are not used). Longer than 500 characters: cut at the last whole word |
+
+   A refused or missing optional detail, or one left out because it does not fit, never fails the login: that
+   field is just `null`. A missing name or phone is still an error (`CLAIMS_MISSING`), and a member who refuses
+   them at eSignet comes back with `CLAIMS_REFUSED` as before. Each callback logs one INFO line per optional
+   claim with its name only: `Identity verification userinfo claim birthdate: present` (or `absent`, or
+   `ignored, unusable`), never a value. It returns:
+
+   ```json
+   { "verificationId": 9, "verified": true, "method": "PASSWORD",
+     "fullName": "UWIMANA Claudine", "phone": "+250788123456", "useBefore": "2026-11-03T10:30:00Z",
+     "birthdate": "1990-05-17", "gender": "Female", "email": null,
+     "address": "KG 7 Ave, Kacyiru, Gasabo, Rwanda",
+     "verifiedFields": ["fullName", "phone", "birthdate", "gender", "address"] }
+   ```
+
+   `birthdate` is `yyyy-MM-dd`; `birthdate`, `gender`, `email` and `address` are `null` when not released.
+   `verifiedFields` names the fields that hold a verified value, in the order `fullName`, `phone`, `birthdate`,
+   `gender`, `email`, `address`. The frontend shows them read-only in the new member form and leaves them out of
+   the registration.
+3. **Back with an error:** `POST /api/members/verify/cancel` with `{state, error}` (eSignet's `error` code;
+   never its `error_description`). The state is used up and the outcome written to the change history. It
+   returns `{reason, message}` with `reason` `CANCELLED` (`access_denied`), `CLAIMS_REFUSED`
+   (`essential_consent_denied`: the member did not allow the name or phone) or `PROVIDER_ERROR` (anything else),
+   and the same answer whether or not the state is known.
+4. **Register:** `POST /api/members` with `verificationId` and the other fields before `useBefore` (30 minutes).
+   Every verified detail is copied from the verification to the member, with its flag set (`verifiedFields`);
+   a value for one of them in the body is refused with `VERIFIED_FIELD_LOCKED`. The national ID, join date,
+   preferred language, and an address that was not verified come from the body as before.
+   Only the manager who started the verification can use it, once. A registration refused for another reason
+   (a phone or national ID already used) leaves the verification usable until then.
+
+**Errors.** Identity errors have a `code` next to the `message`, for the frontend to choose its own text
+(`{"message": "...", "code": "CLAIMS_MISSING"}`); other errors have no `code`.
+
+| Code | Status | When |
+|------|--------|------|
+| `VERIFICATION_UNKNOWN` | 400 | The state or verification is unknown, or another manager's |
+| `VERIFICATION_EXPIRED` | 400 | The state is more than 10 minutes old, or the verification more than 30 minutes |
+| `VERIFICATION_USED` | 409 | The state, or the verification, was already used |
+| `ALREADY_MEMBER` | 409 | This person is already a member |
+| `CLAIMS_MISSING` | 400 | eSignet gave no name or no phone |
+| `PHONE_NOT_RWANDAN` | 400 | The verified phone is not a Rwandan mobile number |
+| `NAME_TOO_LONG` | 400 | The verified name is longer than 150 characters |
+| `ACR_NOT_ALLOWED` | 400 | The id_token says the person logged in a way not in `MOSIP_ALLOWED_ACRS` (for example biometrics) |
+| `VERIFIED_FIELD_LOCKED` | 400 | `POST /api/members` sent a value for a detail the check verified (`fullName`, `phone`, `birthDate`, `gender`, `email`, `address`). Message: "This detail came from the identity check and cannot be changed here."; it never repeats the verified value |
+| `PROVIDER_FAILED` | 502 | eSignet failed or its answer could not be trusted |
+| `NOT_CONFIGURED` | 503 | Identity verification is switched off (and `MEMBER_REGISTER_UNVERIFIED` is not `true`) |
+
+`VERIFIED_FIELD_LOCKED` replaces the earlier `400` without a code for a `fullName` or `phone` in the body.
+`POST /api/members` also refuses a birth date, gender or email that was not verified (`400`, no code), and a
+phone or national ID that belongs to another member (`409`, no code), as before.
 
 What is kept: eSignet's `sub` is pairwise (not a national ID number), so it is only used as `identity_token`:
-one person, one membership (`409` for the second). The name, birth date and phone from eSignet are never stored:
-only salted HMAC hashes, for at most 30 minutes, cleared when the member is saved, the verification is used up
-or time runs out (a scheduled job). The birth date typed on the form is not saved either. The change history
-gets `IDENTITY_VERIFIED`, `IDENTITY_MISMATCH` (field names only), `IDENTITY_DUPLICATE` and
-`IDENTITY_VERIFICATION_FAILED` without any personal data. The email claim is requested but not used: the
-member form has no email field. Codes, states, tokens, assertions, claims and the key are never logged.
+one person, one membership (`ALREADY_MEMBER` for the second). The verified details (name, phone, birth date,
+gender, email, address) are kept on the verification for at most 30 minutes: all cleared when the member is
+saved, or by a job that runs every minute once they are older than that, so never more than about 31 minutes.
+After that they live only in the member record. The change history gets `IDENTITY_VERIFIED`, `IDENTITY_DUPLICATE` and
+`IDENTITY_VERIFICATION_FAILED` with the reason only (for example `missing details: phone`, or
+`the member did not allow the name and phone (essential_consent_denied)`), never a name, phone or eSignet's
+text. Older history rows may also show `IDENTITY_MISMATCH` from the comparison this replaced. Codes, states,
+tokens, assertions, claims, the verified details and the key are never logged; the server log only gets safe
+one-line descriptions of a failed call to eSignet (address without query, HTTP status, known OAuth error code).
+
+**Login method (acr).** eSignet can offer several ways to log in (one-time code, biometrics, wallet), asked for
+with `MOSIP_ACR_VALUES` (several values, space-separated, sent as `acr_values` exactly as set; starting a
+verification logs one INFO line with that value, and nothing else from the URL). The local eSignet mock accepts
+any biometric capture, so a biometric login proves nothing. When the ID token carries an `acr` claim, it must be
+one of `MOSIP_ALLOWED_ACRS` (default `mosip:idp:acr:generated-code`, the one-time code), compared exactly;
+anything else (including an empty or non-text `acr`) is refused with `ACR_NOT_ALLOWED`, before the duplicate
+check, and the history reason is `the login method (acr) is not in MOSIP_ALLOWED_ACRS`. When the ID token has no
+`acr`, nothing changes: it is not guessed from `acr_values`. Each callback logs one INFO line saying only whether
+the `acr` claim was present (`id_token acr claim present: true|false`), never its value. Note that the default
+`MOSIP_ACR_VALUES` (`mosip:idp:acr:password`) is not in the default `MOSIP_ALLOWED_ACRS`: if eSignet puts `acr` in
+the ID token, set both so the method asked for is one that is allowed.
+
+**Token checks.** Both tokens must carry exactly the expected `iss` (present, and compared character for
+character: no prefix or partial match), an `aud` containing `MOSIP_CLIENT_ID`, and a `sub`; the userinfo `sub`
+must be the ID token's. The two differ in these places:
+
+| | ID token | Userinfo answer |
+|---|---|---|
+| Expected `iss` | `MOSIP_ISSUER`, else `MOSIP_BASE_URL` (trailing `/` removed) | `MOSIP_USERINFO_ISSUER`, else the ID token's |
+| Algorithm | PS256 only | PS256 or RS256 |
+| Key | a JWKS key that verifies it | the RSA key of the JWKS whose `kid` is in the token header (no `kid`, or no such key: refused) |
+| `exp` | required, and not passed | optional; refused if present and passed |
+| `iat` | not required (as before) | not required |
+
+Why the userinfo answer differs: eSignet signs it with RS256 using the key its JWKS lists as PS256, and without
+`exp` or `iat`. OpenID Connect Core 5.3.2 asks a signed userinfo answer for `iss` and `aud` only, and RS256 is
+still RSA with the same published key, so both are accepted there; the key's `alg` in the JWKS is not compared.
+`none`, HMAC (`HS*`), EC (`ES*`) and every other algorithm stay refused, for both tokens.
+
+Why a separate userinfo issuer: the local eSignet signs the ID token with `iss` `http://localhost:8080` (its
+discovery document's `issuer`) but the userinfo answer with `http://localhost:8088/v1/esignet`, so one expected
+value cannot fit both. `MOSIP_USERINFO_ISSUER` names the second exactly, and changes nothing for the ID token. The
+`MOSIP_ISSUER` and `MOSIP_USERINFO_ISSUER` values are only trimmed of spaces; a trailing `/` stays and must match.
+
+**Checking the client assertion.** To match the key with the public JWK registered at eSignet, the app logs one
+INFO line at startup when verification is on, for example:
+
+```
+Client assertion: alg=PS256, thumbprint=<RFC 7638 SHA-256 thumbprint>, kid=<MOSIP_KEY_ID>,
+kidEqualsThumbprint=false, modulusStart=<first 8 characters of n>, aud=<audience>, lifetimeSeconds=60
+```
+
+The thumbprint and `modulusStart` come from the PUBLIC half of the key (compare them with the `n` and the
+thumbprint of the JWK registered at eSignet); `kidEqualsThumbprint` only says whether `MOSIP_KEY_ID` happens to be
+that thumbprint. Nothing private and never the key file's path is printed. When the token call is refused with
+`401`, the usual failure line also shows the assertion that was sent, decoded: the header (`alg`, `typ`, `kid`)
+and the claims (`iss`, `sub`, `aud`, `iat`, `exp` as epoch seconds and time, `jti`). Never its signature or the
+whole token. The assertion is RSASSA-PSS with SHA-256, MGF1-SHA-256 and a 32-byte salt (PS256).
+
+**Checking a refused id_token or userinfo answer.** When one of the checks above fails, the failure line
+explains it, for example:
+
+```
+userinfo check failed: BadJwtException; failedChecks=[iss missing, aud missing], category=BadJwtException;
+response HTTP 200, Content-Type application/jwt; body JWT; header {alg=PS256, kid=..., typ=(none)};
+claimNames [birthdate, exp, iat, name, phone_number, sub]; iss=(none), aud=(none), exp=<epoch> (<time>),
+iat=<epoch> (<time>); subMatchesIdToken=true; jwks [{kid=..., alg=PS256, kty=RSA}]
+```
+
+- `failedChecks` are the app's own checks, run again on the refused answer: `format: ...` (not a JWT, JSON instead
+  of a signed JWT, encrypted), `algorithm not allowed` (not PS256; for userinfo not PS256 or RS256),
+  `signature: no matching key` (no published key with that `kid`), `signature: does not verify`, `iss missing` /
+  `iss different` (compared with the expected issuer of that token, shown as `iss=` for both), `aud missing` / `aud different` (must contain
+  `MOSIP_CLIENT_ID`), `exp missing` (ID token only), `expired`, `not yet valid`, `sub missing`,
+  `sub mismatch` (userinfo `sub` is not the id_token's). `category` is only the class of the exception that refused
+  it (Spring reports several different problems as `BadJwtException`), never its message.
+- The response status and Content-Type are for the userinfo call only; the body is described as JWT, JSON,
+  encrypted JWT or other.
+- Only the NAMES of the claims are listed. The only values shown are `iss`, `aud`, `exp` and `iat`; `sub` is
+  only compared (`subMatchesIdToken`). Never a name, phone, birth date, the access token, the signature or the
+  whole token.
+- `jwks` lists the `kid`, `alg` and key type of every key eSignet publishes (public information).
 
 With `MOSIP_ENABLED=false` (the default) the app starts and works as before, but `POST /api/members` is refused
 with `503` "Member registration needs identity verification, which is not configured." and the status endpoint
@@ -575,9 +829,11 @@ says `{available: false, required: false}`. With `MOSIP_ENABLED=true` the app do
 missing or the key file cannot be used (the message names settings only). The old `require_identity_verification`
 column of the `setting` table stays in the database, unused.
 
-The automatic tests use a fake eSignet. Only the real one can confirm the claim names and formats it returns
-(`name`, `birthdate`, `phone_number`), that it accepts the client assertion (`aud`, `exp`, PS256), the exact
-redirect URI, and that the same person always gets the same `sub`.
+The automatic tests use a fake eSignet, built from what the real one was measured to send (the claim formats
+above). Only the real one can confirm that it honours the `claims` parameter with `scope=openid`, the error code
+when the member declines (`essential_consent_denied`), the phone format it returns, that it accepts the client assertion (`aud`, `exp`, PS256), the exact redirect URI, that the same
+person always gets the same `sub`, and the `iss` of each of its tokens (set `MOSIP_ISSUER` and
+`MOSIP_USERINFO_ISSUER` to match).
 
 ### Deliveries
 
@@ -601,16 +857,15 @@ Request body for `POST /api/deliveries`:
 | `quantityKg` | Required. More than 0, at most 5000, at most 2 decimals |
 | `deliveredAt` | Optional. When the delivery happened, for example the time on the device when it was recorded offline. At most 5 minutes in the future and at most 7 days in the past, otherwise `400`. Defaults to the time the server receives the delivery |
 
-- The response contains the receipt code, member, grade, lot, quantity, deduction,
-  `deliveredAt` (when the delivery happened) and `syncedAt` (when the server saved it).
+- The response contains the receipt code, member, grade, quantity, deduction, `deliveredAt`
+  (when the delivery happened), `syncedAt` (when the server saved it) and `lots`: one entry per lot
+  the delivery is in, `{lotId, lotCode, lotStatus, kg, soldKg, lostKg, remainingKg}`, oldest lot
+  first. `lots` is empty while the delivery waits for confirmation. `lotId` and `lotCode` are the
+  delivery's own lot (from before fixed-size lots) or its first lot.
 - **Deduction:** `quantityKg` x `deduction_per_kg` from the `setting` table (5 RWF),
   rounded half up to whole RWF. For example 12.25 kg gives 61 RWF.
-- **Lot:** the delivery goes to the open lot of its grade. If the grade has no open lot, a
-  new one is opened. Lot codes are the grade code, the year the lot was opened (Kigali
-  time) and the grade's lot number in that year: `A-2026-01`, `A-2026-02`, `B-2026-01`.
-  A grade can only have one open lot at a time (enforced by the database).
-  `GET /api/lots/open?gradeId=` shows it with the kilograms delivered so far, or returns
-  `204` when no lot is open yet (the next delivery of that grade opens one).
+- **Lot:** a new delivery is in no lot. It goes into the lots of its grade when it is
+  confirmed (see Lots and losses).
 - **Receipt code:** `RCT-` and 4 characters without look-alikes (no 0, O, 1, I or L), for
   example `RCT-7K2Q`.
 - **Same `clientUuid` again:** the existing delivery is returned with `200` and nothing new
@@ -634,11 +889,9 @@ follows these rules:
 - **Sending again is safe:** the same `clientUuid` always returns the delivery that was
   saved the first time, with `200`. It is saved once and adds one ledger entry, however
   often it is sent. This check comes first, so a re-sent delivery still gets `200` after the
-  7-day window, after its member was deactivated, or after its lot was closed.
-- **Lot at sync time:** the lot is chosen when the delivery reaches the server: the open
-  lot of its grade at that moment. If the lot that was open when the delivery was recorded
-  has been closed in the meantime, the delivery goes to a new lot, so the kilograms of a
-  closed lot do not change.
+  7-day window or after its member was deactivated.
+- **Lot:** an offline delivery is in no lot either. It goes into the lot being filled when it is
+  confirmed, whenever that is.
 - **Errors that will not go away on retry** return a `4xx` status with a message, never
   `500`, so the app can show the message and stop retrying:
   - `400`: invalid body (missing fields, malformed `clientUuid`, quantity out of range,
@@ -651,41 +904,60 @@ follows these rules:
 
 ### Lots and losses
 
-A lot groups the deliveries of one grade. Sales do not use lots: they take kg by grade from the
-oldest batches (see Sales), so a lot does not have to be closed to be sold. Closing a lot is
-optional, and a lot becomes `SOLD` by itself when nothing is left in it, closed or not. `SHARED`
-only remains for lots shared before sales were paid by batch.
+A lot holds potatoes of **one grade** and has a **fixed size**: the lot size setting when it was
+opened (100 kg by default, see Settings). The setting can change, so lots of one grade can have
+different sizes; the fill level, space left, shortfall, sales and losses always use the lot's own
+capacity. Nobody opens or closes a lot: the system fills them.
 
-- **Quantities** are always computed from the database, never stored:
-  `remainingKg = deliveredKg - lostKg - soldKg`. `soldKg` is what sales took from the lot's
-  batches. `saleAmountRwf` is the money of those kg: sales made from the lot before sales by grade,
-  plus what sales by grade credited for its batches. `memberCount` is the number of members who
-  delivered to it. `createdAt` and
-  `closedAt` are the dates the lot was opened and closed.
-- `pendingConfirmationKg` is the part of `deliveredKg` from deliveries that are still
-  `PENDING` (not reversed). It is shown next to the totals and does **not** change them:
-  the potatoes are physically in the store either way. A lot with pending kg cannot be
-  shared yet (see Sharing).
-- **Close:** only an `OPEN` lot can be closed (otherwise `409`). Closing waits for any
-  delivery of the same grade that is being recorded, so no delivery ends up in a lot
-  after it closed.
+- **Only confirmed kg go into lots.** A delivery enters a lot when it becomes `CONFIRMED` (with the
+  code, by an SMS reply, by the manager's review, or when a dispute raised before confirmation is
+  resolved). Waiting deliveries, and deliveries disputed before they were confirmed, are in no lot.
+- **Filling:** each grade has at most one lot being filled (`FILLING`). A confirmed delivery fills
+  it up to its capacity; the lot becomes `FULL` and the rest of the delivery starts the next lot.
+  One delivery can be split across two or more lots, and deliveries of different members share a
+  lot. Lots are filled in the order deliveries are **confirmed**: a delivery confirmed late goes into
+  the lot being filled then, and nothing ever moves between lots afterwards.
+- **Statuses:** `FILLING`, `FULL`, and `SOLD` once a full lot has nothing left. Lots from before
+  fixed-size lots keep their size and status (`OPEN`, `CLOSED`, `SOLD`, `SHARED`), have no capacity
+  (`olderLot: true`) and get no new kg; their kg are sold first (see Sales).
+- **Lot codes** are the grade code, the year the lot was opened (Kigali time) and the grade's lot
+  number in that year: `A-2026-01`, `A-2026-02`, `B-2026-01`. They continue after the older lots.
+- `GET /api/lots/open?gradeId=` shows the lot being filled with `totalKg` (kg in it) and
+  `capacityKg`, or `204` when there is none (the next confirmed delivery of that grade starts one).
+- **Quantities** are always computed from the lot's portions (the part of each delivery in the lot),
+  never stored: `remainingKg = deliveredKg - lostKg - soldKg`, where `deliveredKg` is the kg in the
+  lot. `capacityKg` is the lot's size; `spaceLeftKg` what a `FILLING` lot can still take;
+  `shortfallKg` what reversals took out of a `FULL` or `SOLD` lot (it is never refilled).
+  `saleAmountRwf` is the money of the kg sold from it. `memberCount` is the number of members with
+  kg in it. `createdAt` and `closedAt` are the dates the lot was opened and became full.
+- `GET /api/lots/{id}` lists `members`: each member's `kg` in the lot and how much of it was
+  `soldKg`, `lostKg` and is `remainingKg`.
+- `pendingConfirmationKg` is only for older lots, which can still hold kg of deliveries that are
+  `PENDING`. It is shown next to the totals and does **not** change them.
 - **Stock:** `GET /api/lots/stock` reads the kg left per grade from the batches, whatever their
   lot. `totalRemainingKg` is split into `totalSellableKg` (confirmed), `totalWaitingKg` (pending
   confirmation) and `totalDisputedKg`; `byGrade` lists every grade with kg left with `remainingKg`,
   `sellableKg`, `waitingKg` and `disputedKg`. Only sellable kg can be sold. `totalDeliveredKg`,
   `totalSoldKg` and `totalLostKg` cover all lots (so delivered - lost - sold = remaining),
   `addedTodayKg` and `deliveriesToday`
-  (deliveries whose time falls on today in Kigali), `openLots` / `closedLots`, and
+  (deliveries whose time falls on today in Kigali), `openLots` (lots not full yet: `FILLING`, and
+  older `OPEN` lots) / `closedLots` (full lots not sold out: `FULL`, and older `CLOSED` lots), and
   `pendingConfirmationKg` (all `PENDING`, not reversed deliveries; already included in the
-  totals).
-- **Losses:** body `{"quantityKg", "reason", "recordedAt", "notes"}`. `reason` is `ROT`,
-  `DRYING`, `DAMAGE`, `THEFT` or `OTHER`; `recordedAt` (a date) and `notes` are optional. Allowed on
-  open and closed lots (otherwise `409`). `quantityKg` must be more than 0 and at most the
-  lot's remaining kg (otherwise `400`). Each loss adds a `LOSS` ledger entry.
-- **Who bears a loss:** losses are recorded per lot. A loss takes its kg from the lot's oldest
-  batches first (by delivery time, then id), whatever their confirmation status, and the member of
-  those batches bears it: they earn nothing on the lost kg and pay no deduction on them. The
-  cooperative bears nothing.
+  totals). The stock reads each delivery's own grade, so waiting kg (in no lot) are counted too.
+- **Losses** are for losses after intake; at intake the manager sorts the potatoes and records only
+  the good kg. Body `{"quantityKg", "reason", "recordedAt", "notes"}`. `reason` is `ROT`, `DRYING`,
+  `DAMAGE`, `THEFT` or `OTHER`; `recordedAt` (a date) and `notes` are optional. Allowed on lots that
+  still hold potatoes: `FILLING`, `FULL`, and older `OPEN` and `CLOSED` lots (otherwise `409`).
+  `quantityKg` must be more than 0 and at most the lot's **confirmed** kg left (otherwise `400`
+  "Only X kg of confirmed potatoes remain in lot Y."). Each loss adds one `LOSS` ledger entry.
+- **Who bears a loss:** the members whose potatoes are in the lot, never the cooperative. A loss is
+  shared across the lot's portions in proportion to what each has **left**: kg already sold never
+  carry a loss, and neither do kg still waiting for confirmation; disputed kg do, because they are
+  still in the lot. The split is in hundredths of a kg: each portion gets its share rounded down,
+  and the hundredths still missing go to the largest remainders, then to the older delivery. Each
+  part is a `loss_allocation` of that portion. The members earn nothing on lost kg and pay no
+  deduction on them. Example: 10 kg lost from a lot where three members have 18.75, 31.25 and 20 kg
+  left gives 2.68, 4.46 and 2.86 kg.
 
 ### Buyers
 
@@ -766,20 +1038,30 @@ open; everything else needs the manager's token. CORS allows only the frontend (
 ### Batches
 
 Every delivery is a batch for its member: `receivedKg`, `soldKg`, `lostKg` and `remainingKg`
-(received - sold - lost, computed by the database). Reversed deliveries are not batches.
+(received - sold - lost, computed by the database), the sums of its portions. Each batch also has
+`lots`, one entry per lot it is in (empty while it waits for confirmation). Reversed deliveries are
+not batches.
 
 - `GET /api/members/{id}/batches?status=all|unsold&page=0&size=20`: the member's batches, newest
   first, with the kg `totals` and the money `earnings` over all of them. Each batch has `grossRwf`,
   `deductionRwf`, `earnedRwf` (what sales credited for its sold kg) and `payment`: `NOTHING_SOLD`,
   `BATCH`, or, only for sales made before sales by grade, `LOT_SHARE` or `AWAITING_SETTLEMENT`.
-- `GET /api/grades/{id}/batches`: the grade's batches that still have kg, oldest first.
+- `GET /api/grades/{id}/batches`: the grade's batches that still have kg, oldest delivery first.
 
 ### Sales
 
-Sales are made by **grade**, first come first served: the kg are taken from the oldest
-**sellable** batches of the grade, by delivery time and then id, whatever their lot. Sellable
-means confirmed, not reversed and with kg left; `PENDING` and `DISPUTED` batches are skipped. No lot
-has to be closed first.
+Sales are made by **grade**, first in, first out **by lot**:
+
+1. The lots from before fixed-size lots first, oldest delivery first (delivery time, then id), as
+   before.
+2. Then the fixed-size lots in the order they were filled. A sale may take part of a lot, and any
+   quantity is allowed: 150 kg from 100 kg lots is the first lot whole and half of the next. A lot
+   still being filled can be sold from and keeps filling.
+
+Inside a fixed-size lot the kg are shared across its portions **in proportion to what each has
+left** (the lot is one pool), in hundredths of a kg with the largest remainder first and ties to
+the older delivery. Only confirmed kg are sold: kg disputed after they went into a lot stay in it
+but are held back until the dispute is settled.
 
 Request body for `POST /api/sales`:
 
@@ -791,7 +1073,7 @@ Request body for `POST /api/sales`:
   "quantityKg": 150,
   "pricePerKg": 300,
   "soldAt": "2026-10-09",
-  "skipDeliveryIds": [12, 15],
+  "skipLotIds": [12, 15],
   "skipReason": "The buyer wants the newer potatoes"
 }
 ```
@@ -802,35 +1084,45 @@ Request body for `POST /api/sales`:
 - With fewer sellable kg than asked, the answer is `400` "Only 250.00 kg of Big can be sold now, but
   300.00 kg were asked for. 40.00 kg are waiting for their members to confirm them." and nothing is
   saved.
-- **Preview:** `GET /api/grades/{id}/sale-preview?quantityKg=150&pricePerKg=300&skip=12,15` shows
-  the batches the sale would use and what each member would be credited, and saves nothing. The sale
-  works it out again under locks when it is recorded, so it can differ if stock changed in between.
-- **Skipping the oldest batches** is allowed with `skipDeliveryIds` and a `skipReason` of 10 to
-  500 characters (otherwise `400`). A batch the sale would not reach cannot be skipped. Every skip
-  is written to the audit log as `SALE_FIFO_SKIPPED` (sale code, receipt codes, reason).
-- **Credits:** each batch used credits its member. `grossRwf` is the batch's part of the sale
-  amount (by kg; the rounding remainder goes to the batch with the most kg, so the parts add up to
-  exactly the total). `deductionRwf` is 5 RWF per **sold** kg (the rate from Settings, never more
-  than the gross). `netRwf = grossRwf - deductionRwf` is added to what the member is owed. Example:
-  150 kg at 300 RWF, 100 kg from Alice's batch and 50 kg from Bosco's: Alice gets 30,000 - 500 =
-  29,500 RWF and Bosco 15,000 - 250 = 14,750 RWF.
+- **Preview:** `GET /api/grades/{id}/sale-preview?quantityKg=150&pricePerKg=300&skipLots=12,15`
+  shows the portions the sale would use (`batches`, one line per portion, with `lotPortionId`: a
+  delivery split across two lots can appear twice) and what each member would be credited, and
+  saves nothing. `skipped` lists the skipped lots `{lotId, lotCode, sellableKg}`. The sale works it
+  out again under locks when it is recorded, so it can differ if stock changed in between.
+- **Skipping whole lots** is allowed with `skipLotIds` and a `skipReason` of 10 to 500 characters
+  (otherwise `400`). Only a lot of the grade with sellable kg that the sale would otherwise reach can
+  be skipped. Every skip is written to the audit log as `SALE_FIFO_SKIPPED` ("Sale SAL-7K2Q: skipped
+  lots A-2026-03. Reason: ..."). Single batches can no longer be skipped: `skipDeliveryIds` in a sale
+  and `skip` in the preview are refused with `400`.
+- **Credits:** each portion used credits its member. `grossRwf` is the portion's part of the sale
+  amount and `deductionRwf` its part of the deduction (5 RWF per **sold** kg, the rate from
+  Settings, rounded once for the whole sale), both split by kg, so the lines add up to exactly the
+  sale amount and the sale deduction. A deduction is never more than its gross. `netRwf = grossRwf -
+  deductionRwf` is added to what the member is owed. Example: 130 kg at 300 RWF from a full lot of
+  60 + 40 kg and 30 kg of the next lot, where two members have 30 and 50 kg: 60 kg (18,000 - 300),
+  40 kg (12,000 - 200), 11.25 kg (3,375 - 56) and 18.75 kg (5,625 - 94); 39,000 RWF and 650 RWF in
+  all.
 - **Ledger:** one `SALE` entry (kilograms and the buyer's total), then one `SALE_CREDIT` entry per
-  batch used (kilograms and the net amount, `relatedEntityType` `SALE_ALLOCATION`). A batch's part of
-  a sale is credited once: the database refuses a second credit.
+  portion used (kilograms and the net amount, `relatedEntityType` `SALE_ALLOCATION`). A portion's
+  part of a sale is credited once: the database refuses a second credit.
 - The response has the sale (`id`, `saleCode`, `gradeId`, `gradeName`, `buyerName`, `quantityKg`,
   `pricePerKg`, `totalAmountRwf`, `belowFloor`, `soldAt`, `totalDeductionRwf`, `totalNetRwf`) and
-  `batches`: for each batch used `receiptCode`, `lotCode`, `memberNumber`, `memberName`, `kg`,
-  `grossRwf`, `deductionRwf` and `netRwf`. `lotId`, `lotCode` and `lotStatus` are only set for
-  sales made before sales by grade; for those, the money fields are empty.
+  `batches`: for each portion used `receiptCode`, `lotId` and `lotCode` (the portion's lot),
+  `memberNumber`, `memberName`, `kg`, `grossRwf`, `deductionRwf` and `netRwf`. The sale's own
+  `lotId`, `lotCode` and `lotStatus` are only set for sales made before sales by grade; for those,
+  the money fields are empty.
 - `belowFloor` is `true` when the grade has a floor price and `pricePerKg` is lower. It is
   only a warning: the sale is saved either way.
-- A lot that has nothing left becomes `SOLD`, closed or not.
+- A `FULL` lot (or an older lot) that has nothing left becomes `SOLD`. A lot being filled stays
+  `FILLING`.
 - Sending the same `clientUuid` again returns the first result with `200`.
-- Locks are always taken in this order: the grade, the lots that have sellable batches (by id), the
-  batches (oldest first) and last the ledger. Two sales of one grade wait for each other.
+- Locks are always taken in this order: the grade, the lots that have sellable kg (by id), their
+  portions, the deliveries, and last the ledger. Two sales of one grade wait for each other.
+  Confirmations, losses, reversals and corrections take the grade first too, so none of them can
+  deadlock with a sale.
 - Sale codes look like `SAL-7K2Q`.
 - `POST /api/sales/orders` takes `{"clientUuid", "buyerId", "soldAt", "items": [{"gradeId",
-  "quantityKg", "pricePerKg", "skipDeliveryIds", "skipReason"}]}`, each grade at most once, and
+  "quantityKg", "pricePerKg", "skipLotIds", "skipReason"}]}`, each grade at most once, and
   records one sale per item with an order code `ORD-7K2Q`. If any item fails, nothing is saved.
 - `GET /api/sales` filters: `search` matches part of the buyer name, a lot code (also those of a
   sale's batches) or sale code (ignoring case), and a number on its own also matches the sale id.
@@ -911,7 +1203,8 @@ Request body for `POST /api/payments`:
 `GET /api/members/{id}/statement` returns `grossShareRwf`, `deductionsRwf`, `paidRwf` and
 `owedRwf` (the first two add up lot shares and sale credits), the member's `payments` (newest
 first), `saleCredits` (for each: `saleCode`, `soldAt`, `receiptCode`, `lotCode`, `kg`,
-`pricePerKg`, `grossRwf`, `deductionRwf`, `netRwf`) and `lotShares`: every lot the member
+`pricePerKg`, `grossRwf`, `deductionRwf`, `netRwf`; `lotCode` is the lot the kg came from) and
+`lotShares`: every lot from before fixed-size lots the member
 delivered to, newest first. A shared lot shows the saved kg, percent and `shareRwf`. A lot
 that is not shared yet shows its status (`OPEN`, `CLOSED` or `SOLD`), the current kg and
 percent, and `shareRwf: null`, so the app can show "Waiting for sale" or "Waiting for
@@ -989,7 +1282,8 @@ Environment variables to set in Render:
 | `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
 | `SMS_TRACCAR_TOKEN`, `SMS_TRACCAR_URL` | Only with `SMS_PROVIDER=traccar`: the gateway token and, if different, its `https` URL |
 | `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
-| `MOSIP_*` | To register members, with a real eSignet over `https`: `MOSIP_ENABLED`, `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY_PATH` (a secret file mounted on the service) and `MOSIP_KEY_ID` |
+| `MOSIP_*` | To register members, with a real eSignet over `https`: `MOSIP_ENABLED`, `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY_PATH` (a Render secret file, read at `/etc/secrets/<file name>`) and `MOSIP_KEY_ID`. With a local eSignet reached through a tunnel: `MOSIP_BASE_URL=https://<tunnel-host>`, `MOSIP_PUBLIC_AUTHORIZE_URL=http://localhost:8080/oauth2/authorize`, and `MOSIP_ISSUER`, `MOSIP_USERINFO_ISSUER` and `MOSIP_ASSERTION_AUDIENCE` set to eSignet's own addresses |
+| `MEMBER_REGISTER_UNVERIFIED` | Leave it unset. Only for a demo or fallback with `MOSIP_ENABLED=false`: members are then registered **unverified** (see Members) |
 
 Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app
 refuses to start if it is `true` with any provider but `log`.
@@ -1016,14 +1310,29 @@ The tests do not need a database. They cover the ledger hash chain, the ledger s
 (including the lockout after 5 failures), the login endpoint, Rwandan phone number
 validation, the member service (create, update, duplicates, not found, activate and
 deactivate), the member endpoints (validation errors, `401` without a token), recording
-deliveries (deduction, lot assignment, idempotency, ledger entry), lots (remaining kg,
-closing, stock per grade), losses, batches, buyers and sales by grade (oldest batches first
-across lots, confirmed batches only, credits adding up to the sale total, skipping with a reason,
-lock order, `SOLD` at 0, floor price warning, idempotency, ledger entries), sharing (the 10,000 kg
+deliveries (deduction, no lot until confirmed, idempotency, ledger entry), fixed-size lots (filling
+in confirmation order, splitting a delivery across lots, changing the lot size, lots of two sizes in one grade, shortfall and
+space left, stock per grade), losses (shared in proportion, exact rounding, sold kg carry none),
+batches, buyers and sales by grade (older lots first, then lots in fill order shared in proportion,
+awkward numbers that must add up exactly to the ledger entries, skipping whole lots with a reason,
+lock order, `SOLD` at 0, floor price warning, idempotency), reversals of deliveries in lots, sharing (the 10,000 kg
 example, rounding remainder, refused for lots with sales), payments (owed math,
 overpayment, MoMo reference, idempotency), member statements and identity verification (the key file
-and startup checks, PKCE, the signed assertion, the token and userinfo checks with a fake eSignet, the matching rules, the three
-attempts, and that nothing personal is logged or stored). What only the real eSignet can show is listed in Identity verification.
+and startup checks, PKCE, the signed assertion, the token and userinfo checks with a fake eSignet, the claims
+request, the verified name and phone and their 30 minutes, one manager and one use per verification, cancelling,
+the error codes, and that nothing personal is logged or kept longer). What only the real eSignet can show is listed in Identity verification.
+
+`LotFillingConcurrencyTest` runs on a real, **empty, local** Postgres and is skipped otherwise:
+many confirmations of one grade at once, and confirmations, sales, losses, reversals, corrections
+and disputes side by side while the lot size changes, with no lot over its size, no deadlock, every
+total matching, every read model agreeing with the tables, and the ledger still verifying; and lots of
+two sizes in one grade through filling, a sale, a loss, a reversal and the weekly report. It refuses any host but localhost:
+
+```bash
+./mvnw test -Dtest=LotFillingConcurrencyTest -Dcoopaggregate.test.postgres-url=jdbc:postgresql://localhost:5432/<empty-db>
+```
+
+`docs/fixed-lots-swagger-test.md` walks through the lot rules in Swagger with the numbers to expect.
 
 ## Author
 

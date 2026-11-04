@@ -5,9 +5,11 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * The batches a sale of a grade would take its kg from, oldest first, and what each member would be credited.
- * Nothing is saved. When enough is false, message says why and batches is empty. The sale itself works this out
- * again when it is recorded, so its batches can differ if something changed in between.
+ * The portions a sale of a grade would take its kg from, in the order it takes them (older lots first, then the
+ * fixed-size lots in fill order, each shared across its portions), and what each member would be credited. Nothing is
+ * saved. When enough is false, message says why and batches is empty. The sale itself works this out again when it is
+ * recorded, so its lines can differ if something changed in between. A delivery split across two lots can appear on
+ * two lines, one per portion. skipped lists the lots passed over.
  */
 public record SalePreviewResponse(
         Long gradeId,
@@ -29,6 +31,7 @@ public record SalePreviewResponse(
 
     public record Line(
             Long deliveryId,
+            Long lotPortionId,
             String receiptCode,
             Long lotId,
             String lotCode,
@@ -43,7 +46,6 @@ public record SalePreviewResponse(
             long netRwf) {
     }
 
-    public record Skipped(Long deliveryId, String receiptCode, String lotCode, String memberName,
-                          Instant deliveredAt, BigDecimal remainingKg) {
+    public record Skipped(Long lotId, String lotCode, BigDecimal sellableKg) {
     }
 }

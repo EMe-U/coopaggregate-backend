@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import com.coopaggregate.batch.SaleAllocation;
+import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotStatus;
 
 /**
@@ -49,8 +50,9 @@ public record SaleResponse(
             Long netRwf) {
 
         static BatchLine from(SaleAllocation allocation) {
+            Lot lot = allocation.lot();
             return new BatchLine(allocation.getDelivery().getId(), allocation.getDelivery().getReceiptCode(),
-                    allocation.getDelivery().getLot().getId(), allocation.getDelivery().getLot().getLotCode(),
+                    lot == null ? null : lot.getId(), lot == null ? null : lot.getLotCode(),
                     allocation.getDelivery().getMember().getId(), allocation.getDelivery().getMember().getMemberCode(),
                     allocation.getDelivery().getMember().getFullName(), allocation.getQuantityKg(),
                     allocation.getGrossRwf(), allocation.getDeductionRwf(), allocation.netRwf());

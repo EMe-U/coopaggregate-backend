@@ -1,5 +1,6 @@
 package com.coopaggregate.setting;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
 
@@ -11,10 +12,14 @@ import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.audit.ChangeList;
 import com.coopaggregate.common.RwandanPhoneNumber;
+import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.manager.Manager;
 
 @Service
 public class SettingService {
+
+    private static final int MIN_REASON = 10;
+    private static final int MAX_REASON = 500;
 
     private final SettingRepository settingRepository;
     private final AuditLogRepository auditLogRepository;
@@ -48,6 +53,18 @@ public class SettingService {
                 ? null
                 : RwandanPhoneNumber.normalize(blankToNull(request.cooperativePhone()));
 
+        // The lot size can change at any time, with a reason. It only applies to lots opened afterwards: every lot keeps
+        // the capacity it was opened with, so the lot being filled keeps its size and the next one gets the new size.
+        BigDecimal oldLotSizeKg = setting.getLotSizeKg();
+        BigDecimal lotSizeKg = request.lotSizeKg() == null ? oldLotSizeKg : request.lotSizeKg();
+        boolean lotSizeChanged = lotSizeKg.compareTo(oldLotSizeKg) != 0;
+        String lotSizeReason = blankToNull(request.lotSizeReason());
+        if (lotSizeChanged && (lotSizeReason == null || lotSizeReason.length() < MIN_REASON
+                || lotSizeReason.length() > MAX_REASON)) {
+            throw new BadRequestException("Give a reason of " + MIN_REASON + " to " + MAX_REASON
+                    + " characters to change the lot size.");
+        }
+
         ChangeList changes = new ChangeList()
                 .add("cooperativeName", setting.getCooperativeName(), cooperativeName)
                 .add("smsEnabled", setting.isSmsEnabled(), request.smsEnabled())
@@ -64,9 +81,17 @@ public class SettingService {
         setting.setCommitteeEmailList(committeeEmails);
         setting.setCooperativeName(cooperativeName);
         setting.setCooperativePhone(cooperativePhone);
+        if (lotSizeChanged) {
+            setting.setLotSizeKg(lotSizeKg);
+        }
 
         if (!changes.isEmpty()) {
             auditLogRepository.save(AuditLog.of(AuditAction.SETTINGS_UPDATED, null, manager, changes.toString()));
+        }
+        if (lotSizeChanged) {
+            auditLogRepository.save(AuditLog.of(AuditAction.LOT_SIZE_CHANGED, null, manager,
+                    "Lot size: " + kg(oldLotSizeKg) + " kg -> " + kg(lotSizeKg) + " kg, for new lots only. Reason: "
+                            + lotSizeReason));
         }
         return SettingsResponse.from(setting);
     }
@@ -74,6 +99,10 @@ public class SettingService {
     private Setting setting() {
         return settingRepository.findById(1L)
                 .orElseThrow(() -> new IllegalStateException("The settings row is missing."));
+    }
+
+    private static String kg(BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
     }
 
     private static String blankToNull(String value) {

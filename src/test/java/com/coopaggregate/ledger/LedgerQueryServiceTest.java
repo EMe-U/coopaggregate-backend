@@ -23,6 +23,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.lot.LotPortion;
+import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.batch.SaleAllocation;
 import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.buyer.Buyer;
@@ -52,6 +54,7 @@ class LedgerQueryServiceTest {
     private LossRepository lossRepository;
     private SaleRepository saleRepository;
     private SaleAllocationRepository saleAllocationRepository;
+    private LotPortionRepository lotPortionRepository;
     private LotShareRepository lotShareRepository;
     private ProducePaymentRepository paymentRepository;
     private LedgerQueryService service;
@@ -68,8 +71,9 @@ class LedgerQueryServiceTest {
         lotShareRepository = mock(LotShareRepository.class);
         paymentRepository = mock(ProducePaymentRepository.class);
         saleAllocationRepository = mock(SaleAllocationRepository.class);
+        lotPortionRepository = mock(LotPortionRepository.class);
         service = new LedgerQueryService(ledgerEntryRepository, deliveryRepository, lossRepository, saleRepository,
-                lotShareRepository, paymentRepository, saleAllocationRepository);
+                lotShareRepository, paymentRepository, saleAllocationRepository, lotPortionRepository);
 
         alice = new Member();
         ReflectionTestUtils.setField(alice, "id", 5L);
@@ -130,12 +134,15 @@ class LedgerQueryServiceTest {
         CriteriaBuilder cb = applyFilter(new LedgerFilter(null, null, 3L, null, null, null), deepRoot(), query);
 
         verify(query.subquery(Long.class)).from(Delivery.class);
+        // A delivery in fixed-size lots is found through its portions.
+        verify(query.subquery(Long.class)).from(LotPortion.class);
         verify(query.subquery(Long.class)).from(Loss.class);
         verify(query.subquery(Long.class)).from(Sale.class);
-        // A sale by grade is found through its batches, and so is what it credited.
+        // A sale by grade is found through its batches, and so is what it credited: each by its portion's lot, or by
+        // its delivery's own lot for credits from before fixed-size lots.
         verify(query.subquery(Long.class), times(2)).from(SaleAllocation.class);
         verify(query.subquery(Long.class)).from(LotShare.class);
-        verify(cb, times(6)).equal(any(), eq(3L));
+        verify(cb, times(9)).equal(any(), eq(3L));
     }
 
     @Test
@@ -213,6 +220,51 @@ class LedgerQueryServiceTest {
         assertReference(responses.get(6), "SAL-9MNP", 5L, "Alice Uwase", 3L, "A-2026-01");
         assertEquals("Kalisa Traders", responses.get(6).buyerName());
         assertEquals("Delivery RCT-7K2Q", responses.get(0).description());
+    }
+
+    @Test
+    void aDeliveryInFixedSizeLotsShowsItsFirstLotAndEveryLotCode() {
+        Delivery delivery = new Delivery();
+        ReflectionTestUtils.setField(delivery, "id", 100L);
+        delivery.setReceiptCode("RCT-7K2Q");
+        delivery.setMember(alice);
+        when(deliveryRepository.findByIdIn(Set.of(100L, 101L))).thenReturn(List.of(delivery, waiting()));
+        Lot third = fixedLot(7L, "A-2026-03");
+        Lot fourth = fixedLot(8L, "A-2026-04");
+        when(lotPortionRepository.findWithLotByDeliveryIdIn(Set.of(100L, 101L))).thenReturn(List.of(
+                new LotPortion(fourth, delivery, new BigDecimal("20.00")),
+                new LotPortion(third, delivery, new BigDecimal("30.00"))));
+        SaleAllocation credit = new SaleAllocation(sale(400L), delivery, new BigDecimal("10.00"));
+        ReflectionTestUtils.setField(credit, "id", 600L);
+        credit.setLotPortion(new LotPortion(fourth, delivery, new BigDecimal("20.00")));
+        when(saleAllocationRepository.findByIdIn(Set.of(600L))).thenReturn(List.of(credit));
+
+        List<LedgerEntryResponse> responses = service.toResponses(List.of(
+                entry(1L, LedgerEntryType.DELIVERY, "DELIVERY", 100L, "Delivery RCT-7K2Q"),
+                entry(2L, LedgerEntryType.DELIVERY, "DELIVERY", 101L, "Delivery RCT-9XYZ"),
+                entry(3L, LedgerEntryType.SALE_CREDIT, "SALE_ALLOCATION", 600L, "Credit for sale SAL-9MNP")));
+
+        assertReference(responses.get(0), "RCT-7K2Q", 5L, "Alice Uwase", 7L, "A-2026-03, A-2026-04");
+        // Waiting for confirmation: in no lot yet.
+        assertReference(responses.get(1), "RCT-9XYZ", 5L, "Alice Uwase", null, null);
+        // A credit shows the lot its portion is in.
+        assertReference(responses.get(2), "SAL-9MNP", 5L, "Alice Uwase", 8L, "A-2026-04");
+    }
+
+    private Delivery waiting() {
+        Delivery delivery = new Delivery();
+        ReflectionTestUtils.setField(delivery, "id", 101L);
+        delivery.setReceiptCode("RCT-9XYZ");
+        delivery.setMember(alice);
+        return delivery;
+    }
+
+    private static Lot fixedLot(Long id, String code) {
+        Lot lot = new Lot();
+        ReflectionTestUtils.setField(lot, "id", id);
+        lot.setLotCode(code);
+        lot.setCapacityKg(new BigDecimal("100.00"));
+        return lot;
     }
 
     @Test

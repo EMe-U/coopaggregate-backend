@@ -28,7 +28,7 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
 
     // Loads member, lot and grade in the same query, so listing a page does not run one query per row.
     @Override
-    @EntityGraph(attributePaths = {"member", "lot", "lot.grade"})
+    @EntityGraph(attributePaths = {"member", "lot", "grade"})
     Page<Delivery> findAll(Specification<Delivery> spec, Pageable pageable);
 
     @EntityGraph(attributePaths = {"member", "lot"})
@@ -36,12 +36,19 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
 
     @Query("""
             SELECT new com.coopaggregate.delivery.GradeDeliveredKg(g.name, SUM(d.quantityKg))
-            FROM Delivery d JOIN d.lot l JOIN l.grade g
+            FROM Delivery d JOIN d.grade g
             WHERE d.deliveredAt >= :from AND d.deliveredAt < :to AND d.reversedAt IS NULL
             GROUP BY g.name
             """)
     List<GradeDeliveredKg> findKgByGradeBetween(Instant from, Instant to);
 
+    @Query("SELECT d.grade.id FROM Delivery d WHERE d.id = :id")
+    Optional<Long> findGradeIdById(Long id);
+
+    @Query("SELECT d.id FROM Delivery d WHERE d.receiptCode = :receiptCode")
+    Optional<Long> findIdByReceiptCode(String receiptCode);
+
+    // Only deliveries from before fixed-size lots have a lot of their own; empty for the others.
     @Query("SELECT d.lot.id FROM Delivery d WHERE d.id = :id")
     Optional<Long> findLotIdById(Long id);
 
@@ -56,6 +63,11 @@ public interface DeliveryRepository extends JpaRepository<Delivery, Long>, JpaSp
     // SELECT ... FOR UPDATE: two code checks or sends at once cannot lose a wrong try or overwrite a code.
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<Delivery> findForUpdateById(Long id);
+
+    // SELECT ... FOR UPDATE, in id order. Callers hold the grade, the lots and the portions first.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT d FROM Delivery d WHERE d.id IN :ids ORDER BY d.id")
+    List<Delivery> lockByIds(Collection<Long> ids);
 
     long countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus status);
 

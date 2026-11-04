@@ -2,7 +2,12 @@ package com.coopaggregate.identity;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,10 +31,15 @@ import org.springframework.web.client.RestOperations;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.coopaggregate.common.KigaliTime;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.proc.JWSVerificationKeySelector;
+import com.nimbusds.jose.proc.SecurityContext;
+
 /**
  * Talks to eSignet: the authorize URL, the token call (authenticated with a signed client assertion and PKCE) and the
- * userinfo call. The ID token and the userinfo answer come back signed only (PS256) and are checked against the
- * provider's published keys (JWKS). Codes, tokens, assertions and claims are never logged, and error messages never
+ * userinfo call. The ID token (PS256) and the userinfo answer (PS256 or RS256) come back signed only and are checked
+ * against the provider's published keys (JWKS). Codes, tokens, assertions and claims are never logged, and error messages never
  * carry the provider's answer.
  */
 public class MosipClient {
@@ -38,12 +48,17 @@ public class MosipClient {
     private static final Logger log = LoggerFactory.getLogger(MosipClient.class);
     private static final String UNTRUSTED = "The identity provider's answer could not be verified.";
     private static final String ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
-
     private final MosipProperties properties;
+    private final String claimsRequest;
     private final MosipSigningKey signingKey;
     private final RestClient restClient;
+    private static final Set<JWSAlgorithm> USERINFO_ALGORITHMS = Set.of(JWSAlgorithm.PS256, JWSAlgorithm.RS256);
+
     private final NimbusJwtDecoder decoder;
+    private final NimbusJwtDecoder userinfoDecoder;
     private final Clock clock;
+    private final TokenDiagnostics idTokenDiagnostics;
+    private final TokenDiagnostics userinfoDiagnostics;
 
     /** jwksOperations fetches the provider's keys; both it and restClient should have timeouts. */
     public MosipClient(MosipProperties properties, MosipSigningKey signingKey, RestClient restClient,
@@ -52,8 +67,24 @@ public class MosipClient {
         this.signingKey = signingKey;
         this.restClient = restClient;
         this.clock = clock;
+        this.claimsRequest = claimsRequest(properties);
+        if (!properties.ignoredOptionalClaims().isEmpty()) {
+            log.warn("MOSIP_OPTIONAL_CLAIMS: not asked for (only birthdate, gender, email and address can be): {}",
+                    properties.ignoredOptionalClaims());
+        }
+        if (properties.nationalIdClaim() != null && properties.requestedNationalIdClaim() == null) {
+            log.warn("MOSIP_NATIONAL_ID_CLAIM is not a usable claim name, so the national ID is not asked for");
+        }
         log.info("Identity verification is on. Token: {}, userinfo: {}, JWKS: {}", Diagnostics.safeUrl(properties.tokenUrl()),
                 Diagnostics.safeUrl(properties.userinfoUrl()), Diagnostics.safeUrl(properties.jwksUrl()));
+        log.info("Identity verification authorize address (sent to the browser): {} (from {})",
+                Diagnostics.origin(properties.authorizationUrl()), properties.authorizationUrlSource());
+        log.info("Client assertion: {}", Diagnostics.signingKey(signingKey, properties.audience(),
+                MosipClientAssertion.VALID_SECONDS));
+        this.idTokenDiagnostics = new TokenDiagnostics(jwksOperations, properties.jwksUrl(), properties.issuer(),
+                properties.clientId(), clock, CLOCK_SKEW, Set.of(JWSAlgorithm.PS256), true, false);
+        this.userinfoDiagnostics = new TokenDiagnostics(jwksOperations, properties.jwksUrl(), properties.userinfoIssuer(),
+                properties.clientId(), clock, CLOCK_SKEW, USERINFO_ALGORITHMS, false, true);
         this.decoder = NimbusJwtDecoder.withJwkSetUri(properties.jwksUrl())
                 .jwsAlgorithm(SignatureAlgorithm.PS256)
                 .restOperations(jwksOperations)
@@ -64,11 +95,56 @@ public class MosipClient {
                 new JwtIssuerValidator(properties.issuer()),
                 audienceIsOurClient(),
                 hasExpiryAndSubject()));
+        // The userinfo answer: PS256 or RS256 only (eSignet signs it with RS256), verified with the JWKS key named by
+        // its kid. "none", HMAC, EC and any other algorithm get no key and are refused. exp is optional (OIDC Core
+        // 5.3.2 asks the signed userinfo for iss and aud only) but refused when it has passed; iss, aud and sub are
+        // required as for the id_token. Its iss is MOSIP_USERINFO_ISSUER, which defaults to the id_token's.
+        this.userinfoDecoder = NimbusJwtDecoder.withJwkSetUri(properties.jwksUrl())
+                .jwsAlgorithms(algorithms -> {
+                    algorithms.add(SignatureAlgorithm.PS256);
+                    algorithms.add(SignatureAlgorithm.RS256);
+                })
+                .restOperations(jwksOperations)
+                .jwtProcessorCustomizer(processor -> processor.setJWSKeySelector(new UserinfoKeySelector(
+                        USERINFO_ALGORITHMS, ((JWSVerificationKeySelector<SecurityContext>) processor
+                                .getJWSKeySelector()).getJWKSource())))
+                .build();
+        this.userinfoDecoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                new JwtTimestampValidator(CLOCK_SKEW),
+                new JwtIssuerValidator(properties.userinfoIssuer()),
+                audienceIsOurClient(),
+                hasSubject()));
     }
 
-    /** The URL the member is sent to. The challenge is the S256 hash of the verifier kept for the callback. */
+    /**
+     * The OIDC claims request: the name and phone essential (eSignet shows them as required; a member who does not
+     * allow them can only cancel), then the optional details of MOSIP_OPTIONAL_CLAIMS and, when set, the national ID
+     * claim, which the member may refuse. Never the picture. With the defaults:
+     * {"userinfo":{"name":{"essential":true},"phone_number":{"essential":true},"birthdate":null,"gender":null,
+     * "email":null,"address":null}}. Claim names are checked in MosipProperties, so they need no JSON escaping.
+     */
+    static String claimsRequest(MosipProperties properties) {
+        StringBuilder json = new StringBuilder(
+                "{\"userinfo\":{\"name\":{\"essential\":true},\"phone_number\":{\"essential\":true}");
+        List<String> optional = new ArrayList<>(properties.requestedOptionalClaims());
+        if (properties.requestedNationalIdClaim() != null) {
+            optional.add(properties.requestedNationalIdClaim());
+        }
+        for (String name : optional) {
+            json.append(",\"").append(name).append("\":null");
+        }
+        return json.append("}}").toString();
+    }
+
+    /**
+     * The URL the member is sent to. The challenge is the S256 hash of the verifier kept for the callback; the claims
+     * parameter says which details are asked for (see claimsRequest). With MOSIP_PROMPT_CONSENT=true it also carries
+     * prompt=consent, so eSignet shows its Allow page every time.
+     */
     public String authorizationUrl(String state, String nonce, String codeChallenge) {
-        return UriComponentsBuilder.fromUriString(properties.authorizationUrl())
+        // Only the configured acr_values, as sent; nothing else from the URL (state, nonce, challenge) is logged.
+        log.info("Identity verification authorize request acr_values: {}", properties.acrValues());
+        UriComponentsBuilder url = UriComponentsBuilder.fromUriString(properties.authorizationUrl())
                 .queryParam("response_type", "code")
                 .queryParam("client_id", properties.clientId())
                 .queryParam("redirect_uri", properties.redirectUri())
@@ -78,7 +154,11 @@ public class MosipClient {
                 .queryParam("code_challenge", codeChallenge)
                 .queryParam("code_challenge_method", "S256")
                 .queryParam("acr_values", properties.acrValues())
-                .encode().build().toUriString();
+                .queryParam("claims", "{claims}");
+        if (properties.promptConsent()) {
+            url.queryParam("prompt", "consent");
+        }
+        return url.encode().buildAndExpand(Map.of("claims", claimsRequest)).toUriString();
     }
 
     /**
@@ -92,16 +172,57 @@ public class MosipClient {
         if (idToken == null || accessToken == null) {
             throw untrusted();
         }
-        Jwt id = verify(idToken, "id_token");
+        Jwt id = verify(decoder, idTokenDiagnostics, idToken, "id_token", null, null);
         if (nonce == null || !nonce.equals(id.getClaimAsString("nonce"))) {
             throw untrusted();
         }
-        Jwt userinfo = verify(userinfo(accessToken), "userinfo");
+        UserinfoAnswer answer = userinfo(accessToken);
+        Jwt userinfo = verify(userinfoDecoder, userinfoDiagnostics, answer.body(), "userinfo", answer.response(),
+                id.getSubject());
         if (!id.getSubject().equals(userinfo.getSubject())) {
-            throw untrusted();
+            throw IdentityProviderException.failed(UNTRUSTED, "userinfo check failed: "
+                    + userinfoDiagnostics.describe(answer.body(), answer.response(), id.getSubject(), null));
         }
-        return new MosipClaims(userinfo.getSubject(), claim(userinfo, "name"), claim(userinfo, "birthdate"),
-                claim(userinfo, "phone_number"), claim(userinfo, "email"));
+        return new MosipClaims(userinfo.getSubject(), claim(userinfo, "name"), claim(userinfo, "phone_number"),
+                acr(id), optional(userinfo, "birthdate", value -> ClaimValues.birthdate(value, today())),
+                optional(userinfo, "gender", ClaimValues::gender), optional(userinfo, "email", ClaimValues::email),
+                optional(userinfo, "address", ClaimValues::address));
+    }
+
+    private LocalDate today() {
+        return LocalDate.now(clock.withZone(KigaliTime.ZONE));
+    }
+
+    // An optional detail, only when it was asked for: anything not asked for is not read, even when eSignet sends it.
+    // null when it is absent (refused or not released) or its value does not fit. Only the claim's name is logged.
+    private <T> T optional(Jwt userinfo, String name, Function<Object, T> read) {
+        if (!properties.requestedOptionalClaims().contains(name)) {
+            return null;
+        }
+        Object raw = userinfo.getClaims().get(name);
+        if (raw == null) {
+            log.info("Identity verification userinfo claim {}: absent", name);
+            return null;
+        }
+        T value = read.apply(raw);
+        log.info("Identity verification userinfo claim {}: {}", name, value == null ? "ignored, unusable" : "present");
+        return value;
+    }
+
+    /** Whether an id_token acr is one of MOSIP_ALLOWED_ACRS. */
+    public boolean isAllowedAcr(String acr) {
+        return properties.isAllowedAcr(acr);
+    }
+
+    // The id_token's acr, or null when it has none. Only its presence is logged. A value that is not text is kept as
+    // "" so it is present but never allowed.
+    private static String acr(Jwt id) {
+        Object acr = id.getClaims().get("acr");
+        log.info("Identity verification id_token acr claim present: {}", acr != null);
+        if (acr == null) {
+            return null;
+        }
+        return acr instanceof String text ? text : "";
     }
 
     private Map<String, Object> exchangeCode(String code, String codeVerifier) {
@@ -112,7 +233,8 @@ public class MosipClient {
         form.add("client_id", properties.clientId());
         form.add("code_verifier", codeVerifier);
         form.add("client_assertion_type", ASSERTION_TYPE);
-        form.add("client_assertion", MosipClientAssertion.create(properties, signingKey, clock));
+        String assertion = MosipClientAssertion.create(properties, signingKey, clock);
+        form.add("client_assertion", assertion);
         try {
             Map<String, Object> body = restClient.post()
                     .uri(properties.tokenUrl())
@@ -126,40 +248,65 @@ public class MosipClient {
             }
             return body;
         } catch (RestClientException e) {
-            throw failure(e, "token", "POST", properties.tokenUrl());
+            throw failure(e, "token", "POST", properties.tokenUrl(), assertion);
         }
     }
 
+    // The userinfo body, with its status and Content-Type for the log if it is refused.
+    private record UserinfoAnswer(String body, TokenDiagnostics.Response response) {
+    }
+
     // The answer is a signed JWT (application/jwt), not JSON.
-    private String userinfo(String accessToken) {
+    private UserinfoAnswer userinfo(String accessToken) {
+        org.springframework.http.ResponseEntity<String> entity;
         try {
-            String body = restClient.get()
+            entity = restClient.get()
                     .uri(properties.userinfoUrl())
                     .headers(headers -> headers.setBearerAuth(accessToken))
                     .accept(MediaType.parseMediaType("application/jwt"), MediaType.APPLICATION_JSON)
                     .retrieve()
-                    .body(String.class);
-            if (body == null || body.isBlank() || body.trim().startsWith("{")) {
-                throw untrusted();
-            }
-            return body.trim();
+                    .toEntity(String.class);
         } catch (RestClientException e) {
-            throw failure(e, "userinfo", "GET", properties.userinfoUrl());
+            throw failure(e, "userinfo", "GET", properties.userinfoUrl(), null);
         }
+        String body = entity.getBody();
+        MediaType type = entity.getHeaders().getContentType();
+        TokenDiagnostics.Response response = new TokenDiagnostics.Response(entity.getStatusCode().value(),
+                type == null ? null : type.toString());
+        if (body == null || body.isBlank() || body.trim().startsWith("{")) {
+            throw IdentityProviderException.failed(UNTRUSTED, "userinfo check failed: "
+                    + userinfoDiagnostics.describe(body, response, null, null));
+        }
+        return new UserinfoAnswer(body.trim(), response);
     }
 
-    private Jwt verify(String token, String what) {
+    // A refused token: the existing one-line reason, then (unless the provider's keys could not be fetched) what the
+    // token looked like and which of our checks fail. See TokenDiagnostics for what is and is never shown.
+    private Jwt verify(NimbusJwtDecoder tokenDecoder, TokenDiagnostics diagnostics, String token, String what,
+                       TokenDiagnostics.Response response, String expectedSub) {
         try {
-            return decoder.decode(token);
+            return tokenDecoder.decode(token);
         } catch (JwtException e) {
-            throw IdentityProviderException.failed(UNTRUSTED, Diagnostics.token(what, properties.jwksUrl(), e));
+            String detail = Diagnostics.token(what, properties.jwksUrl(), e);
+            if (!detail.startsWith("JWKS request")) {
+                detail = detail + "; " + diagnostics.describe(token, response, expectedSub,
+                        e.getClass().getSimpleName());
+            }
+            throw IdentityProviderException.failed(UNTRUSTED, detail);
         }
     }
 
     // Not logged and not shown: the answer of the provider can hold the code or personal data.
     // The message goes to the client and stays the same; the detail is only for the log.
-    private static IdentityProviderException failure(RestClientException e, String call, String method, String url) {
+    // A 401 on the token call is about the client assertion, so the decoded assertion that was sent is added (never its
+    // signature).
+    private static IdentityProviderException failure(RestClientException e, String call, String method, String url,
+                                                     String assertion) {
         String detail = Diagnostics.call(call + " request", method, url, e);
+        if (assertion != null && e instanceof RestClientResponseException response
+                && response.getStatusCode().value() == 401) {
+            detail = detail + "; assertion sent: " + Diagnostics.assertion(assertion);
+        }
         if (e instanceof RestClientResponseException) {
             return IdentityProviderException.failed("The identity provider refused the " + call + " request.", detail);
         }
@@ -185,19 +332,27 @@ public class MosipClient {
                 : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token"));
     }
 
+    private static OAuth2TokenValidator<Jwt> hasSubject() {
+        return jwt -> jwt.getSubject() != null && !jwt.getSubject().isBlank()
+                ? OAuth2TokenValidatorResult.success()
+                : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token"));
+    }
+
     private static String text(Object value) {
         return value instanceof String s && !s.isBlank() ? s : null;
     }
 
-    // A claim may come plain ("name") or tagged with a language ("name#en"); the plain one wins.
+    // eSignet picks the language and sends a plain claim ("name"). A claim tagged with a language ("name#eng") is
+    // only used when the plain one is missing; with several, the first language code in alphabetical order wins.
+    // Control characters are removed (ClaimValues.text).
     private static String claim(Jwt jwt, String name) {
-        String plain = text(jwt.getClaims().get(name));
+        String plain = ClaimValues.text(jwt.getClaims().get(name));
         if (plain != null) {
             return plain;
         }
         return jwt.getClaims().entrySet().stream()
                 .filter(entry -> entry.getKey().startsWith(name + "#"))
-                .map(entry -> text(entry.getValue()))
+                .map(entry -> ClaimValues.text(entry.getValue()))
                 .filter(java.util.Objects::nonNull)
                 .sorted()
                 .findFirst()
