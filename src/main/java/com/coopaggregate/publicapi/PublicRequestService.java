@@ -4,6 +4,7 @@ import java.time.Duration;
 
 import org.springframework.stereotype.Service;
 
+import com.coopaggregate.buyer.BuyerContactMethod;
 import com.coopaggregate.buyer.BuyerRequest;
 import com.coopaggregate.buyer.BuyerRequestService;
 import com.coopaggregate.buyer.BuyerRequestStatus;
@@ -39,7 +40,7 @@ public class PublicRequestService {
         limit(submitPerPhone, "phone:" + RwandanPhoneNumber.normalize(form.phone()));
 
         BuyerRequest request = requestService.createFromPublic(form.name(), form.phone(), form.email(),
-                form.gradeCode(), form.quantityKg(), form.note());
+                form.gradeCode(), form.quantityKg(), form.note(), form.contactMethod(), form.whatsappNumber());
         return new PublicRequestCreatedResponse(request.getReferenceCode(), request.getStatus());
     }
 
@@ -47,7 +48,14 @@ public class PublicRequestService {
         limit(lookupPerIp, "ip:" + clientIp);
         BuyerRequest request = requestService.findForPublic(code, phone);
         return new PublicRequestStatusResponse(request.getReferenceCode(), request.getStatus(),
-                request.getPublicMessage());
+                request.getPublicMessage(), request.getContactMethod(), contactNumber(request));
+    }
+
+    // The number the cooperative will use: the WhatsApp number for WHATSAPP, otherwise the phone of the request. Both
+    // were given by the buyer.
+    private static String contactNumber(BuyerRequest request) {
+        return request.getContactMethod() == BuyerContactMethod.WHATSAPP ? request.getWhatsappNumber()
+                : request.getRequesterPhone();
     }
 
     private static void limit(RateLimiter limiter, String key) {

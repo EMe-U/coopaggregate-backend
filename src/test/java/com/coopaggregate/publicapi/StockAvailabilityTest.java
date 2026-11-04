@@ -10,7 +10,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 class StockAvailabilityTest {
 
-    @ParameterizedTest(name = "{0} kg left with a minimum order of {1} kg is {2}")
+    @ParameterizedTest(name = "{0} sellable kg with a minimum order of {1} kg is {2}")
     @CsvSource({
             "0, 100, NONE",
             "99.99, 100, NONE",
@@ -22,8 +22,8 @@ class StockAvailabilityTest {
             "12000, 100, AVAILABLE",
             "550, 600, NONE",
             "600, 600, AVAILABLE"})
-    void levelFollowsTheMinimumOrderAnd500Kg(String remainingKg, String minOrderKg, StockAvailability expected) {
-        assertEquals(expected, StockAvailability.of(new BigDecimal(remainingKg), new BigDecimal(minOrderKg)));
+    void levelFollowsTheMinimumOrderAnd500Kg(String sellableKg, String minOrderKg, StockAvailability expected) {
+        assertEquals(expected, StockAvailability.of(new BigDecimal(sellableKg), new BigDecimal(minOrderKg)));
     }
 
     @Test

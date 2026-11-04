@@ -10,6 +10,7 @@ import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -33,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -44,6 +46,7 @@ import com.coopaggregate.audit.AuditAction;
 import com.coopaggregate.audit.AuditLog;
 import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.auth.AuthService;
+import com.coopaggregate.batch.BatchAllocator;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.grade.Grade;
@@ -62,7 +65,6 @@ import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
 import com.coopaggregate.member.MemberStatus;
-import com.coopaggregate.sale.SaleRepository;
 import com.coopaggregate.setting.Setting;
 import com.coopaggregate.setting.SettingRepository;
 
@@ -85,7 +87,7 @@ class DeliveryServiceTest {
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(4);
     private ConfirmationCodes confirmationCodes;
     private AuditLogRepository auditLogRepository;
-    private SaleRepository saleRepository;
+    private BatchAllocator batchAllocator;
     private LedgerEntryRepository ledgerEntryRepository;
     private Setting setting;
     private Grade grade;
@@ -126,15 +128,15 @@ class DeliveryServiceTest {
         when(lotRepository.save(any(Lot.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         manager = new Manager();
-        saleRepository = mock(SaleRepository.class);
         ledgerEntryRepository = mock(LedgerEntryRepository.class);
         when(memberRepository.findForUpdateById(5L)).thenReturn(Optional.of(member));
         eventPublisher = mock(ApplicationEventPublisher.class);
         confirmationCodes = new ConfirmationCodes(encoder);
         auditLogRepository = mock(AuditLogRepository.class);
+        batchAllocator = mock(BatchAllocator.class);
         service = new DeliveryService(deliveryRepository, memberRepository, gradeRepository, settingRepository,
-                new LotService(lotRepository, gradeRepository), ledgerService, lotRepository, saleRepository,
-                ledgerEntryRepository, confirmationCodes, auditLogRepository, eventPublisher);
+                new LotService(lotRepository, gradeRepository), ledgerService, lotRepository,
+                ledgerEntryRepository, confirmationCodes, auditLogRepository, batchAllocator, eventPublisher);
     }
 
     @ParameterizedTest
@@ -446,16 +448,84 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void deliveryOfALotWithSalesCannotBeReversed() {
-        givenStoredDelivery("100.00");
-        when(saleRepository.existsByLotId(3L)).thenReturn(true);
+    void reversedDeliveryHandsItsLostKgBackToTheLot() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        when(ledgerService.reverse(77L, "Weighed twice", manager)).thenReturn(reversalEntry("Weighed twice"));
+
+        service.reverse(42L, "Weighed twice", manager);
+
+        verify(batchAllocator).releaseLosses(delivery);
+    }
+
+    @Test
+    void refusedReversalChangesNoBatch() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.addSoldKg(new BigDecimal("40.00"));
+
+        assertThrows(IllegalStateException.class, () -> service.reverse(42L, "Weighed twice", manager));
+
+        verify(batchAllocator, never()).releaseLosses(any());
+    }
+
+    @Test
+    void correctionHandsTheLostKgBackOnlyAfterTheCorrectedDeliveryIsSaved() {
+        Delivery original = givenStoredDelivery("100.00");
+        when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Weight"));
+
+        service.correct(42L, new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager);
+
+        InOrder order = inOrder(deliveryRepository, batchAllocator);
+        order.verify(deliveryRepository).save(any(Delivery.class));
+        order.verify(batchAllocator).releaseLosses(original);
+    }
+
+    @Test
+    void deliveryWithSoldKgCannotBeReversed() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.addSoldKg(new BigDecimal("40.00"));
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> service.reverse(42L, "Weighed twice", manager));
 
-        assertEquals("Lot A-2026-01 already has sales, so its deliveries can no longer be reversed or corrected.",
+        assertEquals("Delivery RCT-7K2Q already has 40.00 kg sold, so it can no longer be reversed or corrected.",
                 e.getMessage());
         verify(ledgerService, never()).reverse(any(), any(), any());
+    }
+
+    @Test
+    void deliveryOfALotWithSalesCanBeReversedWhileItsOwnKgAreNotSold() {
+        givenStoredDelivery("100.00");
+        // The lot sold 60 kg from other batches, and 440 kg remain: this delivery's 100 kg are still unsold.
+        when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
+                new BigDecimal("500.00"), null, new BigDecimal("60.00"), 18_000L, 2L)));
+        when(ledgerService.reverse(77L, "Weighed twice", manager)).thenReturn(reversalEntry("Weighed twice"));
+
+        assertTrue(service.reverse(42L, "Weighed twice", manager).isReversed());
+    }
+
+    @Test
+    void deliveryOfASharedLotCannotBeReversed() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.getLot().setStatus(LotStatus.SHARED);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.reverse(42L, "Weighed twice", manager));
+
+        assertEquals("Lot A-2026-01 has already been shared, so its deliveries can no longer be reversed or "
+                + "corrected.", e.getMessage());
+        verify(ledgerService, never()).reverse(any(), any(), any());
+    }
+
+    @Test
+    void reversalLocksTheGradeBeforeTheLot() {
+        givenStoredDelivery("100.00");
+        when(ledgerService.reverse(77L, "Weighed twice", manager)).thenReturn(reversalEntry("Weighed twice"));
+
+        service.reverse(42L, "Weighed twice", manager);
+
+        InOrder order = inOrder(gradeRepository, lotRepository);
+        order.verify(gradeRepository).findForUpdateById(1L);
+        order.verify(lotRepository).findForUpdateById(3L);
     }
 
     @Test
@@ -547,9 +617,9 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void correctionIsBlockedOnceTheLotHasSales() {
-        givenStoredDelivery("100.00");
-        when(saleRepository.existsByLotId(3L)).thenReturn(true);
+    void correctionIsBlockedOnceTheBatchHasSoldKg() {
+        Delivery delivery = givenStoredDelivery("100.00");
+        delivery.addSoldKg(new BigDecimal("40.00"));
 
         assertThrows(IllegalStateException.class, () -> service.correct(42L,
                 new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("90.00")), manager));
@@ -584,6 +654,7 @@ class DeliveryServiceTest {
         delivery.setQuantityKg(new BigDecimal(quantityKg));
         delivery.setDeliveredAt(Instant.parse("2026-10-14T07:30:00Z"));
         when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.of(3L));
+        when(lotRepository.findGradeIdById(3L)).thenReturn(Optional.of(1L));
         when(lotRepository.findForUpdateById(3L)).thenReturn(Optional.of(lot));
         when(deliveryRepository.findById(42L)).thenReturn(Optional.of(delivery));
         when(lotRepository.findQuantities(any())).thenReturn(List.of(new LotQuantities(3L,
@@ -627,6 +698,7 @@ class DeliveryServiceTest {
         assertEquals(ConfirmationMethod.OTP, delivery.getConfirmationMethod());
         assertEquals("Confirmed by member with the SMS code", delivery.getConfirmationMethod().label());
         assertEquals(null, delivery.getConfirmationCodeHash());
+        verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
     }
 
     @Test
@@ -640,6 +712,7 @@ class DeliveryServiceTest {
         assertEquals("Wrong code. 2 tries left.", e.getMessage());
         assertEquals(1, delivery.getConfirmationCodeFailedAttempts());
         assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+        verify(eventPublisher, never()).publishEvent(any(DeliveryConfirmedEvent.class));
     }
 
     @Test
@@ -702,6 +775,88 @@ class DeliveryServiceTest {
         delivery.dispute(DisputeReason.WRONG_KG, null, Instant.now());
 
         assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, code));
+    }
+
+    // --- Temporary demo code (SMS_DEMO_CODE) ---
+
+    @Test
+    void demoCodeConfirmsAnyPendingDeliveryWhenSet() {
+        Delivery delivery = givenDeliveryWithCode();
+        String demo = otherCode(confirmationCodes.issue(delivery, Instant.now()));
+        useDemoCode(demo);
+
+        DeliveryResponse response = service.confirmWithCode(42L, demo);
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+        assertEquals(ConfirmationMethod.OTP, delivery.getConfirmationMethod());
+        assertEquals("Confirmed with the demo code, not the member's SMS code.", response.resolutionNote());
+        // The normal receipt SMS goes out from this event.
+        verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
+        ArgumentCaptor<AuditLog> audit = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogRepository).save(audit.capture());
+        assertEquals(AuditAction.DEMO_CODE_CONFIRMATION, audit.getValue().getAction());
+        assertEquals("Delivery RCT-7K2Q confirmed with the demo code", audit.getValue().getDetails());
+        assertEquals(member, audit.getValue().getMember());
+        assertFalse(audit.getValue().getDetails().contains(demo));
+    }
+
+    @Test
+    void memberCodeStillWorksNormallyWhenTheDemoCodeIsSet() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+        useDemoCode(otherCode(code));
+
+        DeliveryResponse response = service.confirmWithCode(42L, code);
+
+        assertEquals(ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+        assertEquals(null, response.resolutionNote());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    void demoCodeIsAWrongCodeWhenNotSet() {
+        Delivery delivery = givenDeliveryWithCode();
+        String notTheCode = otherCode(confirmationCodes.issue(delivery, Instant.now()));
+
+        WrongCodeException e = assertThrows(WrongCodeException.class,
+                () -> service.confirmWithCode(42L, notTheCode));
+
+        assertEquals("Wrong code. 2 tries left.", e.getMessage());
+        assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    void demoCodeKeepsTheThreeTryLimit() {
+        Delivery delivery = givenDeliveryWithCode();
+        String code = confirmationCodes.issue(delivery, Instant.now());
+        String demo = otherCode(code);
+        String wrong = code.equals("222222") || demo.equals("222222") ? "333333" : "222222";
+        useDemoCode(demo);
+
+        for (int i = 0; i < 3; i++) {
+            assertThrows(WrongCodeException.class, () -> service.confirmWithCode(42L, wrong));
+        }
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, demo));
+
+        assertEquals("Delivery RCT-7K2Q has no valid code. Send the member a new code.", e.getMessage());
+        assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    void demoCodeOnlyConfirmsAPendingDelivery() {
+        Delivery delivery = givenDeliveryWithCode();
+        String demo = otherCode(confirmationCodes.issue(delivery, Instant.now()));
+        delivery.dispute(DisputeReason.WRONG_KG, null, Instant.now());
+        useDemoCode(demo);
+
+        assertThrows(IllegalStateException.class, () -> service.confirmWithCode(42L, demo));
+        assertEquals(ConfirmationStatus.DISPUTED, delivery.getConfirmationStatus());
+    }
+
+    private void useDemoCode(String demo) {
+        ReflectionTestUtils.setField(service, "confirmationCodes", new ConfirmationCodes(encoder, demo));
     }
 
     @Test
@@ -809,6 +964,7 @@ class DeliveryServiceTest {
         verify(auditLogRepository).save(audit.capture());
         assertEquals(AuditAction.DELIVERY_REVIEWED, audit.getValue().getAction());
         assertEquals("Delivery RCT-7K2Q: Weighed again with the member", audit.getValue().getDetails());
+        verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
     }
 
     @Test
@@ -842,6 +998,7 @@ class DeliveryServiceTest {
                 + "did not arrive (1 left), or review the delivery once it has been pending for 48 hours.",
                 e.getMessage());
         assertEquals(ConfirmationStatus.PENDING, delivery.getConfirmationStatus());
+        verify(eventPublisher, never()).publishEvent(any(DeliveryConfirmedEvent.class));
     }
 
     @Test
@@ -965,6 +1122,7 @@ class DeliveryServiceTest {
         assertEquals(ConfirmationMethod.MANAGER_REVIEW, delivery.getConfirmationMethod());
         assertEquals("Scale receipt shows 100 kg", delivery.getResolutionNote());
         assertEquals(DisputeReason.WRONG_KG, delivery.getDisputeReason());
+        verify(eventPublisher).publishEvent(new DeliveryConfirmedEvent(42L));
     }
 
     @Test
@@ -975,6 +1133,7 @@ class DeliveryServiceTest {
                 () -> service.resolveDispute(42L, "Checked"));
 
         assertEquals("Delivery RCT-7K2Q is not disputed.", e.getMessage());
+        verify(eventPublisher, never()).publishEvent(any(DeliveryConfirmedEvent.class));
     }
 
     @Test

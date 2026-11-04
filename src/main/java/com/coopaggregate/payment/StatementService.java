@@ -9,6 +9,8 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.batch.SaleAllocation;
+import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.lot.LotQuantities;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.member.MemberRepository;
@@ -26,13 +28,16 @@ public class StatementService {
     private final LotShareRepository lotShareRepository;
     private final LotRepository lotRepository;
     private final ProducePaymentRepository paymentRepository;
+    private final SaleAllocationRepository saleAllocationRepository;
 
     public StatementService(MemberRepository memberRepository, LotShareRepository lotShareRepository,
-                            LotRepository lotRepository, ProducePaymentRepository paymentRepository) {
+                            LotRepository lotRepository, ProducePaymentRepository paymentRepository,
+                            SaleAllocationRepository saleAllocationRepository) {
         this.memberRepository = memberRepository;
         this.lotShareRepository = lotShareRepository;
         this.lotRepository = lotRepository;
         this.paymentRepository = paymentRepository;
+        this.saleAllocationRepository = saleAllocationRepository;
     }
 
     @Transactional(readOnly = true)
@@ -51,6 +56,10 @@ public class StatementService {
         List<StatementResponse.LotShareLine> lotShares = lots.stream()
                 .map(lot -> lotLine(lot, sharesByLot.get(lot.lotId()), lotTotals.get(lot.lotId())))
                 .toList();
+        List<StatementResponse.SaleCreditLine> saleCredits =
+                saleAllocationRepository.findCreditsOfMember(memberId).stream()
+                        .map(StatementService::creditLine)
+                        .toList();
         List<StatementResponse.PaymentLine> payments =
                 paymentRepository.findByMemberIdAndReversedAtIsNullOrderByPaymentDateDescIdDesc(memberId).stream()
                         .map(payment -> new StatementResponse.PaymentLine(payment.getPaymentCode(),
@@ -58,10 +67,20 @@ public class StatementService {
                                 payment.getReferenceNo()))
                         .toList();
 
-        long grossShare = sharesByLot.values().stream().mapToLong(LotShare::getShareAmount).sum();
-        long deductions = sharesByLot.values().stream().mapToLong(LotShare::getDeductionAmount).sum();
+        long grossShare = sharesByLot.values().stream().mapToLong(LotShare::getShareAmount).sum()
+                + saleCredits.stream().mapToLong(StatementResponse.SaleCreditLine::grossRwf).sum();
+        long deductions = sharesByLot.values().stream().mapToLong(LotShare::getDeductionAmount).sum()
+                + saleCredits.stream().mapToLong(StatementResponse.SaleCreditLine::deductionRwf).sum();
         long paid = payments.stream().mapToLong(StatementResponse.PaymentLine::amountRwf).sum();
-        return new StatementResponse(grossShare, deductions, paid, grossShare - deductions - paid, lotShares, payments);
+        return new StatementResponse(grossShare, deductions, paid, grossShare - deductions - paid, lotShares,
+                saleCredits, payments);
+    }
+
+    private static StatementResponse.SaleCreditLine creditLine(SaleAllocation credit) {
+        return new StatementResponse.SaleCreditLine(credit.getSale().getSaleCode(), credit.getSale().getSaleDate(),
+                credit.getDelivery().getReceiptCode(), credit.getDelivery().getLot().getLotCode(),
+                credit.getQuantityKg(), credit.getSale().getPricePerKg(), credit.getGrossRwf(),
+                credit.getDeductionRwf(), credit.netRwf());
     }
 
     // A shared lot shows the saved share; any other lot shows the current kilograms and no amount yet.

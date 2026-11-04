@@ -17,7 +17,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 
 @RestController
 @RequestMapping("/api/lots")
-@Tag(name = "Lots", description = "Lots collect the deliveries of one grade until they are sold")
+@Tag(name = "Lots", description = "Lots group the deliveries of one grade. A lot does not have to be closed to be sold")
 @SecurityRequirement(name = "bearerAuth")
 public class LotController {
 
@@ -37,8 +37,9 @@ public class LotController {
     }
 
     @GetMapping("/stock")
-    @Operation(summary = "Stock balance: remaining kg (total and per grade), all-time delivered, sold and lost kg, "
-            + "and today's deliveries (Kigali time)")
+    @Operation(summary = "Stock balance: kg left in total and per grade, read from the batches and split into "
+            + "sellable (confirmed), waiting (pending) and disputed kg, all-time delivered, sold and lost kg, and "
+            + "today's deliveries (Kigali time). Only sellable kg can be sold")
     public StockResponse stock() {
         return lotService.stock();
     }
@@ -50,7 +51,8 @@ public class LotController {
     }
 
     @PatchMapping("/{id}/close")
-    @Operation(summary = "Close an open lot. The next delivery of its grade starts a new lot")
+    @Operation(summary = "Close an open lot (optional; sales do not need it). The next delivery of its grade starts "
+            + "a new lot")
     public LotResponse close(@PathVariable Long id) {
         return lotService.close(id);
     }

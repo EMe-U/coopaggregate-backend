@@ -7,12 +7,14 @@ import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.common.RwandanPhoneNumber;
 import com.coopaggregate.delivery.ConfirmationMethod;
 import com.coopaggregate.delivery.ConfirmationStatus;
+import com.coopaggregate.delivery.DeliveryConfirmedEvent;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.delivery.DisputeReason;
@@ -30,9 +32,11 @@ public class InboundSmsService {
     private static final int MAX_NOTE_LENGTH = 500;
 
     private final DeliveryRepository deliveryRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
-    public InboundSmsService(DeliveryRepository deliveryRepository) {
+    public InboundSmsService(DeliveryRepository deliveryRepository, ApplicationEventPublisher eventPublisher) {
         this.deliveryRepository = deliveryRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     public enum Result {
@@ -59,6 +63,7 @@ public class InboundSmsService {
                 return Result.IGNORED;
             }
             delivery.confirm(ConfirmationMethod.SMS, Instant.now());
+            eventPublisher.publishEvent(new DeliveryConfirmedEvent(delivery.getId()));
             return Result.CONFIRMED;
         }
 

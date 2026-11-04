@@ -30,5 +30,19 @@ public record MemberRequest(
         LocalDate joinDate,
 
         @Pattern(regexp = "^(rw|en)$", message = "must be rw or en")
-        String preferredLanguage) {
+        String preferredLanguage,
+
+        // From POST /api/members/verify/callback. Required when registering; ignored when updating.
+        Long verificationId,
+
+        // Only for the identity check: required when registering, compared with the person who verified, and never
+        // saved. Ignored when updating.
+        @PastOrPresent(message = "cannot be in the future")
+        LocalDate birthDate) {
+
+    // Records print their fields; the birth date and the verification must never end up in a log line.
+    @Override
+    public String toString() {
+        return "MemberRequest[****]";
+    }
 }

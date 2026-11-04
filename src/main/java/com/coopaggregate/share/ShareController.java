@@ -32,7 +32,8 @@ public class ShareController {
     }
 
     @GetMapping("/share-preview")
-    @Operation(summary = "Show how a sold lot's money would be shared, without saving anything. 409 while the lot "
+    @Operation(summary = "Show how a sold lot's money would be shared, without saving anything. 409 for a lot "
+            + "that has sales (they are paid to the members by batch, so sharing would pay twice) and while the lot "
             + "has pending or disputed deliveries; the response lists them")
     public SharePreviewResponse preview(@PathVariable Long lotId) {
         return sharingService.preview(lotId);
@@ -40,7 +41,8 @@ public class ShareController {
 
     @PostMapping("/share")
     @Operation(summary = "Share a sold lot: save each member's share and mark the lot SHARED. Can only be done "
-            + "once, and only when every delivery is confirmed (409 lists the pending and disputed ones)")
+            + "once, and only when every delivery is confirmed (409 lists the pending and disputed ones). Refused "
+            + "with 409 for any lot that has sales, because sales are paid to the members by batch")
     public SharePreviewResponse share(@PathVariable Long lotId, @AuthenticationPrincipal Jwt jwt) {
         return sharingService.share(lotId, authService.currentManager(jwt.getSubject()));
     }

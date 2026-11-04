@@ -45,6 +45,7 @@ coopaggregate-backend/
 │   ├── ledger/            Append-only, hash-chained ledger
 │   ├── member/            Cooperative members
 │   ├── health/            Health check endpoint
+│   ├── batch/             Batches (kg sold and lost per delivery), sale planning and preview
 │   └── grade/, lot/, delivery/, loss/, buyer/, sale/,
 │       share/, payment/, dispute/, setting/, sms/   Entities and repositories
 ├── src/main/resources/
@@ -84,12 +85,22 @@ cd coopaggregate-backend
 | `MANAGER_NAME` | First start | Name of the manager account |
 | `MANAGER_EMAIL` | First start | Login email of the manager account |
 | `MANAGER_PASSWORD` | First start | Login password of the manager account |
-| `SMS_PROVIDER` | No | `log` (default: SMS are only saved in `sms_log`) or `africastalking` |
+| `SMS_PROVIDER` | No | `log` (default: SMS are only saved in `sms_log`), `africastalking` or `traccar` |
 | `AT_USERNAME` | With Africa's Talking | Africa's Talking username; `sandbox` for their sandbox |
 | `AT_API_KEY` | With Africa's Talking | Africa's Talking API key |
 | `AT_SENDER_ID` | No | Sender name shown on members' phones, if your account has one |
+| `SMS_TRACCAR_TOKEN` | With Traccar | Token of the Traccar SMS Gateway app. The app does not start without it |
+| `SMS_TRACCAR_URL` | No | Gateway URL with Traccar. Default `https://www.traccar.org/sms/`. Must be `https` (`http` only for localhost) |
 | `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
 | `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
+| `SMS_DEMO_CODE` | No | **Temporary, for the demo only.** 6 digits also accepted as the code of any pending delivery. Not set by default (see Delivery confirmation) |
+| `MOSIP_ENABLED` | To register members | `true` switches member identity verification on. Registering a member needs it, so with the default `false` no member can be registered (see Identity verification) |
+| `MOSIP_BASE_URL` | With `MOSIP_ENABLED` | The eSignet issuer, for example `http://localhost:8080`. Plain `http` only for localhost. The authorize, token, userinfo and JWKS URLs follow from it |
+| `MOSIP_CLIENT_ID` | With `MOSIP_ENABLED` | The client id registered with eSignet |
+| `MOSIP_REDIRECT_URI` | With `MOSIP_ENABLED` | The frontend page eSignet sends the member back to, exactly as registered, for example `http://localhost:5173/identity/callback` |
+| `MOSIP_PRIVATE_KEY_PATH` | With `MOSIP_ENABLED` | Path to the cooperative's RSA private key file (PKCS#8 PEM or JWK, detected from the content). Keep it outside the repository |
+| `MOSIP_KEY_ID` | With `MOSIP_ENABLED` | The `kid` of the matching public JWK |
+| `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid profile email phone`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL` |
 | `PORT` | No | HTTP port. Default: `8080` |
 
 The manager is the only user who logs in. On startup, if the `manager` table is empty,
@@ -171,6 +182,31 @@ schema (`ddl-auto=validate`); it never changes it.
 
 ERD: see `docs/erd.png`.
 
+### V31 and V32: batches and credits
+
+- **V31** makes every delivery a batch: it adds `sold_kg`, `lost_kg` and a generated `remaining_kg`
+  to `delivery`, and the tables `sale_allocation` and `loss_allocation`. It fills them for the sales
+  and losses that already exist, and stops (the whole migration rolls back) if the batches do not add
+  up to the lots' own totals.
+- **V32** gives each sale a `grade_id` (old sales take the grade of their lot) and makes
+  `sale.lot_id` optional. It adds `gross_rwf` and `deduction_rwf` to `sale_allocation` (empty for
+  sales made before credits), allows the `SALE_CREDIT` ledger entry type, and adds a unique index so
+  a batch's part of a sale can be credited only once. No ledger row is changed.
+- **After V32 only the new build may run.** A sale needs a `grade_id`, which older builds never set,
+  and they do not know `SALE_CREDIT`. Rolling the code back does not undo a migration: to go back,
+  restore a database backup (for example a Neon branch) taken before the migration.
+- **V33** adds `contact_method` (`CALL` or `WHATSAPP`, default `CALL`) and `whatsapp_number` to
+  `buyer_request`. Existing requests become `CALL`. It only adds columns, so it is safe to run
+  before or after the new build, but only the new build reads and writes the columns.
+- **V34** adds to the identity verification table (V27) the PKCE verifier, salted hashes of the
+  provider's name, birth date and phone, and an attempts counter, and adds `PASSWORD` to the allowed
+  verification methods (the one thing it replaces is that list). No row is changed, so it is safe to run
+  before or after the new build.
+- **V35** gives each `sms_log` row a `message_type`: `DELIVERY_CODE` (every existing row) or
+  `RECEIPT`, and makes the unique index one message per delivery, type and send number. No row is
+  changed. Run it before the new build starts: the new build reads and writes the column.
+- Applied migrations are never edited; a change is a new migration.
+
 ## API endpoints
 
 | Method | Path | Auth | Description |
@@ -188,7 +224,10 @@ ERD: see `docs/erd.png`.
 | GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional. Without `nationalId` |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member, including `nationalId` |
-| POST | `/api/members` | JWT | Registers a member and returns it with `201` |
+| POST | `/api/members` | JWT | Registers a member and returns it with `201`. Needs a `verificationId` and a `birthDate` (see Identity verification); `503` when verification is not configured |
+| GET | `/api/members/verify/status` | JWT | `{available, required}`: both are `true` when `MOSIP_ENABLED=true`, both `false` otherwise (registering a member needs verification) |
+| POST | `/api/members/verify/start` | JWT | Starts a verification: `{provider, authorizationUrl, state, expiresAt}`. `503` if not available |
+| POST | `/api/members/verify/callback` | JWT | Body `{code, state}` from eSignet's redirect. Returns `{verificationId, verified, method, useBefore}` |
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
 | PATCH | `/api/members/{id}/activate` | JWT | Sets the member's status to `ACTIVE` |
@@ -196,31 +235,35 @@ ERD: see `docs/erd.png`.
 | PUT | `/api/grades/{id}` | JWT | Body `{"name", "nameRw", "active", "floorPricePerKg", "description", "sizeInfo", "packaging"}`. Edits a grade. Grades A, B and C are fixed: they cannot be created or deleted |
 | GET | `/api/lots?status=&gradeId=&page=0&size=20` | JWT | Lots, newest first (max 100 per page), with delivered, lost, sold, remaining and pending-confirmation kg |
 | GET | `/api/lots/{id}` | JWT | One lot, with the kilograms each member delivered |
-| GET | `/api/lots/stock` | JWT | Stock balance: remaining, delivered, sold, lost and pending-confirmation kg, today's deliveries, lot counts and remaining kg per grade |
+| GET | `/api/lots/stock` | JWT | Stock: kg left in total and per grade, read from the batches and split into sellable, waiting and disputed kg; delivered, sold, lost and pending-confirmation kg, today's deliveries and lot counts |
 | GET | `/api/lots/open?gradeId=` | JWT | Open lot of the grade `{id, code, gradeName, totalKg}`. `204` if none is open yet, `404` if the grade does not exist |
-| PATCH | `/api/lots/{id}/close` | JWT | Closes an open lot. The next delivery of that grade starts a new lot |
-| POST | `/api/lots/{id}/losses` | JWT | Records a loss on an open or closed lot, returns `201` |
+| PATCH | `/api/lots/{id}/close` | JWT | Closes an open lot (optional: sales do not need it). The next delivery of that grade starts a new lot |
+| POST | `/api/lots/{id}/losses` | JWT | Records a loss on an open or closed lot, returns `201`. The member of the lot's oldest batches bears it |
 | GET | `/api/lots/{id}/losses` | JWT | Losses of a lot, newest first |
 | GET | `/api/buyers?search=` | JWT | Buyers sorted by name. `search` matches name or phone |
 | POST | `/api/buyers` | JWT | Adds a buyer, returns `201` |
 | GET | `/api/public/grades` | None | Active grades `{code, name, nameRw, description, sizeInfo, packaging, availability}`. No prices or kilograms (see Public side for buyers) |
 | GET | `/api/public/info` | None | `{cooperativeName, location, cooperativeEmail, minOrderKg, cooperativePhone}` |
-| POST | `/api/public/requests` | None | A buyer's purchase request. Returns `201` `{code, status}`. Limited per IP address and phone number |
-| GET | `/api/public/requests/{code}?phone=` | None | `{code, status, message}`. `404` if the code or the phone is wrong |
-| GET | `/api/buyer-requests?status=&search=&page=0&size=15` | JWT | Buyers' requests, newest first (15 per page, max 100) |
-| GET | `/api/buyer-requests/{id}` | JWT | One request with the buyer's contact details |
+| POST | `/api/public/requests` | None | A buyer's purchase request, with an optional `contactMethod` (`CALL` or `WHATSAPP`) and `whatsappNumber`. Returns `201` `{code, status}`. Limited per IP address and phone number |
+| GET | `/api/public/requests/{code}?phone=` | None | `{code, status, message, contactMethod, contactNumber}`. `404` if the code or the phone is wrong |
+| GET | `/api/buyer-requests?status=&search=&page=0&size=15` | JWT | Buyers' requests, newest first (15 per page, max 100), with `contactMethod` and `whatsappNumber` |
+| GET | `/api/buyer-requests/{id}` | JWT | One request with the buyer's contact details and how to contact them |
 | PATCH | `/api/buyer-requests/{id}/status` | JWT | Body `{"status", "publicMessage"}` (message optional). Changes the status; kept in the change history |
 | POST | `/api/buyer-requests/{id}/buyer` | JWT | Turns the request into a buyer record, or links it to the buyer with the same phone |
-| POST | `/api/sales` | JWT | Records a sale from a closed lot. `201` when new, `200` when the same `clientUuid` was already recorded |
+| POST | `/api/sales` | JWT | Records a sale of a grade from the oldest sellable batches and credits each batch's member (see Sales). `201` when new, `200` when the same `clientUuid` was already recorded |
+| POST | `/api/sales/orders` | JWT | One buyer order for several grades (each once), one sale per grade. Same rules and status codes |
+| GET | `/api/grades/{id}/sale-preview?quantityKg=&pricePerKg=&skip=` | JWT | The batches a sale would use and what each member would be credited. Saves nothing |
+| GET | `/api/grades/{id}/batches?page=0&size=20` | JWT | The grade's batches that still have kg, oldest first (the order sales take them in) |
+| GET | `/api/members/{id}/batches?status=all&page=0&size=20` | JWT | A member's batches, newest first, with kg and money earned per batch. `status=unsold` keeps batches with kg left |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
-| GET | `/api/lots/{id}/share-preview` | JWT | How a sold lot's money would be shared, per member. Saves nothing. `409` listing pending or disputed deliveries |
-| POST | `/api/lots/{id}/share` | JWT | Saves the shares and marks the lot `SHARED`. Only once per lot, and only when every delivery is confirmed |
-| GET | `/api/payments/balances?search=&status=` | JWT | Share, deductions, paid and balance per member with a shared lot, plus `totalOwedRwf` and `paidThisWeekRwf` |
+| GET | `/api/lots/{id}/share-preview` | JWT | Older lot sharing (see Sharing): `409` for any lot that has sales, and while deliveries are pending or disputed |
+| POST | `/api/lots/{id}/share` | JWT | Older lot sharing: saves the shares and marks the lot `SHARED`. `409` for any lot that has sales |
+| GET | `/api/payments/balances?search=&status=` | JWT | Earned (sale credits and shares), deductions, paid and balance per member, plus `totalOwedRwf` and `paidThisWeekRwf` |
 | POST | `/api/payments` | JWT | Pays a member. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page). Reversed payments are listed with `reversed: true` |
 | POST | `/api/payments/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a payment; the member is owed the amount again |
-| GET | `/api/members/{id}/statement` | JWT | A member's shares, deductions, payments, amount owed and lots waiting for sharing |
+| GET | `/api/members/{id}/statement` | JWT | A member's sale credits, shares, deductions, payments and amount owed |
 | POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/deliveries?memberId=&lotId=&from=&to=&includeReversed=false&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page). All filters are optional. Reversed deliveries only with `includeReversed=true` |
 | GET | `/api/deliveries/{id}` | JWT | One delivery, also when it was reversed |
@@ -235,7 +278,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/reports/weekly?weekStart=2026-10-19` | JWT | Weekly report: deliveries, stock, sales, money and confirmations (see Weekly report) |
 | GET | `/api/reports/weeks` | JWT | The weeks of the last 52 with any activity, newest first: `[{weekStart, weekEnd}]` |
 | POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
-| GET | `/api/dashboard` | JWT | Numbers for the home screen, including disputed deliveries and confirmations pending for more than 48 hours |
+| GET | `/api/dashboard` | JWT | Numbers for the home screen: stock split into sellable, waiting and disputed kg, grades with sellable kg, disputed deliveries and confirmations pending for more than 48 hours |
 
 More endpoints coming soon.
 
@@ -281,8 +324,10 @@ Every error response has the form `{"message": "..."}`.
 
 ### Ledger
 
-Every delivery, loss, sale, share and payment adds a ledger entry. Entries can never
-be changed or deleted (a database trigger blocks it). Each entry stores a SHA-256 hash
+Every delivery, loss, sale, sale credit, share and payment adds a ledger entry. The entry
+types are `DELIVERY`, `LOSS`, `SALE` (the buyer's money), `SALE_CREDIT` (what a sale credits to one
+member for one batch, see Sales), `SHARE` (older lot sharing), `PAYMENT` and `REVERSAL`. Entries can
+never be changed or deleted (a database trigger blocks it). Each entry stores a SHA-256 hash
 of its own data plus the previous entry's hash, so changing any past entry breaks the
 chain and `GET /api/ledger/verify` reports the first broken entry. Mistakes are fixed
 with a REVERSAL entry that cancels the original. A reversal cannot be reversed, and an
@@ -301,6 +346,15 @@ Every delivery is confirmed by the member with a one-time code sent by SMS.
   - It expires 10 minutes after it is sent (`409`).
   - A wrong code is `400` with the tries left. After 3 wrong tries the code stops working,
     even the right one (`409`); the manager must send a new one.
+- **Demo code (temporary, remove after the demo):** when `SMS_DEMO_CODE` is set to 6 digits,
+  `confirm` also accepts it as the right code for any `PENDING` delivery. Everything else stays
+  the same: the delivery needs a code that is sent and not expired, the 3-wrong-tries limit
+  applies, and the member still gets the receipt SMS. Such a delivery has the resolution note
+  "Confirmed with the demo code, not the member's SMS code." and a `DEMO_CODE_CONFIRMATION`
+  entry in the change history; the code itself is never logged or saved. The app logs one
+  warning at startup while it is set, and does not start if it is not 6 digits. Not set (the
+  default), nothing changes. After the demo, remove the variable and delete the code (look for
+  "TEMPORARY, for the demo only").
 - `POST /api/deliveries/{id}/resend-code` sends a new code and the old one stops working at
   once. At most 3 times per delivery (`409` after that); each delivery response shows
   `codeResendsLeft`. Every resend is written to the change history.
@@ -349,6 +403,10 @@ After a delivery is saved, the member gets one SMS in their language (`rw` or `e
 "CoopAggregate: RCT-7K2Q, 300 kg Big, 21/10. If correct, give the manager code 482193.
 If wrong, don't give the code, reply 2 RCT-7K2Q."
 
+The reply instruction is only there when the provider passes replies on to the webhook
+(`africastalking`). With `log` and `traccar` the last sentence is instead
+"If the code is wrong, tell the manager."
+
 The Kinyarwanda text still needs a check by a native speaker.
 
 The SMS is sent in the background after the delivery is committed, so a failed SMS never
@@ -359,12 +417,51 @@ the member never got the earlier one. A code message that is no longer needed (t
 was confirmed, disputed or reversed, or a newer code was asked for) is `CANCELLED` instead
 of sent. No SMS are sent when SMS are turned off in the settings.
 
+**Receipt.** Once a delivery becomes `CONFIRMED` (with the code, by an SMS reply, by the
+manager's review of a pending delivery, or when a dispute is resolved as correct), the member gets
+one receipt in their language, for example:
+
+"Koperative Intagamburuzwa: delivery RCT-7K2Q confirmed. 300 kg Big, 21/10. Thank you."
+
+It holds the cooperative's name, the receipt code, kg, grade and day; never money, a balance or
+the member's name. Names are written in plain characters, and a long cooperative name is shortened
+so the receipt fits in one SMS. It is sent in the background after the confirmation is committed,
+so a failed receipt never undoes or holds up the confirmation; it is retried like any other SMS.
+It is saved in `sms_log` with `message_type` `RECEIPT`, at most once per delivery: confirming again
+later (for example after a dispute is resolved) sends no second receipt. An unsent receipt is
+`CANCELLED` if the delivery is disputed or reversed first. Deliveries recorded before confirmation
+existed get none unless they are confirmed later. No receipt is sent while SMS are turned off.
+
 `SMS_PROVIDER=log` (default) sends nothing. The messages are in `sms_log`, but the codes
 are masked there. To test codes locally, set `SMS_LOG_SHOW_CODES=true`: the log provider
 then prints each SMS, real code included, in the console (`sms_log` stays masked). This is
 **for development only**: with any other provider the app refuses to start while it is
 `true`. Without it, use the Africa's Talking sandbox and its simulator to see the codes. `SMS_PROVIDER=africastalking` sends them with Africa's Talking
 (`AT_USERNAME=sandbox` uses their sandbox and simulator).
+
+**Traccar SMS Gateway** (`SMS_PROVIDER=traccar`) sends through an Android phone with a SIM
+card that runs the Traccar SMS Gateway app. Set `SMS_PROVIDER=traccar` and `SMS_TRACCAR_TOKEN`
+(the token shown in the app); `SMS_TRACCAR_URL` is only needed for a different gateway address.
+The app does not start if the token is missing or the URL is not `https` (`http` is accepted only
+for `localhost`); the message names the variable, never its value.
+
+- Each number is turned into `+2507XXXXXXXX` first; anything that is not a Rwandan mobile number
+  is not sent and counts as a failed send.
+- Timeouts are 3 seconds to connect and 10 seconds to read. The provider does not retry and does
+  not follow redirects. A non-`2xx` answer or an exception is a failed send, so the usual
+  resend limits, the 48-hour review and "Checked by the manager" work as with any provider.
+- The log gets one `WARN` line per failure with the HTTP status or the exception class and the
+  number masked to its last 3 digits. The token, the `Authorization` header, the message and
+  the code are never logged. The same short text (no number, no message) is kept as the error of
+  the message in `sms_log`. `SMS_LOG_SHOW_CODES` still works only with `SMS_PROVIDER=log`.
+- **The SIM and the phone must stay on, charged and online.** The phone sends the SMS, so
+  when it is off or has no signal, messages fail or wait.
+- **"Accepted" does not mean "delivered".** `SENT` in `sms_log` means the gateway accepted the
+  message; the provider cannot tell whether it reached the member's phone.
+- The text of the messages is unchanged. This provider only sends: nothing forwards replies to
+  the SMS reply webhook below.
+- A different provider, for example Africa's Talking with a sender ID, can replace it later by
+  changing `SMS_PROVIDER` and its settings. Nothing else changes.
 
 **Replies:** in the Africa's Talking dashboard, set the SMS callback URL to
 `https://<api-host>/api/sms/inbound?token=<SMS_INBOUND_SECRET>`. The secret can also be sent
@@ -383,20 +480,20 @@ the totals and the ledger always agree. The reversed delivery or payment stays i
 table for the history (`reversed: true`, `reversalReason`) but is no longer counted
 anywhere: lot kilograms, stock, the dashboard, sharing, member statements and balances.
 
-- **Delivery:** `POST /api/deliveries/{id}/reverse`. Only while the delivery's lot has no
-  sales, because sold potatoes and shared money already depend on the lot's kilograms
-  (otherwise `409`). Also `409` when the delivery is already reversed, or when the lot's
-  recorded losses would leave it with less than 0 kg.
+- **Delivery:** `POST /api/deliveries/{id}/reverse`. Only while none of its kg are sold,
+  because its member was already credited for sold kg (otherwise `409`). Other deliveries of a
+  lot that has sales can still be reversed, but not those of a `SHARED` lot. Also `409` when the
+  delivery is already reversed, or when the lot's recorded losses would leave it with less than
+  0 kg.
 - **Correction:** `POST /api/deliveries/{id}/correct` reverses the delivery and saves the
   corrected one in the same transaction: new receipt code, the open lot of its grade, the
   same `deliveredAt`, its own `DELIVERY` ledger entry. The two are linked by `correctsId`
   (on the new delivery) and `correctedById` (on the original). Same rules as a reversal.
 - **Payment:** `POST /api/payments/{id}/reverse`. The member's balance goes back up.
 - **Ledger:** `POST /api/ledger/{id}/reverse` does the same as the endpoints above for
-  `DELIVERY` and `PAYMENT` entries. `SHARE`, `SALE` and `LOSS` entries cannot be reversed
-  (`409`): a share has already divided the money, a sale cannot be undone once its lot is
-  shared, and a loss cannot be undone once its lot has sales. Sales and losses cannot be
-  reversed at all yet, because they have no place to record a reversal.
+  `DELIVERY` and `PAYMENT` entries. `SHARE`, `SALE`, `SALE_CREDIT` and `LOSS` entries cannot
+  be reversed (`409`): a share has already divided the money, and sales, their credits and losses
+  cannot be reversed at all yet, because they have no place to record a reversal.
 
 ### Members
 
@@ -409,7 +506,9 @@ Request body for `POST` and `PUT`:
   "nationalId": "1199880012345678",
   "address": "Busogo",
   "joinDate": "2026-10-08",
-  "preferredLanguage": "rw"
+  "preferredLanguage": "rw",
+  "verificationId": 9,
+  "birthDate": "1990-05-17"
 }
 ```
 
@@ -421,6 +520,8 @@ Request body for `POST` and `PUT`:
 | `address` | Optional, at most 255 characters |
 | `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
+| `verificationId` | Required on create: the `verificationId` from `POST /api/members/verify/callback`. Ignored on update |
+| `birthDate` | Required on create, not in the future. Only used to check the person who verified; never saved, never returned. Ignored on update |
 
 - The member code is generated on create as `M-` and 4 digits (`M-0001`, `M-0002`, ...):
   the highest existing number plus one. It never changes.
@@ -438,6 +539,45 @@ Request body for `POST` and `PUT`:
 - Members are never deleted, because deliveries, payments and the ledger refer to them.
   Use deactivate instead. Activate and deactivate can be called again on a member that
   already has that status.
+
+### Identity verification
+
+Every new member is checked against MOSIP eSignet before they are registered; there is no setting to skip it.
+Existing members, updating members and every other feature do not depend on it.
+
+1. `POST /api/members/verify/start` returns `authorizationUrl`: eSignet's login page, with a one-use `state`
+   (valid 10 minutes), a `nonce` and PKCE (S256). The frontend keeps the form values, sends the member there,
+   and eSignet sends them back to `MOSIP_REDIRECT_URI` with `code` and `state`.
+2. `POST /api/members/verify/callback` with `{code, state}`. The backend exchanges the code at the token endpoint
+   with a client assertion (PS256, signed with the private key in `MOSIP_PRIVATE_KEY_PATH`, with the `kid` of
+   `MOSIP_KEY_ID`), then checks the ID token and the signed userinfo answer against eSignet's JWKS (PS256 only:
+   signature, issuer, audience, expiry, nonce, and the same `sub` in both). Nothing is encrypted; both come back
+   signed only. It returns `{verificationId, verified: true, method: "PASSWORD", useBefore}` (30 minutes).
+   `400` unknown or expired state, `409` state already used or the person is already a member, `502` eSignet
+   failed or its answer could not be trusted, `503` not available.
+3. `POST /api/members` with `verificationId` and `birthDate` (both always required). The name, birth date and phone typed for the member
+   must **all** match the person who verified. After normalising (no case, accents, punctuation or word order for
+   the name; `yyyy/MM/dd` or `yyyy-MM-dd` for the date; `+2507XXXXXXXX` for the phone) they are compared exactly.
+   On a mismatch the member is not created, the `400` message names the fields that differ (never their values)
+   and the attempt is counted; the third mismatch uses the verification up and the person must verify again.
+
+What is kept: eSignet's `sub` is pairwise (not a national ID number), so it is only used as `identity_token`:
+one person, one membership (`409` for the second). The name, birth date and phone from eSignet are never stored:
+only salted HMAC hashes, for at most 30 minutes, cleared when the member is saved, the verification is used up
+or time runs out (a scheduled job). The birth date typed on the form is not saved either. The change history
+gets `IDENTITY_VERIFIED`, `IDENTITY_MISMATCH` (field names only), `IDENTITY_DUPLICATE` and
+`IDENTITY_VERIFICATION_FAILED` without any personal data. The email claim is requested but not used: the
+member form has no email field. Codes, states, tokens, assertions, claims and the key are never logged.
+
+With `MOSIP_ENABLED=false` (the default) the app starts and works as before, but `POST /api/members` is refused
+with `503` "Member registration needs identity verification, which is not configured." and the status endpoint
+says `{available: false, required: false}`. With `MOSIP_ENABLED=true` the app does not start if a setting is
+missing or the key file cannot be used (the message names settings only). The old `require_identity_verification`
+column of the `setting` table stays in the database, unused.
+
+The automatic tests use a fake eSignet. Only the real one can confirm the claim names and formats it returns
+(`name`, `birthdate`, `phone_number`), that it accepts the client assertion (`aud`, `exp`, PS256), the exact
+redirect URI, and that the same person always gets the same `sub`.
 
 ### Deliveries
 
@@ -497,8 +637,8 @@ follows these rules:
   7-day window, after its member was deactivated, or after its lot was closed.
 - **Lot at sync time:** the lot is chosen when the delivery reaches the server: the open
   lot of its grade at that moment. If the lot that was open when the delivery was recorded
-  has been closed in the meantime, the delivery goes to a new lot, because a closed lot
-  may already be on sale and its kilograms must not change.
+  has been closed in the meantime, the delivery goes to a new lot, so the kilograms of a
+  closed lot do not change.
 - **Errors that will not go away on retry** return a `4xx` status with a message, never
   `500`, so the app can show the message and stop retrying:
   - `400`: invalid body (missing fields, malformed `clientUuid`, quantity out of range,
@@ -511,11 +651,16 @@ follows these rules:
 
 ### Lots and losses
 
-A lot moves through `OPEN` -> `CLOSED` -> `SOLD` (`SHARED` comes with payment sharing).
+A lot groups the deliveries of one grade. Sales do not use lots: they take kg by grade from the
+oldest batches (see Sales), so a lot does not have to be closed to be sold. Closing a lot is
+optional, and a lot becomes `SOLD` by itself when nothing is left in it, closed or not. `SHARED`
+only remains for lots shared before sales were paid by batch.
 
 - **Quantities** are always computed from the database, never stored:
-  `remainingKg = deliveredKg - lostKg - soldKg`. `saleAmountRwf` is the sum of the lot's
-  sales and `memberCount` the number of members who delivered to it. `createdAt` and
+  `remainingKg = deliveredKg - lostKg - soldKg`. `soldKg` is what sales took from the lot's
+  batches. `saleAmountRwf` is the money of those kg: sales made from the lot before sales by grade,
+  plus what sales by grade credited for its batches. `memberCount` is the number of members who
+  delivered to it. `createdAt` and
   `closedAt` are the dates the lot was opened and closed.
 - `pendingConfirmationKg` is the part of `deliveredKg` from deliveries that are still
   `PENDING` (not reversed). It is shown next to the totals and does **not** change them:
@@ -524,9 +669,12 @@ A lot moves through `OPEN` -> `CLOSED` -> `SOLD` (`SHARED` comes with payment sh
 - **Close:** only an `OPEN` lot can be closed (otherwise `409`). Closing waits for any
   delivery of the same grade that is being recorded, so no delivery ends up in a lot
   after it closed.
-- **Stock:** `GET /api/lots/stock` returns `totalRemainingKg` (open and closed lots) and
-  `byGrade` (remaining kg per grade), `totalDeliveredKg`, `totalSoldKg` and `totalLostKg`
-  (all lots, so delivered - lost - sold = remaining), `addedTodayKg` and `deliveriesToday`
+- **Stock:** `GET /api/lots/stock` reads the kg left per grade from the batches, whatever their
+  lot. `totalRemainingKg` is split into `totalSellableKg` (confirmed), `totalWaitingKg` (pending
+  confirmation) and `totalDisputedKg`; `byGrade` lists every grade with kg left with `remainingKg`,
+  `sellableKg`, `waitingKg` and `disputedKg`. Only sellable kg can be sold. `totalDeliveredKg`,
+  `totalSoldKg` and `totalLostKg` cover all lots (so delivered - lost - sold = remaining),
+  `addedTodayKg` and `deliveriesToday`
   (deliveries whose time falls on today in Kigali), `openLots` / `closedLots`, and
   `pendingConfirmationKg` (all `PENDING`, not reversed deliveries; already included in the
   totals).
@@ -534,6 +682,10 @@ A lot moves through `OPEN` -> `CLOSED` -> `SOLD` (`SHARED` comes with payment sh
   `DRYING`, `DAMAGE`, `THEFT` or `OTHER`; `recordedAt` (a date) and `notes` are optional. Allowed on
   open and closed lots (otherwise `409`). `quantityKg` must be more than 0 and at most the
   lot's remaining kg (otherwise `400`). Each loss adds a `LOSS` ledger entry.
+- **Who bears a loss:** losses are recorded per lot. A loss takes its kg from the lot's oldest
+  batches first (by delivery time, then id), whatever their confirmation status, and the member of
+  those batches bears it: they earn nothing on the lost kg and pay no deduction on them. The
+  cooperative bears nothing.
 
 ### Buyers
 
@@ -550,11 +702,12 @@ open; everything else needs the manager's token. CORS allows only the frontend (
 - `GET /api/public/grades` shows the active grades with `code`, `name`, `nameRw`, `description`,
   `sizeInfo`, `packaging` and a stock hint `availability`. It never shows prices, ids or any
   stock number.
-  - `availability` comes from the grade's remaining kg as on the stock page (delivered minus lost
-    minus sold, reversed deliveries left out): `NONE` below the cooperative's `minOrderKg`,
-    `LIMITED` from `minOrderKg` up to just under 500 kg, `AVAILABLE` from 500 kg. A grade with no
-    open or closed lot is `NONE`. The 500 kg is one constant, `StockAvailability.AVAILABLE_FROM_KG`
-    in `src/main/java/com/coopaggregate/publicapi/StockAvailability.java`.
+  - `availability` comes from the grade's **sellable** kg as on the stock page (confirmed batches
+    with kg left; kg waiting for confirmation or disputed are not counted, so a buyer is never
+    promised kg that cannot be sold): `NONE` below the cooperative's `minOrderKg`, `LIMITED` from
+    `minOrderKg` up to just under 500 kg, `AVAILABLE` from 500 kg. A grade with no sellable kg is
+    `NONE`. The 500 kg is one constant, `StockAvailability.AVAILABLE_FROM_KG` in
+    `src/main/java/com/coopaggregate/publicapi/StockAvailability.java`.
   - At most 60 calls per minute per IP address (`429` with `Retry-After`). The response has
     `Cache-Control: max-age=60, public`, so browsers may keep it for a minute.
 - `GET /api/public/info` shows `cooperativeName`, `location`, `cooperativeEmail`, `cooperativePhone` and
@@ -563,17 +716,25 @@ open; everything else needs the manager's token. CORS allows only the frontend (
 
   ```json
   {"name": "Kalisa Traders", "phone": "0788123456", "email": "kalisa@example.com",
-   "gradeCode": "A", "quantityKg": 250, "note": "Pick up on Friday", "website": ""}
+   "gradeCode": "A", "quantityKg": 250, "note": "Pick up on Friday",
+   "contactMethod": "WHATSAPP", "whatsappNumber": "0788999999", "website": ""}
   ```
 
   `name`, `phone`, `gradeCode` and `quantityKg` are required. The phone is a Rwandan mobile
   number (`07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`, stored as `+2507XXXXXXXX`).
   `quantityKg` must be at least `minOrderKg` (otherwise `400` "The smallest order is 100 kg.") and the
   grade must be an active one. Sizes are limited (name 150, email 150, note 1000 characters).
+  `contactMethod` and `whatsappNumber` are optional. `contactMethod` is `CALL` (the default) or
+  `WHATSAPP`. `whatsappNumber` follows the same Rwandan phone rules as `phone` (an empty value counts
+  as not given) and is only used for `WHATSAPP`: when it is missing, the main `phone` is used. For
+  `CALL` it is ignored. Any other `contactMethod` returns `400`.
   It returns `201` `{code, status}` with a code like `BR-2026-7K2Q`: random, unique, and made
   without letters and digits that look alike (no 0, O, 1, I or L). The request starts as `PENDING`.
-- `GET /api/public/requests/{code}?phone=0788123456` returns `{code, status, message}`:
-  the status (`PENDING`, `ACCEPTED` or `REJECTED`) and the manager's public message. The phone must be
+- `GET /api/public/requests/{code}?phone=0788123456` returns `{code, status, message, contactMethod,
+  contactNumber}`: the status (`PENDING`, `ACCEPTED` or `REJECTED`), the manager's public message, and
+  how the cooperative will contact the buyer: `contactMethod` and the number it will use
+  (`contactNumber`: the WhatsApp number for `WHATSAPP`, otherwise the phone), both given by the buyer.
+  Requests made before this existed are `CALL`. The phone must be
   the one used for the request. A wrong phone, a missing phone and an unknown code all return the
   same `404` `{"message": "Request not found."}`, so a code cannot be tested without its phone.
 - **Protection:** at most 10 requests per hour per IP address and 3 per day per phone number
@@ -590,7 +751,9 @@ open; everything else needs the manager's token. CORS allows only the frontend (
 - `GET /api/buyer-requests` lists requests newest first, 15 per page. `status` filters by
   status; `search` matches the request code, the buyer's name or phone (`0788123456` finds
   `+250788123456`).
-- `GET /api/buyer-requests/{id}` shows one request with the buyer's contact details and note.
+- `GET /api/buyer-requests/{id}` shows one request with the buyer's contact details and note. The list
+  and the detail both show `contactMethod` (`CALL` or `WHATSAPP`) and `whatsappNumber` (the number to
+  use for `WHATSAPP`, empty for `CALL`, when `buyerPhone` is the number to call).
 - `PATCH /api/buyer-requests/{id}/status` with `{"status", "publicMessage"}` changes the status. The
   public message (at most 500 characters) is what the buyer reads; leaving it out keeps the earlier
   one. The same status without a new message returns `409`. Every change goes to the change
@@ -600,49 +763,95 @@ open; everything else needs the manager's token. CORS allows only the frontend (
   buyer who already has that phone number (`409` if it already has a buyer). Then record the sale
   for that buyer with `POST /api/sales/orders`; sales are not linked to the request automatically.
 
+### Batches
+
+Every delivery is a batch for its member: `receivedKg`, `soldKg`, `lostKg` and `remainingKg`
+(received - sold - lost, computed by the database). Reversed deliveries are not batches.
+
+- `GET /api/members/{id}/batches?status=all|unsold&page=0&size=20`: the member's batches, newest
+  first, with the kg `totals` and the money `earnings` over all of them. Each batch has `grossRwf`,
+  `deductionRwf`, `earnedRwf` (what sales credited for its sold kg) and `payment`: `NOTHING_SOLD`,
+  `BATCH`, or, only for sales made before sales by grade, `LOT_SHARE` or `AWAITING_SETTLEMENT`.
+- `GET /api/grades/{id}/batches`: the grade's batches that still have kg, oldest first.
+
 ### Sales
+
+Sales are made by **grade**, first come first served: the kg are taken from the oldest
+**sellable** batches of the grade, by delivery time and then id, whatever their lot. Sellable
+means confirmed, not reversed and with kg left; `PENDING` and `DISPUTED` batches are skipped. No lot
+has to be closed first.
 
 Request body for `POST /api/sales`:
 
 ```json
 {
   "clientUuid": "0f8fad5b-d9cb-469f-a165-70867728950e",
-  "lotId": 3,
+  "gradeId": 1,
   "buyerId": 2,
-  "quantityKg": 500,
-  "pricePerKg": 320,
-  "soldAt": "2026-10-09"
+  "quantityKg": 150,
+  "pricePerKg": 300,
+  "soldAt": "2026-10-09",
+  "skipDeliveryIds": [12, 15],
+  "skipReason": "The buyer wants the newer potatoes"
 }
 ```
 
-- The lot must be `CLOSED` and the buyer must exist (otherwise `400`).
-- `quantityKg` must be more than 0 and at most the lot's remaining kg (otherwise `400`).
-- `pricePerKg` is in whole RWF and must be more than 0. `soldAt` is an optional date and
-  defaults to today (Kigali time).
-- `totalAmountRwf = quantityKg x pricePerKg`, rounded half up to whole RWF.
+- The grade and the buyer must exist, `quantityKg` must be more than 0 (2 decimals) and
+  `pricePerKg` more than 0 in whole RWF, and more than the deduction per kg (otherwise `400`).
+  `soldAt` is an optional date and defaults to today (Kigali time).
+- With fewer sellable kg than asked, the answer is `400` "Only 250.00 kg of Big can be sold now, but
+  300.00 kg were asked for. 40.00 kg are waiting for their members to confirm them." and nothing is
+  saved.
+- **Preview:** `GET /api/grades/{id}/sale-preview?quantityKg=150&pricePerKg=300&skip=12,15` shows
+  the batches the sale would use and what each member would be credited, and saves nothing. The sale
+  works it out again under locks when it is recorded, so it can differ if stock changed in between.
+- **Skipping the oldest batches** is allowed with `skipDeliveryIds` and a `skipReason` of 10 to
+  500 characters (otherwise `400`). A batch the sale would not reach cannot be skipped. Every skip
+  is written to the audit log as `SALE_FIFO_SKIPPED` (sale code, receipt codes, reason).
+- **Credits:** each batch used credits its member. `grossRwf` is the batch's part of the sale
+  amount (by kg; the rounding remainder goes to the batch with the most kg, so the parts add up to
+  exactly the total). `deductionRwf` is 5 RWF per **sold** kg (the rate from Settings, never more
+  than the gross). `netRwf = grossRwf - deductionRwf` is added to what the member is owed. Example:
+  150 kg at 300 RWF, 100 kg from Alice's batch and 50 kg from Bosco's: Alice gets 30,000 - 500 =
+  29,500 RWF and Bosco 15,000 - 250 = 14,750 RWF.
+- **Ledger:** one `SALE` entry (kilograms and the buyer's total), then one `SALE_CREDIT` entry per
+  batch used (kilograms and the net amount, `relatedEntityType` `SALE_ALLOCATION`). A batch's part of
+  a sale is credited once: the database refuses a second credit.
+- The response has the sale (`id`, `saleCode`, `gradeId`, `gradeName`, `buyerName`, `quantityKg`,
+  `pricePerKg`, `totalAmountRwf`, `belowFloor`, `soldAt`, `totalDeductionRwf`, `totalNetRwf`) and
+  `batches`: for each batch used `receiptCode`, `lotCode`, `memberNumber`, `memberName`, `kg`,
+  `grossRwf`, `deductionRwf` and `netRwf`. `lotId`, `lotCode` and `lotStatus` are only set for
+  sales made before sales by grade; for those, the money fields are empty.
 - `belowFloor` is `true` when the grade has a floor price and `pricePerKg` is lower. It is
-  only a warning: the sale is saved either way. A grade without a floor price is never
-  below it.
-- When a sale uses up the remaining kg, the lot becomes `SOLD` (`lotStatus` in the
-  response).
-- Sending the same `clientUuid` again returns the existing sale with `200`.
-- Sale codes look like `SAL-7K2Q`. Each sale adds a `SALE` ledger entry with the kilograms
-  and the total amount.
-- `GET /api/sales` filters: `search` matches part of the buyer name, lot code or sale code
-  (ignoring case), and a number on its own also matches the sale id. `gradeId` keeps sales
-  from lots of that grade.
+  only a warning: the sale is saved either way.
+- A lot that has nothing left becomes `SOLD`, closed or not.
+- Sending the same `clientUuid` again returns the first result with `200`.
+- Locks are always taken in this order: the grade, the lots that have sellable batches (by id), the
+  batches (oldest first) and last the ledger. Two sales of one grade wait for each other.
+- Sale codes look like `SAL-7K2Q`.
+- `POST /api/sales/orders` takes `{"clientUuid", "buyerId", "soldAt", "items": [{"gradeId",
+  "quantityKg", "pricePerKg", "skipDeliveryIds", "skipReason"}]}`, each grade at most once, and
+  records one sale per item with an order code `ORD-7K2Q`. If any item fails, nothing is saved.
+- `GET /api/sales` filters: `search` matches part of the buyer name, a lot code (also those of a
+  sale's batches) or sale code (ignoring case), and a number on its own also matches the sale id.
+  `gradeId` keeps sales of that grade and `lotId` those that took kg from that lot.
 - `GET /api/sales/summary` covers the current month in Kigali time:
   `salesAmountThisMonth` (RWF), `soldKgThisMonth`, `buyersThisMonth` (different buyers) and
   `averagePricePerKg` (amount / kg, 2 decimals, `0` when nothing was sold).
 
 ### Sharing
 
-When a lot is `SOLD`, its sale money is shared between the members who delivered to it.
+This is the older way of paying members: when a lot was `SOLD`, its sale money was shared
+between everyone who delivered to it. Sales are now paid to the members by batch when they are made
+(see Sales), so sharing is refused with `409` for any lot that has sales, and it only remains for
+lots shared before. The endpoints are kept as they were.
+
 `GET /api/lots/{id}/share-preview` shows the result without saving; `POST /api/lots/{id}/share`
 saves it and sets the lot to `SHARED`.
 
-- Only a `SOLD` lot can be shared (otherwise `400`). A lot that is already `SHARED` returns
-  `409`.
+- A lot that has sales (every `SOLD` lot) is refused with `409`: its members are paid by batch, and
+  sharing as well would pay them twice. A lot that is already `SHARED` returns `409`, and a lot
+  that is not `SOLD` returns `400`.
 - Only confirmed deliveries are shared. While the lot has `PENDING` or `DISPUTED`
   deliveries (not reversed), both the preview and the share return `409` with the list:
 
@@ -665,8 +874,8 @@ saves it and sets the lot to `SHARED`.
 ### Payments
 
 Payments are made to a member for everything they are owed, not to one lot. What a member
-is owed (their balance) = their shares - their deductions - what they were already paid,
-counting only shared lots.
+is owed (their balance) = their sale credits and shares - their deductions - what they were
+already paid.
 
 Request body for `POST /api/payments`:
 
@@ -689,8 +898,9 @@ Request body for `POST /api/payments`:
 - `paidAt` is an optional date and defaults to today (Kigali time).
 - Sending the same `clientUuid` again returns the existing payment with `200`.
 - Each payment adds a `PAYMENT` ledger entry with the amount and the payment code.
-- `GET /api/payments/balances` lists every member with at least one shared lot:
-  `shareRwf`, `deductionRwf`, `paidRwf`, `balanceRwf` and `status`, largest balance first.
+- `GET /api/payments/balances` lists every member with at least one sale credit or shared lot:
+  `shareRwf` (gross credits and shares), `deductionRwf`, `paidRwf`, `balanceRwf` and `status`,
+  largest balance first.
   `status` is `UNPAID` (nothing paid yet), `PART_PAID` or `PAID` (balance 0).
   `search` (name, member number or phone) and `status` filter the list only:
   `totalOwedRwf` (all balances) and `paidThisWeekRwf` (payments dated Monday to Sunday of the
@@ -699,7 +909,9 @@ Request body for `POST /api/payments`:
 ### Member statement
 
 `GET /api/members/{id}/statement` returns `grossShareRwf`, `deductionsRwf`, `paidRwf` and
-`owedRwf`, the member's `payments` (newest first) and `lotShares`: every lot the member
+`owedRwf` (the first two add up lot shares and sale credits), the member's `payments` (newest
+first), `saleCredits` (for each: `saleCode`, `soldAt`, `receiptCode`, `lotCode`, `kg`,
+`pricePerKg`, `grossRwf`, `deductionRwf`, `netRwf`) and `lotShares`: every lot the member
 delivered to, newest first. A shared lot shows the saved kg, percent and `shareRwf`. A lot
 that is not shared yet shows its status (`OPEN`, `CLOSED` or `SOLD`), the current kg and
 percent, and `shareRwf: null`, so the app can show "Waiting for sale" or "Waiting for
@@ -717,7 +929,7 @@ example 2026-10-19.") and not a future week (`400`). Without it, the current wee
 | `deliveries` | `totalKg`, `deliveries` (count), `byGrade` (kg and count per grade) and `byMember` (member number, name, kg per grade and total kg, highest total first) |
 | `stock` | `remainingKgNow` and `remainingByGradeNow` (the same as the stock page, at the time of the request), `lostKg` and `lossesByReason` for the week |
 | `sales` | one line per sale order (or per sale recorded on its own): code, date, buyer, lot codes, kg and RWF; `totalKg`, `totalAmountRwf`, `averagePricePerKg` |
-| `money` | `sharedRwf`, `shareDeductionsRwf`, `sharedNetRwf` for lots shared in the week; `paidRwf` and `paidByMethod` (CASH, MOMO, BANK); `owedNowRwf` |
+| `money` | `sharedRwf`, `shareDeductionsRwf`, `sharedNetRwf`: lots shared in the week plus the sale credits made in the week; `paidRwf` and `paidByMethod` (CASH, MOMO, BANK); `owedNowRwf` |
 | `confirmations` | `confirmedThisWeek` and `confirmedByMethod`; `pendingFromThisWeek` (the week's deliveries still pending), `pendingNow`, `disputedNow`; `disputesSettledThisWeek` |
 
 - **Same numbers as elsewhere:** kg per grade use the dashboard's query, stock comes from the stock
@@ -726,7 +938,7 @@ example 2026-10-19.") and not a future week (`400`). Without it, the current wee
   sales, losses and shares cannot be reversed.
 - **Which date counts:** deliveries by delivery time, sales by sale date, payments by payment date
   and losses by loss date, as on the other pages. Three things have no such date, so they use
-  another moment: shares use the time the lot was shared, `confirmedThisWeek` uses the time of the
+  another moment: shares use the time the lot was shared, sale credits the time of the sale, `confirmedThisWeek` uses the time of the
   confirmation (it may confirm a delivery from an earlier week), and `disputesSettledThisWeek` uses
   the time the dispute was resolved or the delivery reversed.
 - **Week boundary:** a delivery at 23:59 on Sunday belongs to that week, one at 00:00 on Monday to
@@ -775,10 +987,12 @@ Environment variables to set in Render:
 | `JAVA_TOOL_OPTIONS` | `-XX:MaxRAMPercentage=75 -XX:+UseSerialGC` |
 | `SMS_PROVIDER` | `africastalking` to send real SMS, otherwise leave it unset |
 | `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
+| `SMS_TRACCAR_TOKEN`, `SMS_TRACCAR_URL` | Only with `SMS_PROVIDER=traccar`: the gateway token and, if different, its `https` URL |
 | `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
+| `MOSIP_*` | To register members, with a real eSignet over `https`: `MOSIP_ENABLED`, `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY_PATH` (a secret file mounted on the service) and `MOSIP_KEY_ID` |
 
 Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app
-refuses to start if it is `true` with `SMS_PROVIDER=africastalking`.
+refuses to start if it is `true` with any provider but `log`.
 
 Do not set `PORT`; Render sets it. `JAVA_TOOL_OPTIONS` keeps the JVM within the
 512 MB memory limit of the free plan.
@@ -803,10 +1017,13 @@ The tests do not need a database. They cover the ledger hash chain, the ledger s
 validation, the member service (create, update, duplicates, not found, activate and
 deactivate), the member endpoints (validation errors, `401` without a token), recording
 deliveries (deduction, lot assignment, idempotency, ledger entry), lots (remaining kg,
-closing, stock), losses, buyers and sales (closed lot only, remaining kg, `SOLD` at 0,
-floor price warning, idempotency, ledger entries), sharing (the 10,000 kg example, rounding
-remainder, sold lots only, no double sharing, ledger entries), payments (owed math,
-overpayment, MoMo reference, idempotency) and member statements.
+closing, stock per grade), losses, batches, buyers and sales by grade (oldest batches first
+across lots, confirmed batches only, credits adding up to the sale total, skipping with a reason,
+lock order, `SOLD` at 0, floor price warning, idempotency, ledger entries), sharing (the 10,000 kg
+example, rounding remainder, refused for lots with sales), payments (owed math,
+overpayment, MoMo reference, idempotency), member statements and identity verification (the key file
+and startup checks, PKCE, the signed assertion, the token and userinfo checks with a fake eSignet, the matching rules, the three
+attempts, and that nothing personal is logged or stored). What only the real eSignet can show is listed in Identity verification.
 
 ## Author
 

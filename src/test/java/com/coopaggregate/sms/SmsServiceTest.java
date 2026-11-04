@@ -15,6 +15,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -33,6 +35,8 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.RestClient;
 
 import com.coopaggregate.delivery.ConfirmationCodes;
 import com.coopaggregate.delivery.ConfirmationMethod;
@@ -54,6 +58,8 @@ class SmsServiceTest {
 
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(4);
     private SmsLogRepository smsLogRepository;
+    private DeliveryRepository deliveryRepository;
+    private SettingRepository settingRepository;
     private SmsSender smsSender;
     private Setting setting;
     private Delivery delivery;
@@ -62,10 +68,11 @@ class SmsServiceTest {
     @BeforeEach
     void setUp() {
         smsLogRepository = mock(SmsLogRepository.class);
-        DeliveryRepository deliveryRepository = mock(DeliveryRepository.class);
-        SettingRepository settingRepository = mock(SettingRepository.class);
+        deliveryRepository = mock(DeliveryRepository.class);
+        settingRepository = mock(SettingRepository.class);
         smsSender = mock(SmsSender.class);
         when(smsSender.name()).thenReturn("test");
+        when(smsSender.supportsInboundReplies()).thenReturn(true);
 
         setting = new Setting();
         when(settingRepository.findById(1L)).thenReturn(Optional.of(setting));
@@ -94,8 +101,21 @@ class SmsServiceTest {
         assertEquals("+250788123456", sms.getValue().getPhone());
         assertEquals(SmsStatus.QUEUED, sms.getValue().getStatus());
         assertEquals(0, sms.getValue().getSendNumber());
+        assertEquals(SmsMessageType.DELIVERY_CODE, sms.getValue().getMessageType());
         assertEquals(MASKED, sms.getValue().getMessage());
         assertNull(delivery.getConfirmationCodeHash());
+    }
+
+    @Test
+    void withAProviderThatCannotPassOnRepliesTheMessageDoesNotAskForOne() {
+        when(smsSender.supportsInboundReplies()).thenReturn(false);
+
+        service.queueCodeMessage(42L, 0);
+
+        ArgumentCaptor<SmsLog> sms = ArgumentCaptor.forClass(SmsLog.class);
+        verify(smsLogRepository).save(sms.capture());
+        assertEquals("CoopAggregate: RCT-7K2Q, 300 kg Big, 19/10. If correct, give the manager code ******. "
+                + "If the code is wrong, tell the manager.", sms.getValue().getMessage());
     }
 
     @Test
@@ -108,7 +128,8 @@ class SmsServiceTest {
 
     @Test
     void theSameMessageIsQueuedOnlyOnce() {
-        when(smsLogRepository.existsByDeliveryIdAndSendNumber(42L, 0)).thenReturn(true);
+        when(smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumber(42L, SmsMessageType.DELIVERY_CODE, 0))
+                .thenReturn(true);
 
         assertTrue(service.queueCodeMessage(42L, 0).isEmpty());
         verify(smsLogRepository, never()).save(any());
@@ -205,7 +226,8 @@ class SmsServiceTest {
     @Test
     void olderCodeIsNotSentOnceANewerOneWasRequested() {
         SmsLog sms = queuedCodeMessage(0);
-        when(smsLogRepository.existsByDeliveryIdAndSendNumberGreaterThan(42L, 0)).thenReturn(true);
+        when(smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumberGreaterThan(42L,
+                SmsMessageType.DELIVERY_CODE, 0)).thenReturn(true);
 
         service.trySend(7L);
 
@@ -270,6 +292,169 @@ class SmsServiceTest {
         service.trySend(7L);
 
         verify(smsSender, never()).send(anyString(), anyString());
+    }
+
+    // --- Receipt ---
+
+    private static final String RECEIPT = "Koperative Intagamburuzwa: delivery RCT-7K2Q confirmed. 300 kg Big, 19/10. "
+            + "Thank you.";
+
+    @Test
+    void aConfirmedDeliveryGetsOneReceiptInTheMembersLanguage() {
+        delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+
+        assertEquals(Optional.of(7L), service.queueReceipt(42L));
+
+        ArgumentCaptor<SmsLog> sms = ArgumentCaptor.forClass(SmsLog.class);
+        verify(smsLogRepository).save(sms.capture());
+        assertEquals(SmsMessageType.RECEIPT, sms.getValue().getMessageType());
+        assertEquals(0, sms.getValue().getSendNumber());
+        assertEquals(SmsStatus.QUEUED, sms.getValue().getStatus());
+        assertEquals("+250788123456", sms.getValue().getPhone());
+        assertEquals(RECEIPT, sms.getValue().getMessage());
+    }
+
+    @Test
+    void theReceiptIsInKinyarwandaForAKinyarwandaMember() {
+        delivery.getMember().setPreferredLanguage("rw");
+        delivery.confirm(ConfirmationMethod.MANAGER_REVIEW, Instant.now());
+
+        service.queueReceipt(42L);
+
+        ArgumentCaptor<SmsLog> sms = ArgumentCaptor.forClass(SmsLog.class);
+        verify(smsLogRepository).save(sms.capture());
+        assertEquals("Koperative Intagamburuzwa: ibyo watanze RCT-7K2Q byemejwe. kg 300 Big, 19/10. Murakoze.",
+                sms.getValue().getMessage());
+    }
+
+    @Test
+    void noReceiptWhenSmsAreTurnedOff() {
+        setting.setSmsEnabled(false);
+        delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+
+        assertTrue(service.queueReceipt(42L).isEmpty());
+        verify(smsLogRepository, never()).save(any());
+    }
+
+    @Test
+    void atMostOneReceiptPerDeliveryEvenIfTheConfirmationRunsAgain() {
+        delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+        when(smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumber(42L, SmsMessageType.RECEIPT, 0))
+                .thenReturn(true);
+
+        assertTrue(service.queueReceipt(42L).isEmpty());
+        verify(smsLogRepository, never()).save(any());
+    }
+
+    @Test
+    void aCodeMessageDoesNotCountAsTheReceipt() {
+        delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+        when(smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumber(42L, SmsMessageType.DELIVERY_CODE, 0))
+                .thenReturn(true);
+
+        assertEquals(Optional.of(7L), service.queueReceipt(42L));
+    }
+
+    @Test
+    void noReceiptForADeliveryThatIsNotConfirmed() {
+        assertTrue(service.queueReceipt(42L).isEmpty());
+
+        delivery.dispute(com.coopaggregate.delivery.DisputeReason.OTHER, null, Instant.now());
+        assertTrue(service.queueReceipt(42L).isEmpty());
+
+        verify(smsLogRepository, never()).save(any());
+    }
+
+    @Test
+    void noReceiptForADeliveryRecordedBeforeConfirmationExisted() {
+        delivery.confirm(ConfirmationMethod.RECORDED_BEFORE_CONFIRMATION, Instant.now());
+
+        assertTrue(service.queueReceipt(42L).isEmpty());
+        verify(smsLogRepository, never()).save(any());
+    }
+
+    @Test
+    void aDeliveryRecordedBeforeConfirmationGetsAReceiptOnceItIsConfirmedLater() {
+        delivery.confirm(ConfirmationMethod.RECORDED_BEFORE_CONFIRMATION, Instant.now());
+        delivery.dispute(com.coopaggregate.delivery.DisputeReason.WRONG_KG, null, Instant.now());
+        delivery.confirmByManagerReview("Checked", Instant.now());
+
+        assertEquals(Optional.of(7L), service.queueReceipt(42L));
+    }
+
+    @Test
+    void theReceiptIsSentAsSavedWithoutTouchingTheCode() {
+        delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+        SmsLog sms = queuedReceipt();
+
+        service.trySend(7L);
+
+        verify(smsSender).send("+250788123456", RECEIPT);
+        assertEquals(SmsStatus.SENT, sms.getStatus());
+        assertNull(delivery.getConfirmationCodeHash());
+    }
+
+    @Test
+    void anUnsentReceiptIsCancelledWhenTheDeliveryIsDisputedOrReversedFirst() {
+        delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+        SmsLog sms = queuedReceipt();
+        delivery.dispute(com.coopaggregate.delivery.DisputeReason.OTHER, null, Instant.now());
+
+        service.trySend(7L);
+
+        verify(smsSender, never()).send(anyString(), anyString());
+        assertEquals(SmsStatus.CANCELLED, sms.getStatus());
+        assertEquals("The delivery is DISPUTED.", sms.getLastError());
+    }
+
+    @Test
+    void aReceiptThatFailsIsRecordedForRetryAndLeavesTheDeliveryConfirmed() {
+        delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+        SmsLog sms = queuedReceipt();
+        doThrow(new SmsSendException("Traccar SMS Gateway request failed: HTTP 500"))
+                .when(smsSender).send(anyString(), anyString());
+
+        service.trySend(7L);
+
+        assertEquals(SmsStatus.FAILED, sms.getStatus());
+        assertEquals(1, sms.getAttempts());
+        assertEquals("Traccar SMS Gateway request failed: HTTP 500", sms.getLastError());
+        assertEquals(com.coopaggregate.delivery.ConfirmationStatus.CONFIRMED, delivery.getConfirmationStatus());
+    }
+
+    @Test
+    void aFailedReceiptLogsNoSecretAndNoFullPhoneNumber(CapturedOutput output) {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer gateway = MockRestServiceServer.bindTo(builder).build();
+        String token = "tr4ccar-secret-token-9f3a";
+        SmsService traccar = new SmsService(smsLogRepository, deliveryRepository, settingRepository,
+                new TraccarSmsSender(builder.build(), "https://www.traccar.org/sms/", token),
+                new ConfirmationCodes(encoder));
+        gateway.expect(requestTo("https://www.traccar.org/sms/"))
+                .andRespond(withServerError().body("{\"error\":\"" + token + " +250788123456\"}"));
+        delivery.confirm(ConfirmationMethod.OTP, Instant.now());
+        SmsLog sms = queuedReceipt();
+
+        traccar.trySend(7L);
+
+        String logs = output.getAll();
+        assertEquals(SmsStatus.FAILED, sms.getStatus());
+        assertTrue(logs.contains("could not be sent"), logs);
+        assertFalse(logs.contains(token), logs);
+        assertFalse(logs.contains("788123456"), logs);
+        assertFalse(logs.contains("Thank you"), logs);
+        assertFalse(sms.getLastError().contains("788123456"), sms.getLastError());
+    }
+
+    private SmsLog queuedReceipt() {
+        SmsLog sms = new SmsLog();
+        ReflectionTestUtils.setField(sms, "id", 7L);
+        sms.setDelivery(delivery);
+        sms.setMessageType(SmsMessageType.RECEIPT);
+        sms.setPhone("+250788123456");
+        sms.setMessage(RECEIPT);
+        when(smsLogRepository.findById(7L)).thenReturn(Optional.of(sms));
+        return sms;
     }
 
     @Test

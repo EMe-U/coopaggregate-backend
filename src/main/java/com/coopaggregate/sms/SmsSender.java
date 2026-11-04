@@ -8,4 +8,10 @@ public interface SmsSender {
 
     /** Short name stored with each message, for example "log" or "africastalking". */
     String name();
+
+    /**
+     * Whether members' replies reach the SMS reply webhook through this provider. Only then may a message tell the
+     * member to reply.
+     */
+    boolean supportsInboundReplies();
 }

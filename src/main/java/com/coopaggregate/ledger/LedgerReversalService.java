@@ -48,12 +48,14 @@ public class LedgerReversalService {
                     "Shares cannot be reversed: the lot's money has already been divided between its members.");
             case SALE -> throw new IllegalStateException(saleMessage(recordId));
             case LOSS -> throw new IllegalStateException(lossMessage(recordId));
+            case SALE_CREDIT -> throw new IllegalStateException(
+                    "A member's credit from a sale cannot be reversed on its own.");
         };
     }
 
     private String saleMessage(Long saleId) {
         boolean shared = saleRepository.findById(saleId)
-                .map(sale -> sale.getLot().getStatus() == LotStatus.SHARED)
+                .map(sale -> sale.getLot() != null && sale.getLot().getStatus() == LotStatus.SHARED)
                 .orElse(false);
         return shared
                 ? "The sale's lot has already been shared, so the sale can no longer be reversed."

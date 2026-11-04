@@ -81,14 +81,16 @@ class BuyerRequestControllerTest {
     void listUsesFifteenPerPageAndTheFilters() throws Exception {
         when(requestService.list(BuyerRequestStatus.PENDING, "kalisa", 0, 15)).thenReturn(new PageResponse<>(
                 List.of(new BuyerRequestListItem(5L, "BR-2026-7K2Q", BuyerRequestStatus.PENDING, "Big",
-                        new BigDecimal("250.50"), "Kalisa Traders", "+250788123456", false,
-                        Instant.parse("2026-10-22T08:00:00Z"))), 0, 15, 1, 1));
+                        new BigDecimal("250.50"), "Kalisa Traders", "+250788123456", BuyerContactMethod.WHATSAPP,
+                        "+250788999999", false, Instant.parse("2026-10-22T08:00:00Z"))), 0, 15, 1, 1));
 
         mockMvc.perform(get("/api/buyer-requests").param("status", "PENDING").param("search", "kalisa")
                         .header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].code").value("BR-2026-7K2Q"))
                 .andExpect(jsonPath("$.content[0].buyerName").value("Kalisa Traders"))
+                .andExpect(jsonPath("$.content[0].contactMethod").value("WHATSAPP"))
+                .andExpect(jsonPath("$.content[0].whatsappNumber").value("+250788999999"))
                 .andExpect(jsonPath("$.content[0].converted").value(false))
                 .andExpect(jsonPath("$.size").value(15));
     }
@@ -124,14 +126,16 @@ class BuyerRequestControllerTest {
         when(requestService.changeStatus(eq(5L), any(BuyerRequestStatusUpdate.class), eq(manager))).thenReturn(
                 new BuyerRequestDetail(5L, "BR-2026-7K2Q", BuyerRequestStatus.ACCEPTED, "A", "Big",
                         new BigDecimal("250.50"), "Kalisa Traders", "+250788123456", "kalisa@example.com",
-                        "Friday", "We will call you.", null, Instant.parse("2026-10-22T08:00:00Z"),
-                        Instant.parse("2026-10-22T09:00:00Z")));
+                        BuyerContactMethod.CALL, null, "Friday", "We will call you.", null,
+                        Instant.parse("2026-10-22T08:00:00Z"), Instant.parse("2026-10-22T09:00:00Z")));
 
         mockMvc.perform(patch("/api/buyer-requests/5/status").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"status\": \"ACCEPTED\", \"publicMessage\": \"We will call you.\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACCEPTED"))
+                .andExpect(jsonPath("$.contactMethod").value("CALL"))
+                .andExpect(jsonPath("$.whatsappNumber").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.publicMessage").value("We will call you."));
         verify(requestService).changeStatus(eq(5L), eq(new BuyerRequestStatusUpdate(BuyerRequestStatus.ACCEPTED,
                 "We will call you.")), eq(manager));
@@ -141,8 +145,8 @@ class BuyerRequestControllerTest {
     void conversionReturnsTheRequestWithItsBuyer() throws Exception {
         when(requestService.convertToBuyer(5L, manager)).thenReturn(
                 new BuyerRequestDetail(5L, "BR-2026-7K2Q", BuyerRequestStatus.ACCEPTED, "A", "Big",
-                        new BigDecimal("250.50"), "Kalisa Traders", "+250788123456", null, null, null, 12L,
-                        Instant.parse("2026-10-22T08:00:00Z"), null));
+                        new BigDecimal("250.50"), "Kalisa Traders", "+250788123456", null, BuyerContactMethod.CALL,
+                        null, null, null, 12L, Instant.parse("2026-10-22T08:00:00Z"), null));
 
         mockMvc.perform(post("/api/buyer-requests/5/buyer").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())

@@ -33,6 +33,11 @@ class LogSmsSenderTest {
     }
 
     @Test
+    void doesNotPassRepliesOn() {
+        assertFalse(new LogSmsSender(false).supportsInboundReplies());
+    }
+
+    @Test
     void showingCodesIsAllowedWithTheLogProvider() {
         assertDoesNotThrow(() -> new SmsCodeLoggingGuard("log", true));
         assertDoesNotThrow(() -> new SmsCodeLoggingGuard("africastalking", false));

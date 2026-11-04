@@ -198,8 +198,8 @@ class ReportServiceTest {
     @Test
     void stockIsTheStockPageNowAndLossesAreByReason() {
         when(lotService.stock()).thenReturn(stock(new BigDecimal("550.00"), List.of(
-                new StockResponse.GradeStock("Big", new BigDecimal("250.00")),
-                new StockResponse.GradeStock("Normal", new BigDecimal("300.00")))));
+                new StockResponse.GradeStock("Big", new BigDecimal("250.00"), new BigDecimal("250.00"), BigDecimal.ZERO, BigDecimal.ZERO),
+                new StockResponse.GradeStock("Normal", new BigDecimal("300.00"), new BigDecimal("300.00"), BigDecimal.ZERO, BigDecimal.ZERO))));
         when(reportRepository.findLossKgByReasonBetween(MONDAY, SUNDAY)).thenReturn(List.of(
                 new ReasonKg(LossReason.ROT, new BigDecimal("12.50")),
                 new ReasonKg(LossReason.THEFT, new BigDecimal("3.00"))));
@@ -216,6 +216,24 @@ class ReportServiceTest {
                 new WeeklyReport.ReasonLine(LossReason.DAMAGE, BigDecimal.ZERO),
                 new WeeklyReport.ReasonLine(LossReason.THEFT, new BigDecimal("3.00")),
                 new WeeklyReport.ReasonLine(LossReason.OTHER, BigDecimal.ZERO)), stock.lossesByReason());
+    }
+
+    @Test
+    void aSaleByGradeListsTheLotsOfItsBatches() {
+        Sale gradeSale = sale(20L, "SAL-DDDD", "unused", buyer("Kalisa Traders"), null, "250.00", 75_000L,
+                LocalDate.of(2026, 10, 21));
+        gradeSale.setLot(null);
+        when(reportRepository.findSalesBetween(MONDAY, SUNDAY)).thenReturn(List.of(gradeSale));
+        when(reportRepository.findSaleLotCodesBetween(MONDAY, SUNDAY)).thenReturn(List.of(
+                new SaleLotCode(20L, "B-2026-01"), new SaleLotCode(20L, "A-2026-02"),
+                new SaleLotCode(20L, "A-2026-02"), new SaleLotCode(99L, "C-2026-01")));
+        when(saleRepository.totalKgBetween(MONDAY, SUNDAY)).thenReturn(new BigDecimal("250.00"));
+        when(saleRepository.totalAmountBetween(MONDAY, SUNDAY)).thenReturn(75_000L);
+
+        WeeklyReport.Sales sales = service.weekly(MONDAY, TODAY).sales();
+
+        assertEquals(List.of(new WeeklyReport.SaleLine("SAL-DDDD", LocalDate.of(2026, 10, 21), "Kalisa Traders",
+                List.of("A-2026-02", "B-2026-01"), new BigDecimal("250.00"), 75_000L)), sales.sales());
     }
 
     @Test
@@ -264,6 +282,21 @@ class ReportServiceTest {
                 new WeeklyReport.MethodLine(PaymentMethod.MOMO, 400_000L),
                 new WeeklyReport.MethodLine(PaymentMethod.BANK, 0)), money.paidByMethod());
         assertEquals(1_321_600L, money.owedNowRwf());
+    }
+
+    @Test
+    void saleCreditsByBatchInTheWeekCountAsSharedMoney() {
+        when(reportRepository.sumSharedBetween(FROM, TO)).thenReturn(2_952_000L);
+        when(reportRepository.sumShareDeductionsBetween(FROM, TO)).thenReturn(50_000L);
+        when(reportRepository.sumCreditedBetween(FROM, TO)).thenReturn(30_000L);
+        when(reportRepository.sumCreditDeductionsBetween(FROM, TO)).thenReturn(500L);
+        when(paymentService.balances(null, null)).thenReturn(new BalancesResponse(0, 0, List.of()));
+
+        WeeklyReport.Money money = service.weekly(MONDAY, TODAY).money();
+
+        assertEquals(2_982_000L, money.sharedRwf());
+        assertEquals(50_500L, money.shareDeductionsRwf());
+        assertEquals(2_931_500L, money.sharedNetRwf());
     }
 
     @Test
@@ -343,7 +376,7 @@ class ReportServiceTest {
     }
 
     static StockResponse stock(BigDecimal remaining, List<StockResponse.GradeStock> byGrade) {
-        return new StockResponse(remaining, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, 0, 0, 0, byGrade);
+        return new StockResponse(remaining, remaining, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0, 0, 0, byGrade);
     }
 }

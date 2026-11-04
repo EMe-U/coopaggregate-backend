@@ -35,6 +35,9 @@ public class SmsLog {
     // The text as sent, except that a one-time code is replaced by SmsMessages.CODE_MASK.
     private String message;
 
+    @Enumerated(EnumType.STRING)
+    private SmsMessageType messageType = SmsMessageType.DELIVERY_CODE;
+
     // 0 for a delivery's first message, 1 to 3 for codes the manager sent again.
     private int sendNumber;
 
@@ -87,6 +90,14 @@ public class SmsLog {
 
     public void setMessage(String message) {
         this.message = message;
+    }
+
+    public SmsMessageType getMessageType() {
+        return messageType;
+    }
+
+    public void setMessageType(SmsMessageType messageType) {
+        this.messageType = messageType;
     }
 
     public int getSendNumber() {

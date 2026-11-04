@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
@@ -36,12 +37,15 @@ import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.member.Member;
 import com.coopaggregate.member.MemberRepository;
+import com.coopaggregate.sale.SaleRepository;
 
 class SharingServiceTest {
 
     private LotShareRepository lotShareRepository;
     private LedgerService ledgerService;
     private DeliveryRepository deliveryRepository;
+    private SaleRepository saleRepository;
+    private SaleAllocationRepository saleAllocationRepository;
     private Lot lot;
     private Manager manager;
     private SharingService service;
@@ -85,8 +89,44 @@ class SharingServiceTest {
 
         manager = new Manager();
         deliveryRepository = mock(DeliveryRepository.class);
+        saleRepository = mock(SaleRepository.class);
+        saleAllocationRepository = mock(SaleAllocationRepository.class);
         service = new SharingService(lotShareRepository, lotRepository, lotService, memberRepository, ledgerService,
-                deliveryRepository);
+                deliveryRepository, saleRepository, saleAllocationRepository);
+    }
+
+    // The sharing arithmetic above is for a lot without sales; a lot with sales is refused (see below).
+    @Test
+    void lotWithSalesCannotBeSharedOrPreviewed() {
+        when(saleRepository.existsByLotId(3L)).thenReturn(true);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.share(3L, manager));
+        assertEquals("Lot A-2026-01 has sales, and sales are paid to the members by batch. Sharing the lot as well "
+                + "would pay them twice, so it cannot be shared.", e.getMessage());
+        assertThrows(IllegalStateException.class, () -> service.preview(3L));
+        verify(lotShareRepository, never()).save(any());
+        verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
+        assertEquals(LotStatus.SOLD, lot.getStatus());
+    }
+
+    @Test
+    void lotWhoseBatchesWereSoldBySalesByGradeCannotBeShared() {
+        lot.setStatus(LotStatus.CLOSED);
+        when(saleAllocationRepository.existsByDeliveryLotId(3L)).thenReturn(true);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.share(3L, manager));
+
+        assertEquals(true, e.getMessage().contains("has sales"));
+        verify(lotShareRepository, never()).save(any());
+    }
+
+    @Test
+    void lotAlreadySharedStillSaysSo() {
+        lot.setStatus(LotStatus.SHARED);
+        when(saleRepository.existsByLotId(3L)).thenReturn(true);
+
+        assertEquals("Lot A-2026-01 has already been shared.",
+                assertThrows(IllegalStateException.class, () -> service.share(3L, manager)).getMessage());
     }
 
     @Test

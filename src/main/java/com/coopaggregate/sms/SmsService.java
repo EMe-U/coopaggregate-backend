@@ -13,10 +13,12 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.delivery.ConfirmationCodes;
+import com.coopaggregate.delivery.ConfirmationMethod;
 import com.coopaggregate.delivery.ConfirmationStatus;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.member.Member;
+import com.coopaggregate.setting.Setting;
 import com.coopaggregate.setting.SettingRepository;
 
 /**
@@ -55,7 +57,8 @@ public class SmsService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Optional<Long> queueCodeMessage(Long deliveryId, int sendNumber) {
         boolean smsEnabled = settingRepository.findById(1L).map(setting -> setting.isSmsEnabled()).orElse(false);
-        if (!smsEnabled || smsLogRepository.existsByDeliveryIdAndSendNumber(deliveryId, sendNumber)) {
+        if (!smsEnabled || smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumber(deliveryId,
+                SmsMessageType.DELIVERY_CODE, sendNumber)) {
             return Optional.empty();
         }
         Delivery delivery = deliveryRepository.findById(deliveryId).orElseThrow();
@@ -64,11 +67,43 @@ public class SmsService {
         SmsLog sms = new SmsLog();
         sms.setMember(member);
         sms.setDelivery(delivery);
+        sms.setMessageType(SmsMessageType.DELIVERY_CODE);
         sms.setSendNumber(sendNumber);
         sms.setPhone(member.getPhone());
         sms.setMessage(SmsMessages.deliveryCode(member.getPreferredLanguage(), delivery.getReceiptCode(),
                 delivery.getQuantityKg(), delivery.getLot().getGrade().getName(), delivery.getDeliveredAt(),
-                SmsMessages.CODE_MASK));
+                SmsMessages.CODE_MASK, smsSender.supportsInboundReplies()));
+        return Optional.of(smsLogRepository.save(sms).getId());
+    }
+
+    /**
+     * Saves the receipt for a confirmed delivery as QUEUED. At most one per delivery, however often the
+     * confirmation runs (the unique index on sms_log backs this up). Empty when SMS are turned off, the receipt
+     * already exists, or the delivery is not, or no longer, confirmed.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Optional<Long> queueReceipt(Long deliveryId) {
+        Setting setting = settingRepository.findById(1L).orElse(null);
+        if (setting == null || !setting.isSmsEnabled()
+                || smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumber(deliveryId,
+                        SmsMessageType.RECEIPT, 0)) {
+            return Optional.empty();
+        }
+        Delivery delivery = deliveryRepository.findById(deliveryId).orElseThrow();
+        if (reasonNotToSendReceipt(delivery) != null) {
+            return Optional.empty();
+        }
+        Member member = delivery.getMember();
+
+        SmsLog sms = new SmsLog();
+        sms.setMember(member);
+        sms.setDelivery(delivery);
+        sms.setMessageType(SmsMessageType.RECEIPT);
+        sms.setSendNumber(0);
+        sms.setPhone(member.getPhone());
+        sms.setMessage(SmsMessages.receipt(member.getPreferredLanguage(), setting.getCooperativeName(),
+                delivery.getReceiptCode(), delivery.getQuantityKg(), delivery.getLot().getGrade().getName(),
+                delivery.getDeliveredAt()));
         return Optional.of(smsLogRepository.save(sms).getId());
     }
 
@@ -86,7 +121,14 @@ public class SmsService {
         String text = sms.getMessage();
         String code = null;
         Delivery delivery = null;
-        if (sms.getDelivery() != null && text.contains(SmsMessages.CODE_MASK)) {
+        if (sms.getMessageType() == SmsMessageType.RECEIPT && sms.getDelivery() != null) {
+            String reason = reasonNotToSendReceipt(
+                    deliveryRepository.findById(sms.getDelivery().getId()).orElseThrow());
+            if (reason != null) {
+                sms.cancel(reason);
+                return;
+            }
+        } else if (sms.getDelivery() != null && text.contains(SmsMessages.CODE_MASK)) {
             delivery = deliveryRepository.findForUpdateById(sms.getDelivery().getId()).orElseThrow();
             String reason = reasonNotToSend(sms, delivery);
             if (reason != null) {
@@ -112,6 +154,21 @@ public class SmsService {
         }
     }
 
+    // A receipt is only true while the delivery stays confirmed: a later dispute or reversal cancels an unsent one.
+    // Deliveries recorded before confirmation existed never get one: they were never confirmed by anyone.
+    private static String reasonNotToSendReceipt(Delivery delivery) {
+        if (delivery.isReversed()) {
+            return "The delivery was reversed.";
+        }
+        if (delivery.getConfirmationStatus() != ConfirmationStatus.CONFIRMED) {
+            return "The delivery is " + delivery.getConfirmationStatus() + ".";
+        }
+        if (delivery.getConfirmationMethod() == ConfirmationMethod.RECORDED_BEFORE_CONFIRMATION) {
+            return "The delivery was recorded before confirmation existed.";
+        }
+        return null;
+    }
+
     // A code is only worth sending while the delivery waits for one and no newer code was asked for.
     private String reasonNotToSend(SmsLog sms, Delivery delivery) {
         if (delivery.isReversed()) {
@@ -120,7 +177,8 @@ public class SmsService {
         if (delivery.getConfirmationStatus() != ConfirmationStatus.PENDING) {
             return "The delivery is already " + delivery.getConfirmationStatus() + ".";
         }
-        if (smsLogRepository.existsByDeliveryIdAndSendNumberGreaterThan(delivery.getId(), sms.getSendNumber())) {
+        if (smsLogRepository.existsByDeliveryIdAndMessageTypeAndSendNumberGreaterThan(delivery.getId(),
+                SmsMessageType.DELIVERY_CODE, sms.getSendNumber())) {
             return "A newer code was requested.";
         }
         return null;

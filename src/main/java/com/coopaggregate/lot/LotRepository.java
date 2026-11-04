@@ -47,13 +47,17 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
     Page<Lot> findAll(Specification<Lot> spec, Pageable pageable);
 
     // One query for a whole page of lots; the remaining kg is derived from these sums, never stored.
+    // Sold kg are the kg that sales took from the lot's batches. A sale by grade has no lot of its own, so they are
+    // not summed from the sale rows. The sale amount is the total of the sales made from this lot before sales by
+    // grade, plus what sales by grade credited for its batches.
     @Query("""
             SELECT new com.coopaggregate.lot.LotQuantities(
                 l.id,
                 (SELECT SUM(d.quantityKg) FROM Delivery d WHERE d.lot.id = l.id AND d.reversedAt IS NULL),
                 (SELECT SUM(x.quantityKg) FROM Loss x WHERE x.lot.id = l.id),
-                (SELECT SUM(s.quantityKg) FROM Sale s WHERE s.lot.id = l.id),
-                (SELECT SUM(s2.totalAmount) FROM Sale s2 WHERE s2.lot.id = l.id),
+                (SELECT SUM(a.quantityKg) FROM SaleAllocation a WHERE a.delivery.lot.id = l.id),
+                (COALESCE((SELECT SUM(s2.totalAmount) FROM Sale s2 WHERE s2.lot.id = l.id), 0)
+                    + COALESCE((SELECT SUM(a2.grossRwf) FROM SaleAllocation a2 WHERE a2.delivery.lot.id = l.id), 0)),
                 (SELECT COUNT(DISTINCT d2.member.id) FROM Delivery d2
                     WHERE d2.lot.id = l.id AND d2.reversedAt IS NULL),
                 (SELECT SUM(d3.quantityKg) FROM Delivery d3
@@ -63,6 +67,16 @@ public interface LotRepository extends JpaRepository<Lot, Long>, JpaSpecificatio
             WHERE l.id IN :lotIds
             """)
     List<LotQuantities> findQuantities(Collection<Long> lotIds);
+
+    // Kg left per grade, read from the batches (deliveries) whatever their lot, split by confirmation status. Reversed
+    // deliveries are not batches. Only confirmed kg can be sold.
+    @Query("""
+            SELECT new com.coopaggregate.lot.GradeKgLeft(g.code, g.name, d.confirmationStatus, SUM(d.remainingKg))
+            FROM Delivery d JOIN d.lot l JOIN l.grade g
+            WHERE d.reversedAt IS NULL AND d.remainingKg > 0
+            GROUP BY g.code, g.name, d.confirmationStatus
+            """)
+    List<GradeKgLeft> findKgLeftByGradeAndStatus();
 
     @Query("""
             SELECT new com.coopaggregate.lot.LotMemberResponse(m.id, m.fullName, m.memberCode, SUM(d.quantityKg))

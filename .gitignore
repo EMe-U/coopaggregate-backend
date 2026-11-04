@@ -8,6 +8,11 @@ target/
 # Environment
 .env
 
+# Private keys and JWKs (the identity provider key lives outside the repository)
+*.pem
+*.jwk
+keys/
+
 # Logs
 logs/
 *.log

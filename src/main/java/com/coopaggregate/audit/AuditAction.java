@@ -9,12 +9,17 @@ public enum AuditAction {
     PASSWORD_CHANGED,
     CONFIRMATION_CODE_RESENT,
     DELIVERY_REVIEWED,
-    // From identity verification, which was removed until the real service is ready. Kept so old history
-    // entries still load (like PIN_SET and PIN_RESET).
+    // Results of identity verification at registration. The details never hold personal data or tokens.
     IDENTITY_VERIFIED,
     IDENTITY_DUPLICATE,
+    // The registration did not match the person who verified. The details name the fields, never their values.
+    IDENTITY_MISMATCH,
     IDENTITY_VERIFICATION_FAILED,
     // Changes the manager makes to buyers' purchase requests. The details hold the request code, not personal data.
     BUYER_REQUEST_STATUS_CHANGED,
-    BUYER_REQUEST_CONVERTED
+    BUYER_REQUEST_CONVERTED,
+    // A sale passed over the oldest batches. The details hold the sale code, the receipt codes and the reason.
+    SALE_FIFO_SKIPPED,
+    // TEMPORARY, for the demo only: a delivery confirmed with SMS_DEMO_CODE. The details never hold the code.
+    DEMO_CODE_CONFIRMATION
 }

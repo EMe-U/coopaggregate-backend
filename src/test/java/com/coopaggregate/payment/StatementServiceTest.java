@@ -15,11 +15,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.batch.SaleAllocation;
+import com.coopaggregate.batch.SaleAllocationRepository;
+import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotQuantities;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.member.MemberRepository;
+import com.coopaggregate.sale.Sale;
 import com.coopaggregate.share.LotShare;
 import com.coopaggregate.share.LotShareRepository;
 import com.coopaggregate.share.MemberLotKg;
@@ -32,6 +36,7 @@ class StatementServiceTest {
     private LotShareRepository lotShareRepository;
     private LotRepository lotRepository;
     private ProducePaymentRepository paymentRepository;
+    private SaleAllocationRepository saleAllocationRepository;
     private StatementService service;
 
     @BeforeEach
@@ -40,7 +45,9 @@ class StatementServiceTest {
         lotShareRepository = mock(LotShareRepository.class);
         lotRepository = mock(LotRepository.class);
         paymentRepository = mock(ProducePaymentRepository.class);
-        service = new StatementService(memberRepository, lotShareRepository, lotRepository, paymentRepository);
+        saleAllocationRepository = mock(SaleAllocationRepository.class);
+        service = new StatementService(memberRepository, lotShareRepository, lotRepository, paymentRepository,
+                saleAllocationRepository);
         when(memberRepository.existsById(1L)).thenReturn(true);
     }
 
@@ -86,6 +93,32 @@ class StatementServiceTest {
     }
 
     @Test
+    void saleCreditsByBatchAreListedAndAddedToTheShares() {
+        Lot shared = new Lot();
+        ReflectionTestUtils.setField(shared, "id", 3L);
+        LotShare share = new LotShare();
+        share.setLot(shared);
+        share.setMemberKg(new BigDecimal("5000.00"));
+        share.setLotKg(new BigDecimal("10000.00"));
+        share.setShareAmount(1_476_000L);
+        share.setDeductionAmount(25_000L);
+        when(lotShareRepository.findByMemberId(1L)).thenReturn(List.of(share));
+        when(lotShareRepository.findLotsOfMember(1L)).thenReturn(List.of());
+        when(saleAllocationRepository.findCreditsOfMember(1L)).thenReturn(List.of(
+                credit("SAL-7K2Q", "RCT-AB12", "A-2026-03", "100.00", 300L, 30_000L, 500L)));
+        when(paymentRepository.findByMemberIdAndReversedAtIsNullOrderByPaymentDateDescIdDesc(1L)).thenReturn(List.of(
+                payment("PAY-0001", LocalDate.of(2026, 10, 10), 1_000_000L, PaymentMethod.CASH, null)));
+
+        StatementResponse statement = service.statement(1L);
+
+        assertEquals(List.of(new StatementResponse.SaleCreditLine("SAL-7K2Q", LocalDate.of(2026, 10, 28), "RCT-AB12",
+                "A-2026-03", new BigDecimal("100.00"), 300L, 30_000L, 500L, 29_500L)), statement.saleCredits());
+        assertEquals(1_506_000L, statement.grossShareRwf());
+        assertEquals(25_500L, statement.deductionsRwf());
+        assertEquals(480_500L, statement.owedRwf());
+    }
+
+    @Test
     void memberWithoutActivityHasEmptyStatement() {
         when(lotShareRepository.findByMemberId(1L)).thenReturn(List.of());
         when(lotShareRepository.findLotsOfMember(1L)).thenReturn(List.of());
@@ -95,6 +128,7 @@ class StatementServiceTest {
 
         assertEquals(0L, statement.owedRwf());
         assertEquals(List.of(), statement.lotShares());
+        assertEquals(List.of(), statement.saleCredits());
     }
 
     @Test
@@ -102,6 +136,23 @@ class StatementServiceTest {
         EntityNotFoundException e = assertThrows(EntityNotFoundException.class, () -> service.statement(99L));
 
         assertEquals("Member 99 does not exist.", e.getMessage());
+    }
+
+    private static SaleAllocation credit(String saleCode, String receiptCode, String lotCode, String kg,
+                                         long pricePerKg, long gross, long deduction) {
+        Sale sale = new Sale();
+        sale.setSaleCode(saleCode);
+        sale.setSaleDate(LocalDate.of(2026, 10, 28));
+        sale.setPricePerKg(pricePerKg);
+        Lot lot = new Lot();
+        lot.setLotCode(lotCode);
+        Delivery batch = new Delivery();
+        batch.setReceiptCode(receiptCode);
+        batch.setLot(lot);
+        SaleAllocation credit = new SaleAllocation(sale, batch, new BigDecimal(kg));
+        ReflectionTestUtils.setField(credit, "grossRwf", gross);
+        ReflectionTestUtils.setField(credit, "deductionRwf", deduction);
+        return credit;
     }
 
     private static ProducePayment payment(String code, LocalDate date, long amount, PaymentMethod method,

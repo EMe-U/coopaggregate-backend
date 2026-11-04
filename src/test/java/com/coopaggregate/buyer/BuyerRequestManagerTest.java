@@ -146,6 +146,40 @@ class BuyerRequestManagerTest {
     }
 
     @Test
+    void detailOfARequestWithoutAChoiceIsCallWithoutAWhatsappNumber() {
+        // A request made before contact methods existed has the default.
+        BuyerRequestDetail detail = service.get(5L);
+
+        assertEquals(BuyerContactMethod.CALL, detail.contactMethod());
+        assertNull(detail.whatsappNumber());
+    }
+
+    @Test
+    void detailShowsTheWhatsappChoiceAndNumber() {
+        request.setContactMethod(BuyerContactMethod.WHATSAPP);
+        request.setWhatsappNumber("+250788999999");
+
+        BuyerRequestDetail detail = service.get(5L);
+
+        assertEquals(BuyerContactMethod.WHATSAPP, detail.contactMethod());
+        assertEquals("+250788999999", detail.whatsappNumber());
+        assertEquals("+250788123456", detail.buyerPhone(), "the main phone is still shown");
+    }
+
+    @Test
+    void theChoiceStaysOnTheRequestAfterItIsConvertedToABuyer() {
+        request.setContactMethod(BuyerContactMethod.WHATSAPP);
+        request.setWhatsappNumber("+250788999999");
+        when(buyerRepository.findByPhone("+250788123456")).thenReturn(Optional.empty());
+        when(buyerRepository.save(any(Buyer.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        BuyerRequestDetail detail = service.convertToBuyer(5L, new Manager());
+
+        assertEquals(BuyerContactMethod.WHATSAPP, detail.contactMethod());
+        assertEquals("+250788999999", detail.whatsappNumber());
+    }
+
+    @Test
     void conversionCreatesABuyerFromTheRequestAndRecordsIt() {
         when(buyerRepository.findByPhone("+250788123456")).thenReturn(Optional.empty());
         when(buyerRepository.save(any(Buyer.class))).thenAnswer(invocation -> {
@@ -207,6 +241,8 @@ class BuyerRequestManagerTest {
         assertEquals("BR-2026-7K2Q", item.code());
         assertEquals("Big", item.gradeName());
         assertEquals("Kalisa Traders", item.buyerName());
+        assertEquals(BuyerContactMethod.CALL, item.contactMethod());
+        assertNull(item.whatsappNumber());
         assertFalse(item.converted());
     }
 

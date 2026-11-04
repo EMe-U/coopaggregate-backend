@@ -15,6 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.RwandanPhoneNumber;
+import com.coopaggregate.error.BadRequestException;
+import com.coopaggregate.identity.IdentityAvailability;
+import com.coopaggregate.identity.IdentityProviderException;
+import com.coopaggregate.identity.IdentityVerificationService;
 
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.Predicate;
@@ -25,9 +29,14 @@ public class MemberService {
     private static final int MAX_PAGE_SIZE = 100;
 
     private final MemberRepository memberRepository;
+    private final IdentityAvailability identityAvailability;
+    private final IdentityVerificationService identityVerificationService;
 
-    public MemberService(MemberRepository memberRepository) {
+    public MemberService(MemberRepository memberRepository, IdentityAvailability identityAvailability,
+                         IdentityVerificationService identityVerificationService) {
         this.memberRepository = memberRepository;
+        this.identityAvailability = identityAvailability;
+        this.identityVerificationService = identityVerificationService;
     }
 
     @Transactional(readOnly = true)
@@ -62,13 +71,29 @@ public class MemberService {
 
     @Transactional
     public MemberResponse create(MemberRequest request) {
+        // Every member is registered with a verified identity. Without the identity provider nobody can be registered.
+        if (!identityAvailability.isAvailable()) {
+            throw IdentityProviderException.notConfigured(
+                    "Member registration needs identity verification, which is not configured.");
+        }
+        if (request.verificationId() == null) {
+            throw new BadRequestException("verificationId is required. Verify the person's identity first.");
+        }
+        if (request.birthDate() == null) {
+            throw new BadRequestException("birthDate is required.");
+        }
+        // Before anything is saved. A mismatch is counted and refuses the registration.
+        identityVerificationService.checkDetails(request.verificationId(), request.fullName(), request.birthDate(),
+                request.phone());
         Member member = new Member();
         applyDetails(member, request);
         member.setJoinDate(request.joinDate() != null ? request.joinDate() : KigaliTime.today());
         // Continues from the highest existing number. If two members were created at the same moment and got
         // the same code, the unique member_code would reject the second one with 409.
         member.setMemberCode(String.format("M-%04d", memberRepository.highestMemberNumber() + 1));
-        return MemberResponse.from(memberRepository.save(member));
+        Member saved = memberRepository.save(member);
+        identityVerificationService.attach(request.verificationId(), saved);
+        return MemberResponse.from(saved);
     }
 
     @Transactional

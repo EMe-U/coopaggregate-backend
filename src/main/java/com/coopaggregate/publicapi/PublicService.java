@@ -30,7 +30,10 @@ public class PublicService {
         this.lotService = lotService;
     }
 
-    /** Active grades with a stock hint. The kilograms come from the stock page's calculation and are not shown. */
+    /**
+     * Active grades with a stock hint. The hint is worked out from the sellable kg of the grade (confirmed batches
+     * with kg left), so a buyer is never promised kg that cannot be sold. The kilograms are not shown.
+     */
     @Transactional(readOnly = true)
     public List<PublicGradeResponse> grades(String clientIp) {
         long wait = gradesPerIp.tryAcquire("ip:" + clientIp);
@@ -38,13 +41,14 @@ public class PublicService {
             throw new TooManyRequestsException(wait);
         }
         BigDecimal minOrderKg = setting().getMinOrderKg();
-        // The stock page lists remaining kg per grade name; a grade with no open or closed lot is not in it.
-        Map<String, BigDecimal> remainingByGrade = lotService.stock().byGrade().stream()
+        // The stock page lists the sellable kg per grade name; a grade with no kg left is not in it. Kg that are
+        // waiting for the member's confirmation or disputed are left out: they cannot be sold yet.
+        Map<String, BigDecimal> sellableByGrade = lotService.stock().byGrade().stream()
                 .collect(Collectors.toMap(StockResponse.GradeStock::gradeName,
-                        StockResponse.GradeStock::remainingKg, BigDecimal::add));
+                        StockResponse.GradeStock::sellableKg, BigDecimal::add));
         return gradeRepository.findByActiveTrueOrderByCodeAsc().stream()
                 .map(grade -> PublicGradeResponse.from(grade, StockAvailability.of(
-                        remainingByGrade.getOrDefault(grade.getName(), BigDecimal.ZERO), minOrderKg)))
+                        sellableByGrade.getOrDefault(grade.getName(), BigDecimal.ZERO), minOrderKg)))
                 .toList();
     }
 

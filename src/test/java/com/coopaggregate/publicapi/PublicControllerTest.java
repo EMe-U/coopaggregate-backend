@@ -1,6 +1,7 @@
 package com.coopaggregate.publicapi;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -20,6 +21,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -29,6 +32,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.coopaggregate.buyer.BuyerContactMethod;
 import com.coopaggregate.buyer.BuyerRequestStatus;
 import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.config.SecurityConfig;
@@ -159,6 +163,73 @@ class PublicControllerTest {
                 .andExpect(jsonPath("$.status").value("PENDING"));
     }
 
+    // --- How the buyer wants to be contacted ---
+
+    @Test
+    void contactChoiceIsOptional() throws Exception {
+        when(requestService.submit(any(), anyString())).thenReturn(
+                new PublicRequestCreatedResponse("BR-2026-7K2Q", BuyerRequestStatus.PENDING));
+
+        mockMvc.perform(post("/api/public/requests").contentType(MediaType.APPLICATION_JSON).content(VALID_REQUEST))
+                .andExpect(status().isCreated());
+
+        ArgumentCaptor<PublicRequestForm> form = ArgumentCaptor.forClass(PublicRequestForm.class);
+        verify(requestService).submit(form.capture(), anyString());
+        assertNull(form.getValue().contactMethod(), "the default CALL is applied when the request is saved");
+        assertNull(form.getValue().whatsappNumber());
+    }
+
+    @Test
+    void whatsappWithAnotherNumberIsAccepted() throws Exception {
+        when(requestService.submit(any(), anyString())).thenReturn(
+                new PublicRequestCreatedResponse("BR-2026-7K2Q", BuyerRequestStatus.PENDING));
+
+        mockMvc.perform(post("/api/public/requests").contentType(MediaType.APPLICATION_JSON).content(
+                        "{\"name\": \"K\", \"phone\": \"0788123456\", \"gradeCode\": \"A\", \"quantityKg\": 250, "
+                                + "\"contactMethod\": \"WHATSAPP\", \"whatsappNumber\": \"+250788999999\"}"))
+                .andExpect(status().isCreated());
+
+        ArgumentCaptor<PublicRequestForm> form = ArgumentCaptor.forClass(PublicRequestForm.class);
+        verify(requestService).submit(form.capture(), anyString());
+        assertEquals(BuyerContactMethod.WHATSAPP, form.getValue().contactMethod());
+        assertEquals("+250788999999", form.getValue().whatsappNumber());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\"CALL\"", "\"WHATSAPP\""})
+    void bothContactMethodsAreAcceptedWithAnEmptyOrMissingNumber(String method) throws Exception {
+        when(requestService.submit(any(), anyString())).thenReturn(
+                new PublicRequestCreatedResponse("BR-2026-7K2Q", BuyerRequestStatus.PENDING));
+
+        for (String number : new String[] {"", ", \"whatsappNumber\": null", ", \"whatsappNumber\": \"\""}) {
+            mockMvc.perform(post("/api/public/requests").contentType(MediaType.APPLICATION_JSON).content(
+                            "{\"name\": \"K\", \"phone\": \"0788123456\", \"gradeCode\": \"A\", \"quantityKg\": 250, "
+                                    + "\"contactMethod\": " + method + number + "}"))
+                    .andExpect(status().isCreated());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"12345", "0711111111", "+250188999999", "abc", "0788 999 999"})
+    void aWhatsappNumberThatIsNotARwandanMobileNumberIs400(String number) throws Exception {
+        mockMvc.perform(post("/api/public/requests").contentType(MediaType.APPLICATION_JSON).content(
+                        "{\"name\": \"K\", \"phone\": \"0788123456\", \"gradeCode\": \"A\", \"quantityKg\": 250, "
+                                + "\"contactMethod\": \"WHATSAPP\", \"whatsappNumber\": \"" + number + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("whatsappNumber: must be a Rwandan mobile number: "
+                        + "07XXXXXXXX, 2507XXXXXXXX or +2507XXXXXXXX"));
+        verifyNoInteractions(requestService);
+    }
+
+    @Test
+    void anUnknownContactMethodIs400() throws Exception {
+        mockMvc.perform(post("/api/public/requests").contentType(MediaType.APPLICATION_JSON).content(
+                        "{\"name\": \"K\", \"phone\": \"0788123456\", \"gradeCode\": \"A\", \"quantityKg\": 250, "
+                                + "\"contactMethod\": \"SMS\"}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(requestService);
+    }
+
     @Test
     void theAddressOfTheBuyerIsUsedForTheLimit() throws Exception {
         when(requestService.submit(any(), anyString())).thenReturn(
@@ -213,13 +284,17 @@ class PublicControllerTest {
     @Test
     void statusIsShownWithTheMatchingPhone() throws Exception {
         when(requestService.status(eq("BR-2026-7K2Q"), eq("0788123456"), anyString())).thenReturn(
-                new PublicRequestStatusResponse("BR-2026-7K2Q", BuyerRequestStatus.ACCEPTED, "We will call you."));
+                new PublicRequestStatusResponse("BR-2026-7K2Q", BuyerRequestStatus.ACCEPTED, "We will call you.",
+                        BuyerContactMethod.WHATSAPP, "+250788999999"));
 
         mockMvc.perform(get("/api/public/requests/BR-2026-7K2Q").param("phone", "0788123456"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("BR-2026-7K2Q"))
                 .andExpect(jsonPath("$.status").value("ACCEPTED"))
                 .andExpect(jsonPath("$.message").value("We will call you."))
+                .andExpect(jsonPath("$.contactMethod").value("WHATSAPP"))
+                .andExpect(jsonPath("$.contactNumber").value("+250788999999"))
+                .andExpect(jsonPath("$.whatsappNumber").doesNotExist())
                 .andExpect(jsonPath("$.managerNote").doesNotExist())
                 .andExpect(jsonPath("$.phone").doesNotExist());
     }

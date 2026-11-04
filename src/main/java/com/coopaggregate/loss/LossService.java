@@ -6,6 +6,7 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.coopaggregate.batch.BatchAllocator;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.ledger.LedgerEntryType;
@@ -25,13 +26,15 @@ public class LossService {
     private final LotRepository lotRepository;
     private final LotService lotService;
     private final LedgerService ledgerService;
+    private final BatchAllocator batchAllocator;
 
     public LossService(LossRepository lossRepository, LotRepository lotRepository, LotService lotService,
-                       LedgerService ledgerService) {
+                       LedgerService ledgerService, BatchAllocator batchAllocator) {
         this.lossRepository = lossRepository;
         this.lotRepository = lotRepository;
         this.lotService = lotService;
         this.ledgerService = ledgerService;
+        this.batchAllocator = batchAllocator;
     }
 
     @Transactional
@@ -58,6 +61,7 @@ public class LossService {
         loss.setNotes(request.notes() == null || request.notes().isBlank() ? null : request.notes().trim());
         loss.setLossDate(request.recordedAt() != null ? request.recordedAt() : KigaliTime.today());
         Loss saved = lossRepository.save(loss);
+        batchAllocator.allocateLoss(saved);
 
         ledgerService.record(LedgerEntryType.LOSS, "LOSS", saved.getId(), saved.getQuantityKg(), null,
                 "Loss from " + lot.getLotCode() + ": " + saved.getReason(), manager);

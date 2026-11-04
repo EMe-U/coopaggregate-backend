@@ -5,6 +5,8 @@ import java.time.LocalDate;
 
 import org.hibernate.annotations.CreationTimestamp;
 
+import com.coopaggregate.identity.VerificationMethod;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -36,6 +38,16 @@ public class Member {
     private MemberStatus status = MemberStatus.ACTIVE;
 
     private String preferredLanguage = "rw";
+
+    private boolean identityVerified;
+
+    @Enumerated(EnumType.STRING)
+    private VerificationMethod verificationMethod;
+
+    private Instant verifiedAt;
+
+    // The identity provider's pseudonymous id for this person, never an ID number. Unique: one person, one member.
+    private String identityToken;
 
     @CreationTimestamp
     @Column(updatable = false)
@@ -107,6 +119,29 @@ public class Member {
 
     public void setPreferredLanguage(String preferredLanguage) {
         this.preferredLanguage = preferredLanguage;
+    }
+
+    public boolean isIdentityVerified() {
+        return identityVerified;
+    }
+
+    public VerificationMethod getVerificationMethod() {
+        return verificationMethod;
+    }
+
+    public Instant getVerifiedAt() {
+        return verifiedAt;
+    }
+
+    public String getIdentityToken() {
+        return identityToken;
+    }
+
+    public void markIdentityVerified(VerificationMethod method, Instant verifiedAt, String identityToken) {
+        this.identityVerified = true;
+        this.verificationMethod = method;
+        this.verifiedAt = verifiedAt;
+        this.identityToken = identityToken;
     }
 
     public Instant getCreatedAt() {

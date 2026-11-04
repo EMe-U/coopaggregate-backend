@@ -22,8 +22,6 @@ import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.delivery.GradeDeliveredKg;
 import com.coopaggregate.grade.Grade;
 import com.coopaggregate.grade.GradeRepository;
-import com.coopaggregate.lot.Lot;
-import com.coopaggregate.lot.LotQuantities;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotService;
 import com.coopaggregate.lot.LotStatus;
@@ -71,6 +69,13 @@ public class DashboardService {
         List<DashboardResponse.GradeKg> stockByGrade = stock.byGrade().stream()
                 .map(grade -> new DashboardResponse.GradeKg(grade.gradeName(), grade.remainingKg()))
                 .toList();
+        List<DashboardResponse.GradeStockKg> stockByGradeDetail = stock.byGrade().stream()
+                .map(grade -> new DashboardResponse.GradeStockKg(grade.gradeName(), grade.remainingKg(),
+                        grade.sellableKg(), grade.waitingKg(), grade.disputedKg()))
+                .toList();
+        long gradesWithSellableKg = stock.byGrade().stream()
+                .filter(grade -> grade.sellableKg().signum() > 0)
+                .count();
         long membersAwaitingPayment = balances.members().stream()
                 .filter(member -> member.balanceRwf() > 0)
                 .count();
@@ -87,12 +92,17 @@ public class DashboardService {
                 balances.totalOwedRwf(),
                 membersAwaitingPayment,
                 lotRepository.countByStatus(LotStatus.SOLD),
-                closedLotsWithStock(),
+                gradesWithSellableKg,
                 weeklyDeliveries(today),
                 deliveryRepository.countByConfirmationStatusAndReversedAtIsNull(ConfirmationStatus.DISPUTED),
                 // Counted from when the server saved the delivery, so a late offline sync is not overdue at once.
                 deliveryRepository.countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(
-                        ConfirmationStatus.PENDING, Instant.now().minus(Delivery.PENDING_TOO_LONG)));
+                        ConfirmationStatus.PENDING, Instant.now().minus(Delivery.PENDING_TOO_LONG)),
+                stock.totalSellableKg(),
+                stock.totalWaitingKg(),
+                stock.totalDisputedKg(),
+                gradesWithSellableKg,
+                stockByGradeDetail);
     }
 
     private List<DashboardResponse.OpenLot> openLots() {
@@ -100,14 +110,6 @@ public class DashboardService {
                 .sorted(Comparator.comparing(lot -> lot.getGrade().getCode()))
                 .map(lot -> new DashboardResponse.OpenLot(lot.getId(), lot.getLotCode(), lot.getGrade().getName()))
                 .toList();
-    }
-
-    private long closedLotsWithStock() {
-        List<Lot> closedLots = lotRepository.findByStatusIn(List.of(LotStatus.CLOSED));
-        Map<Long, LotQuantities> quantities = lotService.quantitiesOf(closedLots);
-        return closedLots.stream()
-                .filter(lot -> quantities.get(lot.getId()).remainingKg().signum() > 0)
-                .count();
     }
 
     // The current week and the three before it, Monday to Sunday in Kigali time, oldest first.

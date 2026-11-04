@@ -23,6 +23,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.batch.SaleAllocation;
+import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.delivery.Delivery;
@@ -49,6 +51,7 @@ class LedgerQueryServiceTest {
     private DeliveryRepository deliveryRepository;
     private LossRepository lossRepository;
     private SaleRepository saleRepository;
+    private SaleAllocationRepository saleAllocationRepository;
     private LotShareRepository lotShareRepository;
     private ProducePaymentRepository paymentRepository;
     private LedgerQueryService service;
@@ -64,8 +67,9 @@ class LedgerQueryServiceTest {
         saleRepository = mock(SaleRepository.class);
         lotShareRepository = mock(LotShareRepository.class);
         paymentRepository = mock(ProducePaymentRepository.class);
+        saleAllocationRepository = mock(SaleAllocationRepository.class);
         service = new LedgerQueryService(ledgerEntryRepository, deliveryRepository, lossRepository, saleRepository,
-                lotShareRepository, paymentRepository);
+                lotShareRepository, paymentRepository, saleAllocationRepository);
 
         alice = new Member();
         ReflectionTestUtils.setField(alice, "id", 5L);
@@ -101,24 +105,26 @@ class LedgerQueryServiceTest {
     }
 
     @Test
-    void memberFilterLooksInDeliveriesSharesAndPayments() {
+    void memberFilterLooksInDeliveriesSharesCreditsAndPayments() {
         CriteriaQuery<?> query = deepQuery();
 
         CriteriaBuilder cb = applyFilter(new LedgerFilter(null, 5L, null, null, null, null), deepRoot(), query);
 
-        verify(query, times(3)).subquery(Long.class);
+        verify(query, times(4)).subquery(Long.class);
         verify(query.subquery(Long.class)).from(Delivery.class);
         verify(query.subquery(Long.class)).from(LotShare.class);
+        verify(query.subquery(Long.class)).from(SaleAllocation.class);
         verify(query.subquery(Long.class)).from(ProducePayment.class);
         verify(query.subquery(Long.class), never()).from(Loss.class);
-        verify(cb, times(3)).equal(any(), eq(5L));
+        verify(cb, times(4)).equal(any(), eq(5L));
         verify(cb).equal(any(), eq("DELIVERY"));
         verify(cb).equal(any(), eq("LOT_SHARE"));
+        verify(cb).equal(any(), eq("SALE_ALLOCATION"));
         verify(cb).equal(any(), eq("PAYMENT"));
     }
 
     @Test
-    void lotFilterLooksInDeliveriesLossesSalesAndShares() {
+    void lotFilterLooksInDeliveriesLossesSalesBatchesAndShares() {
         CriteriaQuery<?> query = deepQuery();
 
         CriteriaBuilder cb = applyFilter(new LedgerFilter(null, null, 3L, null, null, null), deepRoot(), query);
@@ -126,17 +132,19 @@ class LedgerQueryServiceTest {
         verify(query.subquery(Long.class)).from(Delivery.class);
         verify(query.subquery(Long.class)).from(Loss.class);
         verify(query.subquery(Long.class)).from(Sale.class);
+        // A sale by grade is found through its batches, and so is what it credited.
+        verify(query.subquery(Long.class), times(2)).from(SaleAllocation.class);
         verify(query.subquery(Long.class)).from(LotShare.class);
-        verify(cb, times(4)).equal(any(), eq(3L));
+        verify(cb, times(6)).equal(any(), eq(3L));
     }
 
     @Test
     void searchByCodeIgnoresCaseAndChecksEveryCodeAndName() {
         CriteriaBuilder cb = applyFilter(new LedgerFilter(null, null, null, null, null, " RCT-7K2Q "), deepRoot());
 
-        // Receipt code and member name of deliveries, sale and order code, member name of shares,
-        // payment code and member name of payments.
-        verify(cb, times(7)).like(any(), eq("%rct-7k2q%"));
+        // Receipt code and member name of deliveries, sale and order code, sale code and member name of credits,
+        // member name of shares, payment code and member name of payments.
+        verify(cb, times(9)).like(any(), eq("%rct-7k2q%"));
     }
 
     @Test
@@ -171,7 +179,13 @@ class LedgerQueryServiceTest {
         loss.setLot(lotA);
         when(lossRepository.findByIdIn(Set.of(300L))).thenReturn(List.of(loss));
 
-        when(saleRepository.findByIdIn(Set.of(400L))).thenReturn(List.of(sale(400L)));
+        Sale gradeSale = sale(410L);
+        gradeSale.setLot(null);
+        when(saleRepository.findByIdIn(Set.of(400L, 410L))).thenReturn(List.of(sale(400L), gradeSale));
+
+        SaleAllocation credit = new SaleAllocation(sale(400L), delivery, new BigDecimal("10.00"));
+        ReflectionTestUtils.setField(credit, "id", 600L);
+        when(saleAllocationRepository.findByIdIn(Set.of(600L))).thenReturn(List.of(credit));
 
         LotShare share = new LotShare();
         ReflectionTestUtils.setField(share, "id", 500L);
@@ -184,13 +198,20 @@ class LedgerQueryServiceTest {
                 entry(2L, LedgerEntryType.PAYMENT, "PAYMENT", 200L, "Payment PAY-0001 by CASH"),
                 entry(3L, LedgerEntryType.LOSS, "LOSS", 300L, "Loss from A-2026-01: ROT"),
                 entry(4L, LedgerEntryType.SALE, "SALE", 400L, "Sale SAL-9MNP from A-2026-01 to Kalisa"),
-                entry(5L, LedgerEntryType.SHARE, "LOT_SHARE", 500L, "Share of A-2026-01")));
+                entry(5L, LedgerEntryType.SHARE, "LOT_SHARE", 500L, "Share of A-2026-01"),
+                entry(6L, LedgerEntryType.SALE, "SALE", 410L, "Sale SAL-9MNP of Big to Kalisa"),
+                entry(7L, LedgerEntryType.SALE_CREDIT, "SALE_ALLOCATION", 600L, "Credit for sale SAL-9MNP")));
 
         assertReference(responses.get(0), "RCT-7K2Q", 5L, "Alice Uwase", 3L, "A-2026-01");
         assertReference(responses.get(1), "PAY-0001", 5L, "Alice Uwase", null, null);
         assertReference(responses.get(2), null, null, null, 3L, "A-2026-01");
         assertReference(responses.get(3), "SAL-9MNP", null, null, 3L, "A-2026-01");
         assertReference(responses.get(4), null, 5L, "Alice Uwase", 3L, "A-2026-01");
+        // A sale by grade has no lot of its own.
+        assertReference(responses.get(5), "SAL-9MNP", null, null, null, null);
+        // What a sale credited shows the member and lot of the batch it paid for.
+        assertReference(responses.get(6), "SAL-9MNP", 5L, "Alice Uwase", 3L, "A-2026-01");
+        assertEquals("Kalisa Traders", responses.get(6).buyerName());
         assertEquals("Delivery RCT-7K2Q", responses.get(0).description());
     }
 

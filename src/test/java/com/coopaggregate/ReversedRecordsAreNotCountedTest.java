@@ -11,6 +11,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.data.jpa.repository.Query;
 
+import com.coopaggregate.batch.BatchRepository;
 import com.coopaggregate.delivery.DeliveryRepository;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.payment.ProducePaymentRepository;
@@ -31,12 +32,23 @@ class ReversedRecordsAreNotCountedTest {
             "LotRepository, findMembers, 1",
             "LotRepository, deliveredKgBetween, 1",
             "LotRepository, deliveryCountBetween, 1",
+            "LotRepository, findKgLeftByGradeAndStatus, 1",
             "LotShareRepository, findDeliveredByMember, 1",
             "LotShareRepository, findLotsOfMember, 1",
             "DeliveryRepository, findKgByGradeBetween, 1",
             "ProducePaymentRepository, findPaymentsByMember, 1",
             "ProducePaymentRepository, paidTo, 1",
-            "ProducePaymentRepository, paidBetween, 1"
+            "ProducePaymentRepository, paidBetween, 1",
+            // Batches: reversed deliveries are not batches.
+            "BatchRepository, lockBatchesWithKgLeft, 1",
+            "BatchRepository, findMemberBatches, 1",
+            "BatchRepository, memberTotals, 1",
+            "BatchRepository, findGradeBatchesWithKgLeft, 1",
+            "BatchRepository, gradeRemainingKg, 1",
+            "BatchRepository, findSellableBatches, 1",
+            "BatchRepository, gradeRemainingKgWithStatus, 1",
+            "BatchRepository, findLotIdsWithSellableBatches, 1",
+            "BatchRepository, lockSellableBatches, 1"
     })
     void countingQueryLeavesOutReversedRecords(String repository, String methodName, int expectedFilters) {
         List<Query> queries = Arrays.stream(repositoryClass(repository).getMethods())
@@ -58,6 +70,7 @@ class ReversedRecordsAreNotCountedTest {
             case "LotShareRepository" -> LotShareRepository.class;
             case "DeliveryRepository" -> DeliveryRepository.class;
             case "ProducePaymentRepository" -> ProducePaymentRepository.class;
+            case "BatchRepository" -> BatchRepository.class;
             default -> throw new IllegalArgumentException(name);
         };
     }

@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+import com.coopaggregate.identity.IdentityProviderException;
+
 import jakarta.persistence.EntityNotFoundException;
 
 @RestControllerAdvice
@@ -54,6 +56,13 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.CONFLICT)
     public ApiError handleBusinessRule(IllegalStateException e) {
         return new ApiError(e.getMessage());
+    }
+
+    // The identity provider is not set up (503) or failed (502). The message never carries the provider's answer.
+    @ExceptionHandler(IdentityProviderException.class)
+    public ResponseEntity<ApiError> handleIdentityProvider(IdentityProviderException e) {
+        HttpStatus status = e.isNotConfigured() ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.BAD_GATEWAY;
+        return ResponseEntity.status(status).body(new ApiError(e.getMessage()));
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)
