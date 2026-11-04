@@ -45,6 +45,9 @@ class IdentityVerificationServiceTest {
 
     private static final MosipClaims CLAIMS = new MosipClaims("pairwise-sub", "Uwimana Claudine",
             "+250788123456");
+    private static final MosipClaims ALL_CLAIMS = new MosipClaims("pairwise-sub", "Uwimana Claudine",
+            "+250788123456", null, java.time.LocalDate.of(1990, 5, 17), "Female", "claudine@example.com",
+            "KG 7 Ave, Kacyiru, Gasabo, Rwanda");
 
     private final Map<String, IdentityVerification> stored = new HashMap<>();
     private IdentityVerificationRepository verificationRepository;
@@ -170,16 +173,65 @@ class IdentityVerificationServiceTest {
     }
 
     @Test
-    void theBirthDateAndEmailAreNeverKept() {
+    void everyReleasedDetailIsKeptAndReturnedWithTheNamesOfTheVerifiedFields() {
+        when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(ALL_CLAIMS);
         String state = service.start(manager).state();
 
-        service.complete("the-code", state, manager);
+        VerifyResultResponse result = service.complete("the-code", state, manager);
 
+        assertEquals(java.time.LocalDate.of(1990, 5, 17), result.birthdate());
+        assertEquals("Female", result.gender());
+        assertEquals("claudine@example.com", result.email());
+        assertEquals("KG 7 Ave, Kacyiru, Gasabo, Rwanda", result.address());
+        assertEquals(List.of("fullName", "phone", "birthdate", "gender", "email", "address"), result.verifiedFields());
         IdentityVerification verification = stored.get(IdentityVerificationService.sha256(state));
-        String everything = String.join(" ", verification.getVerifiedName(), verification.getVerifiedPhone(),
-                verification.getIdentityToken(), verification.getNonce());
-        assertFalse(everything.contains("1990"));
-        assertFalse(everything.contains("claudine@example.com"));
+        assertEquals(java.time.LocalDate.of(1990, 5, 17), verification.getVerifiedBirthdate());
+        assertEquals("Female", verification.getVerifiedGender());
+        assertEquals("claudine@example.com", verification.getVerifiedEmail());
+        assertEquals("KG 7 Ave, Kacyiru, Gasabo, Rwanda", verification.getVerifiedAddress());
+    }
+
+    @Test
+    void refusedOptionalDetailsAreAbsentAndThePersonIsStillVerified() {
+        when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(new MosipClaims("pairwise-sub",
+                "Uwimana Claudine", "+250788123456", null, null, "Female", null, null));
+        String state = service.start(manager).state();
+
+        VerifyResultResponse result = service.complete("the-code", state, manager);
+
+        assertTrue(result.verified());
+        assertNull(result.birthdate());
+        assertEquals("Female", result.gender());
+        assertNull(result.email());
+        assertNull(result.address());
+        assertEquals(List.of("fullName", "phone", "gender"), result.verifiedFields());
+        IdentityVerification verification = stored.get(IdentityVerificationService.sha256(state));
+        assertNull(verification.getVerifiedBirthdate());
+        assertNull(verification.getVerifiedEmail());
+        assertNull(verification.getVerifiedAddress());
+    }
+
+    @Test
+    void withNoOptionalDetailOnlyTheNameAndPhoneAreVerified() {
+        String state = service.start(manager).state();
+
+        assertEquals(List.of("fullName", "phone"), service.complete("the-code", state, manager).verifiedFields());
+    }
+
+    @Test
+    void theOptionalDetailsAreNeverLoggedOrInTheHistory(CapturedOutput output) {
+        when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(ALL_CLAIMS);
+        String state = service.start(manager).state();
+
+        Long id = service.complete("the-code", state, manager).verificationId();
+        service.verifiedDetails(id, manager);
+        service.attach(id, manager, new Member());
+
+        String history = lastAudit().getDetails();
+        for (String value : List.of("1990", "Female", "claudine@", "Kacyiru", "Uwimana", "788123456")) {
+            assertFalse(output.getAll().contains(value), value);
+            assertFalse(history.contains(value), value);
+        }
     }
 
     @Test
@@ -654,6 +706,35 @@ class IdentityVerificationServiceTest {
         assertEquals(member, verification.getMember());
         assertNull(verification.getVerifiedName());
         assertNull(verification.getVerifiedPhone());
+    }
+
+    @Test
+    void attachClearsEveryVerifiedDetailSoTheyLiveOnlyInTheMember() {
+        when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(ALL_CLAIMS);
+        Long id = verified();
+        VerifiedDetails details = service.verifiedDetails(id, manager);
+        assertEquals("claudine@example.com", details.email());
+
+        service.attach(id, manager, new Member());
+
+        IdentityVerification verification = stored.values().iterator().next();
+        assertEquals(VerifiedDetails.NONE, verification.verifiedDetails());
+        assertNull(verification.getVerifiedBirthdate());
+        assertNull(verification.getVerifiedGender());
+        assertNull(verification.getVerifiedEmail());
+        assertNull(verification.getVerifiedAddress());
+    }
+
+    @Test
+    void theCleanupClearsTheFourNewDetailsToo() throws NoSuchMethodException {
+        String query = IdentityVerificationRepository.class.getMethod("clearOldDetails", Instant.class)
+                .getAnnotation(org.springframework.data.jpa.repository.Query.class).value();
+
+        for (String field : List.of("verifiedName", "verifiedPhone", "verifiedBirthdate", "verifiedGender",
+                "verifiedEmail", "verifiedAddress")) {
+            assertTrue(query.contains("v." + field + " = null"), field);
+            assertTrue(query.contains("v." + field + " is not null"), field);
+        }
     }
 
     @Test

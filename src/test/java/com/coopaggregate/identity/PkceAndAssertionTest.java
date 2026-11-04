@@ -106,7 +106,7 @@ class PkceAndAssertionTest {
     @Test
     void theAudienceCanBeSetApartFromTheIssuer() throws Exception {
         MosipProperties properties = new MosipProperties(true, "http://localhost:8080", "coopaggregate", "r", "k",
-                "coopaggregate-key", null, null, "http://localhost:8080/oauth2/token", null, null, null, null, null, null, null);
+                "coopaggregate-key", null, null, "http://localhost:8080/oauth2/token", null, null, null, null, null, null, null, null, null, false);
 
         SignedJWT jwt = SignedJWT.parse(MosipClientAssertion.create(properties, signingKey(), Clock.systemUTC()));
 
@@ -125,7 +125,7 @@ class PkceAndAssertionTest {
 
     private static MosipProperties properties() {
         return new MosipProperties(true, "http://localhost:8080", "coopaggregate", "r", "k", "coopaggregate-key",
-                null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, false);
     }
 
     private static MosipSigningKey signingKey() {

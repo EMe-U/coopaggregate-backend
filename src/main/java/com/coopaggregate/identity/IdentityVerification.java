@@ -1,6 +1,7 @@
 package com.coopaggregate.identity;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 import org.hibernate.annotations.CreationTimestamp;
 
@@ -58,6 +59,12 @@ public class IdentityVerification {
     // 30 minutes, then cleared. Never logged, never in the change history.
     private String verifiedName;
     private String verifiedPhone;
+    // The optional verified details (V38), each null when the member did not allow it or it did not fit. Kept and
+    // cleared together with the name and phone.
+    private LocalDate verifiedBirthdate;
+    private String verifiedGender;
+    private String verifiedEmail;
+    private String verifiedAddress;
 
     // The member registered with this verification. Set once, so one verification gives one member.
     @ManyToOne(fetch = FetchType.LAZY)
@@ -158,17 +165,48 @@ public class IdentityVerification {
         return verifiedPhone;
     }
 
+    public LocalDate getVerifiedBirthdate() {
+        return verifiedBirthdate;
+    }
+
+    public String getVerifiedGender() {
+        return verifiedGender;
+    }
+
+    public String getVerifiedEmail() {
+        return verifiedEmail;
+    }
+
+    public String getVerifiedAddress() {
+        return verifiedAddress;
+    }
+
+    /** The name and phone only, without optional details. */
     public void setVerifiedDetails(String name, String phone) {
-        this.verifiedName = name;
-        this.verifiedPhone = phone;
+        setVerifiedDetails(new VerifiedDetails(name, phone));
+    }
+
+    public void setVerifiedDetails(VerifiedDetails details) {
+        this.verifiedName = details.fullName();
+        this.verifiedPhone = details.phone();
+        this.verifiedBirthdate = details.birthdate();
+        this.verifiedGender = details.gender();
+        this.verifiedEmail = details.email();
+        this.verifiedAddress = details.address();
+    }
+
+    public VerifiedDetails verifiedDetails() {
+        return new VerifiedDetails(verifiedName, verifiedPhone, verifiedBirthdate, verifiedGender, verifiedEmail,
+                verifiedAddress);
     }
 
     public boolean hasVerifiedDetails() {
         return verifiedName != null && verifiedPhone != null;
     }
 
+    /** Clears every verified detail: the name, phone, birth date, gender, email and address. */
     public void clearVerifiedDetails() {
-        setVerifiedDetails(null, null);
+        setVerifiedDetails(VerifiedDetails.NONE);
     }
 
     // Never the verified details, the state or the verifier.

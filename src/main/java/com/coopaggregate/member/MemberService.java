@@ -3,8 +3,12 @@ package com.coopaggregate.member;
 import java.time.LocalDate;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -17,7 +21,9 @@ import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.common.RwandanPhoneNumber;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.identity.IdentityAvailability;
+import com.coopaggregate.identity.IdentityErrorCode;
 import com.coopaggregate.identity.IdentityProviderException;
+import com.coopaggregate.identity.IdentityRequestException;
 import com.coopaggregate.identity.IdentityVerificationService;
 import com.coopaggregate.identity.VerifiedDetails;
 import com.coopaggregate.manager.Manager;
@@ -87,9 +93,14 @@ public class MemberService {
             throw new BadRequestException("verificationId is required. Verify the person's identity first.");
         }
         VerifiedDetails verified = identityVerificationService.verifiedDetails(request.verificationId(), manager);
+        refuseVerifiedFieldsInTheRequest(request, verified);
         Member member = new Member();
-        applyDetails(member, verified.fullName(), verified.phone(), request.nationalId(), request.address(),
-                request.preferredLanguage());
+        applyDetails(member, verified.fullName(), verified.phone(), request.nationalId(),
+                verified.address() != null ? verified.address() : request.address(), request.preferredLanguage());
+        member.setVerifiedDetails(verified.birthdate(), verified.gender(), verified.email());
+        if (verified.address() != null) {
+            member.setVerifiedAddress(verified.address());
+        }
         member.setJoinDate(request.joinDate() != null ? request.joinDate() : KigaliTime.today());
         // Continues from the highest existing number. If two members were created at the same moment and got
         // the same code, the unique member_code would reject the second one with 409.
@@ -99,9 +110,41 @@ public class MemberService {
         return MemberResponse.from(saved);
     }
 
+    // A detail the identity check verified comes only from the verification. A value for it in the request is refused,
+    // whatever it is, and the message never repeats the verified value. A birth date, gender or email that was not
+    // verified cannot be typed either: those only come from the check. Any value counts, even an empty one (as before
+    // for the name and phone); only a field left out or null is not sent.
+    private static void refuseVerifiedFieldsInTheRequest(NewMemberRequest request, VerifiedDetails verified) {
+        Set<String> verifiedFields = Set.copyOf(verified.verifiedFields());
+        Map<String, Object> sent = new LinkedHashMap<>();
+        sent.put("fullName", request.fullName());
+        sent.put("phone", request.phone());
+        sent.put("birthdate", request.birthDate());
+        sent.put("gender", request.gender());
+        sent.put("email", request.email());
+        sent.put("address", request.address());
+        for (Map.Entry<String, Object> field : sent.entrySet()) {
+            if (field.getValue() == null) {
+                continue;
+            }
+            if (verifiedFields.contains(field.getKey())) {
+                throw new IdentityRequestException(IdentityErrorCode.VERIFIED_FIELD_LOCKED,
+                        "This detail came from the identity check and cannot be changed here.");
+            }
+            if (!field.getKey().equals("address")) {
+                throw new BadRequestException((field.getKey().equals("birthdate") ? "birthDate" : field.getKey())
+                        + ": must not be sent: it only comes from the identity check");
+            }
+        }
+    }
+
     @Transactional
     public MemberResponse update(Long id, MemberRequest request) {
         Member member = findMember(id);
+        // A changed address is no longer the verified one.
+        if (member.isAddressVerified() && !Objects.equals(member.getAddress(), trimToNull(request.address()))) {
+            member.unmarkAddressVerified();
+        }
         applyDetails(member, request.fullName(), request.phone(), request.nationalId(), request.address(),
                 request.preferredLanguage());
         if (request.joinDate() != null) {

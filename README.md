@@ -100,7 +100,10 @@ cd coopaggregate-backend
 | `MOSIP_REDIRECT_URI` | With `MOSIP_ENABLED` | The frontend page eSignet sends the member back to, exactly as registered, for example `http://localhost:5173/identity/callback` |
 | `MOSIP_PRIVATE_KEY_PATH` | With `MOSIP_ENABLED` | Path to the cooperative's RSA private key file (PKCS#8 PEM or JWK, detected from the content). Keep it outside the repository |
 | `MOSIP_KEY_ID` | With `MOSIP_ENABLED` | The `kid` of the matching public JWK |
-| `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL`. The name and phone are asked for with the `claims` parameter, so leave `MOSIP_SCOPE` out; the app warns at startup if it asks for more than `openid` and `phone`. `MOSIP_ACR_VALUES` may hold several login methods, space-separated; it is sent as `acr_values` exactly as set |
+| `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL`. The details are asked for with the `claims` parameter, so leave `MOSIP_SCOPE` out (`profile` would also release the picture); the app warns at startup if it asks for more than `openid` and `phone`. `MOSIP_ACR_VALUES` may hold several login methods, space-separated; it is sent as `acr_values` exactly as set |
+| `MOSIP_OPTIONAL_CLAIMS` | No | The optional details asked for besides the name and phone, space-separated. Default (and when empty): `birthdate gender email address`. Only those four can be asked for; any other name, `picture` included, is left out and named in a startup warning |
+| `MOSIP_NATIONAL_ID_CLAIM` | No | The claim name of the national ID, asked for as optional. Default: empty, not asked for (the local eSignet does not release it). The national ID stays entered by the manager either way |
+| `MOSIP_PROMPT_CONSENT` | No | Demo setting. `true` adds `prompt=consent` so eSignet shows its Allow page on every login, not only the first. Default `false` |
 | `MOSIP_ALLOWED_ACRS` | No | The id_token `acr` values (login methods) that count as a verification, space-separated, compared exactly. Default: `mosip:idp:acr:generated-code` (the one-time code) |
 | `MOSIP_ISSUER` | No | The exact `iss` the ID token must carry (and the userinfo answer, unless the next one is set). Default: `MOSIP_BASE_URL` |
 | `MOSIP_USERINFO_ISSUER` | No | The exact `iss` the userinfo answer must carry, for an eSignet that signs it with another issuer than the ID token (the local one: ID token `http://localhost:8080`, userinfo `http://localhost:8088/v1/esignet`). Default: the ID token's issuer |
@@ -227,6 +230,12 @@ ERD: see `docs/erd.png`.
   empties the salted hashes and the attempts of the old comparison (the only row update); those
   columns stay, unused. A verification started before V37 cannot be used and is simply done again.
   Run it before the new build starts.
+- **V38** keeps every detail eSignet can release (see Identity verification). It adds
+  `verified_birthdate`, `verified_gender`, `verified_email` and `verified_address` to the identity
+  verification table, and `birth_date`, `gender`, `email` and the flags `birth_date_verified`,
+  `gender_verified`, `email_verified` and `address_verified` (default `false`) to `member`. The member's
+  existing `address` column is reused and made longer (255 to 500 characters), which keeps every value.
+  No row is changed. Run it before the new build starts: the new build reads and writes the columns.
 - Applied migrations are never edited; a change is a new migration.
 
 ## API endpoints
@@ -246,10 +255,10 @@ ERD: see `docs/erd.png`.
 | GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional. Without `nationalId` |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member, including `nationalId` |
-| POST | `/api/members` | JWT | Registers a member from a verification and returns it with `201`. Body `{verificationId, nationalId?, address?, joinDate?, preferredLanguage?}`; the name and phone are the verified ones and must not be sent (see Identity verification); `503` when verification is not configured |
+| POST | `/api/members` | JWT | Registers a member from a verification and returns it with `201`. Body `{verificationId, nationalId?, address?, joinDate?, preferredLanguage?}`; every verified detail (name, phone, birth date, gender, email, address) comes from the verification and must not be sent (`400 VERIFIED_FIELD_LOCKED`, see Identity verification); `503` when verification is not configured |
 | GET | `/api/members/verify/status` | JWT | `{available, required}`: both are `true` when `MOSIP_ENABLED=true`, both `false` otherwise (registering a member needs verification) |
 | POST | `/api/members/verify/start` | JWT | Starts a verification: `{provider, authorizationUrl, state, expiresAt}`. `503` if not available |
-| POST | `/api/members/verify/callback` | JWT | Body `{code, state}` from eSignet's redirect. Returns `{verificationId, verified, method, fullName, phone, useBefore}` |
+| POST | `/api/members/verify/callback` | JWT | Body `{code, state}` from eSignet's redirect. Returns `{verificationId, verified, method, fullName, phone, useBefore, birthdate, gender, email, address, verifiedFields}` |
 | POST | `/api/members/verify/cancel` | JWT | Body `{state, error}` when eSignet's redirect has an error instead of a code. Returns `{reason, message}` |
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
@@ -535,8 +544,11 @@ anywhere: lot kilograms, stock, the dashboard, sharing, member statements and ba
 ### Members
 
 `POST /api/members` registers a member from a completed identity verification (see Identity
-verification). The name and phone are the verified ones; sending `fullName` or `phone` is refused
-with `400`, whatever their value:
+verification). Every verified detail is taken from the verification, never from the body: sending a
+value for one of them (`fullName`, `phone`, `birthDate`, `gender`, `email`, or `address` when the
+address was verified) is refused with `400` and code `VERIFIED_FIELD_LOCKED`, whatever the value, even
+empty. Leave them out. A birth date, gender or email can only come from the check, so sending one that
+was not verified is refused too (`400`, no code). An address that was not verified may be typed:
 
 ```json
 {
@@ -567,9 +579,29 @@ with `400`, whatever their value:
 | `fullName` | Update only: required, at most 150 characters. On create it is the verified name and must not be sent |
 | `phone` | Update only: required. A Rwandan mobile number (072, 073, 078 or 079) written as `07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`. On create it is the verified phone and must not be sent. Always stored and returned as `+2507XXXXXXXX` |
 | `nationalId` | Optional: leave it out or empty. When given, 16 digits and unique. Only returned for one member, never in the list |
-| `address` | Optional, at most 255 characters |
+| `address` | Optional. On create at most 255 characters, and only when the check did not verify an address. On update at most 500 (a verified address can be that long); changing a verified address removes it from `verifiedFields` |
 | `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
+
+A member (from create, update, `GET /api/members/{id}`, activate and deactivate) looks like this;
+the list items are the same without `nationalId`:
+
+```json
+{
+  "id": 1, "memberCode": "M-0001", "fullName": "Uwimana Claudine", "phone": "+250788123456",
+  "nationalId": "1199880012345678", "address": "KG 7 Ave, Kacyiru, Gasabo, Rwanda",
+  "joinDate": "2026-11-04", "status": "ACTIVE", "preferredLanguage": "rw",
+  "createdAt": "2026-11-04T08:00:00Z", "verified": true, "verificationMethod": "PASSWORD",
+  "verifiedAt": "2026-11-04T07:58:00Z",
+  "birthDate": "1990-05-17", "gender": "Female", "email": null,
+  "verifiedFields": ["fullName", "phone", "birthdate", "gender", "address"]
+}
+```
+
+`birthDate`, `gender` and `email` are `null` when the check did not give them. `verifiedFields` names
+the details that came from the check, in the order `fullName`, `phone`, `birthdate`, `gender`, `email`,
+`address`; it is `[]` for a member who was never verified. The name and phone of a verified member are
+always verified (members verified before V38 show just those two).
 
 - The member code is generated on create as `M-` and 4 digits (`M-0001`, `M-0002`, ...):
   the highest existing number plus one. It never changes.
@@ -590,36 +622,70 @@ with `400`, whatever their value:
 
 ### Identity verification
 
-Every new member is verified with MOSIP eSignet first, and is registered with the name and phone eSignet
-gives; there is no setting to skip it and nothing to type or compare. Existing members, updating members and
-every other feature do not depend on it.
+Every new member is verified with MOSIP eSignet first, and is registered with every detail eSignet releases
+(name, phone, and when allowed the birth date, gender, email and address); there is no setting to skip it and
+nothing to type or compare. Existing members, updating members and every other feature do not depend on it.
 
 1. **Start.** "Add member" calls `POST /api/members/verify/start`, which returns `authorizationUrl`: eSignet's
-   login page, with a one-use `state` (valid 10 minutes), a `nonce`, PKCE (S256), `scope=openid` and the OIDC
-   `claims` parameter asking for `name` and `phone_number` only, both essential, so eSignet's consent screen shows
-   them as required. The frontend sends the member there; eSignet sends them back to `MOSIP_REDIRECT_URI` with
+   login page, with a one-use `state` (valid 10 minutes), a `nonce`, PKCE (S256), `scope=openid` only (`profile`
+   would also release the picture) and the OIDC `claims` parameter, URL-encoded. With the defaults it is:
+
+   ```json
+   {"userinfo":{"name":{"essential":true},"phone_number":{"essential":true},
+                "birthdate":null,"gender":null,"email":null,"address":null}}
+   ```
+
+   `name` and `phone_number` are essential, so eSignet's consent screen shows them as required; the optional
+   ones come from `MOSIP_OPTIONAL_CLAIMS` and the member may refuse each of them. `picture` is never asked for
+   or kept. With `MOSIP_NATIONAL_ID_CLAIM` set, that claim is added as optional (`"<name>":null`); it is empty
+   by default because this eSignet does not release the national ID, which stays entered by the manager. With
+   `MOSIP_PROMPT_CONSENT=true` (a demo setting) the URL also carries `prompt=consent`, so the Allow page shows
+   every time. The frontend sends the member there; eSignet sends them back to `MOSIP_REDIRECT_URI` with
    `code` and `state`, or with `error` and `state`.
 2. **Back with a code:** `POST /api/members/verify/callback` with `{code, state}`. The backend exchanges the code
    at the token endpoint with a client assertion (PS256, signed with the private key in `MOSIP_PRIVATE_KEY_PATH`,
    with the `kid` of `MOSIP_KEY_ID`), then checks the ID token and the signed userinfo answer against eSignet's
-   JWKS (signature, issuer, audience, expiry, nonce, and the same `sub` in both; see "Token checks" below). Only `name` and
-   `phone_number` are read; a birth date, email or anything else eSignet sends is ignored. eSignet picks the
-   language and sends a plain `name`; a language-tagged one (`name#eng`) is used only when the plain one is
-   missing (with several, the first language code alphabetically). The name is trimmed (runs of spaces become
-   one) and the phone must be a Rwandan mobile number, stored as `+2507XXXXXXXX`. It returns:
+   JWKS (signature, issuer, audience, expiry, nonce, and the same `sub` in both; see "Token checks" below). Only
+   the claims that were asked for are read; anything else eSignet sends (`picture`, `given_name`, `nickname`,
+   `zoneinfo`, ...) is not stored, logged or passed on. Control characters are removed from every text value.
+   What eSignet sends, as measured on the real one, and how it is read:
+
+   | Claim | Sent as | Kept as |
+   |-------|---------|---------|
+   | `name` | One plain string (`given_name` and the like are ignored) | Trimmed, runs of spaces made one; at most 150 characters (`NAME_TOO_LONG`). A language-tagged one (`name#eng`) is used only when the plain one is missing (with several, the first language code alphabetically) |
+   | `phone_number` | `"+2507…"` | Must be a Rwandan mobile number (`PHONE_NOT_RWANDAN`), stored as `+2507XXXXXXXX` |
+   | `birthdate` | `yyyy/MM/dd` (`yyyy-MM-dd` also accepted) | A date. Not a real date, in the future or before 1900: left out |
+   | `gender` | A plain string, for example `"Female"` | As given, trimmed. Longer than 20 characters: left out |
+   | `email` | A plain string | Trimmed. No `@` or longer than 254 characters: left out |
+   | `address` | A JSON object with `street_address`, `locality`, `region`, `country` (`postal_code` may be missing); a plain string is also accepted | One line: the parts present, in that order, joined with `, ` (`postal_code` and `formatted` are not used). Longer than 500 characters: cut at the last whole word |
+
+   A refused or missing optional detail, or one left out because it does not fit, never fails the login: that
+   field is just `null`. A missing name or phone is still an error (`CLAIMS_MISSING`), and a member who refuses
+   them at eSignet comes back with `CLAIMS_REFUSED` as before. Each callback logs one INFO line per optional
+   claim with its name only: `Identity verification userinfo claim birthdate: present` (or `absent`, or
+   `ignored, unusable`), never a value. It returns:
 
    ```json
    { "verificationId": 9, "verified": true, "method": "PASSWORD",
-     "fullName": "UWIMANA Claudine", "phone": "+250788123456", "useBefore": "2026-11-03T10:30:00Z" }
+     "fullName": "UWIMANA Claudine", "phone": "+250788123456", "useBefore": "2026-11-03T10:30:00Z",
+     "birthdate": "1990-05-17", "gender": "Female", "email": null,
+     "address": "KG 7 Ave, Kacyiru, Gasabo, Rwanda",
+     "verifiedFields": ["fullName", "phone", "birthdate", "gender", "address"] }
    ```
 
-   The frontend shows the name and phone read-only in the new member form.
+   `birthdate` is `yyyy-MM-dd`; `birthdate`, `gender`, `email` and `address` are `null` when not released.
+   `verifiedFields` names the fields that hold a verified value, in the order `fullName`, `phone`, `birthdate`,
+   `gender`, `email`, `address`. The frontend shows them read-only in the new member form and leaves them out of
+   the registration.
 3. **Back with an error:** `POST /api/members/verify/cancel` with `{state, error}` (eSignet's `error` code;
    never its `error_description`). The state is used up and the outcome written to the change history. It
    returns `{reason, message}` with `reason` `CANCELLED` (`access_denied`), `CLAIMS_REFUSED`
    (`essential_consent_denied`: the member did not allow the name or phone) or `PROVIDER_ERROR` (anything else),
    and the same answer whether or not the state is known.
 4. **Register:** `POST /api/members` with `verificationId` and the other fields before `useBefore` (30 minutes).
+   Every verified detail is copied from the verification to the member, with its flag set (`verifiedFields`);
+   a value for one of them in the body is refused with `VERIFIED_FIELD_LOCKED`. The national ID, join date,
+   preferred language, and an address that was not verified come from the body as before.
    Only the manager who started the verification can use it, once. A registration refused for another reason
    (a phone or national ID already used) leaves the verification usable until then.
 
@@ -636,17 +702,19 @@ every other feature do not depend on it.
 | `PHONE_NOT_RWANDAN` | 400 | The verified phone is not a Rwandan mobile number |
 | `NAME_TOO_LONG` | 400 | The verified name is longer than 150 characters |
 | `ACR_NOT_ALLOWED` | 400 | The id_token says the person logged in a way not in `MOSIP_ALLOWED_ACRS` (for example biometrics) |
+| `VERIFIED_FIELD_LOCKED` | 400 | `POST /api/members` sent a value for a detail the check verified (`fullName`, `phone`, `birthDate`, `gender`, `email`, `address`). Message: "This detail came from the identity check and cannot be changed here."; it never repeats the verified value |
 | `PROVIDER_FAILED` | 502 | eSignet failed or its answer could not be trusted |
 | `NOT_CONFIGURED` | 503 | Identity verification is switched off |
 
-`POST /api/members` also refuses a `fullName` or `phone` in the body (`400`, no code), and a phone or national
-ID that belongs to another member (`409`, no code), as before.
+`VERIFIED_FIELD_LOCKED` replaces the earlier `400` without a code for a `fullName` or `phone` in the body.
+`POST /api/members` also refuses a birth date, gender or email that was not verified (`400`, no code), and a
+phone or national ID that belongs to another member (`409`, no code), as before.
 
 What is kept: eSignet's `sub` is pairwise (not a national ID number), so it is only used as `identity_token`:
-one person, one membership (`ALREADY_MEMBER` for the second). The verified name and phone are kept on the
-verification for at most 30 minutes: cleared when the member is saved, or by a job that runs every minute once
-they are older than that, so never more than about 31 minutes. Once the member is saved they are the member's
-own name and phone. The change history gets `IDENTITY_VERIFIED`, `IDENTITY_DUPLICATE` and
+one person, one membership (`ALREADY_MEMBER` for the second). The verified details (name, phone, birth date,
+gender, email, address) are kept on the verification for at most 30 minutes: all cleared when the member is
+saved, or by a job that runs every minute once they are older than that, so never more than about 31 minutes.
+After that they live only in the member record. The change history gets `IDENTITY_VERIFIED`, `IDENTITY_DUPLICATE` and
 `IDENTITY_VERIFICATION_FAILED` with the reason only (for example `missing details: phone`, or
 `the member did not allow the name and phone (essential_consent_denied)`), never a name, phone or eSignet's
 text. Older history rows may also show `IDENTITY_MISMATCH` from the comparison this replaced. Codes, states,
@@ -732,9 +800,9 @@ says `{available: false, required: false}`. With `MOSIP_ENABLED=true` the app do
 missing or the key file cannot be used (the message names settings only). The old `require_identity_verification`
 column of the `setting` table stays in the database, unused.
 
-The automatic tests use a fake eSignet. Only the real one can confirm that it honours the `claims` parameter with
-`scope=openid`, the error code when the member declines (`essential_consent_denied`), the phone format it
-returns, that it accepts the client assertion (`aud`, `exp`, PS256), the exact redirect URI, that the same
+The automatic tests use a fake eSignet, built from what the real one was measured to send (the claim formats
+above). Only the real one can confirm that it honours the `claims` parameter with `scope=openid`, the error code
+when the member declines (`essential_consent_denied`), the phone format it returns, that it accepts the client assertion (`aud`, `exp`, PS256), the exact redirect URI, that the same
 person always gets the same `sub`, and the `iss` of each of its tokens (set `MOSIP_ISSUER` and
 `MOSIP_USERINFO_ISSUER` to match).
 

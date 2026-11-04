@@ -27,21 +27,61 @@ public record MosipProperties(
         String jwksUri,
         String expectedIssuer,
         String expectedUserinfoIssuer,
-        String allowedAcrs) {
+        String allowedAcrs,
+        String optionalClaims,
+        String nationalIdClaim,
+        boolean promptConsent) {
 
-    // Only openid: the name and phone are asked for with the claims parameter (see MosipClient), so no scope brings
-    // in details the cooperative does not use.
+    // Only openid: the details are asked for with the claims parameter (see MosipClient), so no scope brings in
+    // details the cooperative does not use ("profile" would also release the picture).
     static final String DEFAULT_SCOPE = "openid";
     private static final List<String> NEEDED_SCOPES = List.of("openid", "phone");
     static final String DEFAULT_ACR = "mosip:idp:acr:password";
     // Only the one-time code: the local eSignet mock accepts any biometric capture, so biometrics prove nothing.
     static final String DEFAULT_ALLOWED_ACRS = "mosip:idp:acr:generated-code";
+    // The optional details the member may allow or refuse on eSignet's consent page. These four are the only ones read.
+    static final List<String> KNOWN_OPTIONAL_CLAIMS = List.of("birthdate", "gender", "email", "address");
+    static final String DEFAULT_OPTIONAL_CLAIMS = String.join(" ", KNOWN_OPTIONAL_CLAIMS);
+    // Never asked for, whatever the settings say.
+    private static final List<String> NEVER_REQUESTED = List.of("picture", "name", "phone_number");
+    private static final java.util.regex.Pattern CLAIM_NAME = java.util.regex.Pattern.compile("[A-Za-z0-9_.:-]{1,64}");
 
     public MosipProperties {
         baseUrl = isBlank(baseUrl) ? null : baseUrl.trim().replaceAll("/+$", "");
         scope = isBlank(scope) ? DEFAULT_SCOPE : scope.trim();
         acrValues = isBlank(acrValues) ? DEFAULT_ACR : acrValues.trim();
         allowedAcrs = isBlank(allowedAcrs) ? DEFAULT_ALLOWED_ACRS : allowedAcrs.trim();
+        optionalClaims = isBlank(optionalClaims) ? DEFAULT_OPTIONAL_CLAIMS : optionalClaims.trim();
+        nationalIdClaim = isBlank(nationalIdClaim) ? null : nationalIdClaim.trim();
+    }
+
+    /**
+     * The optional claims asked for, in the order of MOSIP_OPTIONAL_CLAIMS (space-separated). Only birthdate, gender,
+     * email and address can be asked for; any other name (picture included) is left out. Empty means all four.
+     */
+    public List<String> requestedOptionalClaims() {
+        return java.util.Arrays.stream(optionalClaims.split("\\s+"))
+                .filter(KNOWN_OPTIONAL_CLAIMS::contains)
+                .distinct()
+                .toList();
+    }
+
+    /** Names in MOSIP_OPTIONAL_CLAIMS that are not asked for because they are not one of the four. Names only. */
+    public List<String> ignoredOptionalClaims() {
+        return java.util.Arrays.stream(optionalClaims.split("\\s+"))
+                .filter(name -> !name.isEmpty() && !KNOWN_OPTIONAL_CLAIMS.contains(name))
+                .distinct()
+                .toList();
+    }
+
+    /**
+     * The claim MOSIP_NATIONAL_ID_CLAIM names, asked for as optional, or null when it is empty (the default) or not a
+     * plain claim name. The national ID itself stays entered by the manager.
+     */
+    public String requestedNationalIdClaim() {
+        return nationalIdClaim != null && CLAIM_NAME.matcher(nationalIdClaim).matches()
+                && !NEVER_REQUESTED.contains(nationalIdClaim) && !KNOWN_OPTIONAL_CLAIMS.contains(nationalIdClaim)
+                ? nationalIdClaim : null;
     }
 
     /**
@@ -154,6 +194,7 @@ public record MosipProperties(
         return "MosipProperties[enabled=" + enabled + ", baseUrl=" + baseUrl + ", clientId=" + clientId
                 + ", redirectUri=" + redirectUri + ", keyId=" + keyId + ", privateKeyPath="
                 + (isBlank(privateKeyPath) ? "(empty)" : "****") + ", scope=" + scope + ", acrValues=" + acrValues
-                + ", allowedAcrs=" + allowedAcrs + "]";
+                + ", allowedAcrs=" + allowedAcrs + ", optionalClaims=" + requestedOptionalClaims()
+                + ", nationalIdClaim=" + nationalIdClaim + ", promptConsent=" + promptConsent + "]";
     }
 }

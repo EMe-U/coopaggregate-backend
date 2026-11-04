@@ -40,7 +40,9 @@ import com.coopaggregate.common.PageResponse;
 import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.config.SecurityConfig;
 import com.coopaggregate.identity.DuplicateIdentityException;
+import com.coopaggregate.identity.IdentityErrorCode;
 import com.coopaggregate.identity.IdentityProviderException;
+import com.coopaggregate.identity.IdentityRequestException;
 import com.coopaggregate.identity.VerificationMethod;
 import com.coopaggregate.manager.Manager;
 
@@ -89,12 +91,50 @@ class MemberControllerTest {
     void listDoesNotShowTheNationalId() throws Exception {
         when(memberService.list(null, null, 0, 20)).thenReturn(new PageResponse<>(List.of(new MemberListItem(
                 1L, "M-0001", "Uwimana Claudine", "+250788123456", null, LocalDate.of(2026, 10, 8),
-                MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), false, null, null)), 0, 20, 1, 1));
+                MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), false, null, null, null, null, null,
+                List.of())), 0, 20, 1, 1));
 
         mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].fullName").value("Uwimana Claudine"))
                 .andExpect(jsonPath("$.content[0].nationalId").doesNotExist());
+    }
+
+    @Test
+    void theListShowsTheVerifiedDetailsAndWhichFieldsWereVerified() throws Exception {
+        when(memberService.list(null, null, 0, 20)).thenReturn(new PageResponse<>(List.of(new MemberListItem(
+                1L, "M-0001", "Uwimana Claudine", "+250788123456", "Kacyiru, Gasabo, Kigali, Rwanda",
+                LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), true,
+                VerificationMethod.PASSWORD, Instant.parse("2026-10-08T09:55:00Z"), LocalDate.of(1990, 5, 17),
+                "Female", "claudine@example.com", List.of("fullName", "phone", "birthdate", "gender", "email",
+                "address"))), 0, 20, 1, 1));
+
+        mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].birthDate").value("1990-05-17"))
+                .andExpect(jsonPath("$.content[0].gender").value("Female"))
+                .andExpect(jsonPath("$.content[0].email").value("claudine@example.com"))
+                .andExpect(jsonPath("$.content[0].address").value("Kacyiru, Gasabo, Kigali, Rwanda"))
+                .andExpect(jsonPath("$.content[0].verifiedFields[2]").value("birthdate"))
+                .andExpect(jsonPath("$.content[0].verifiedFields.length()").value(6));
+    }
+
+    @Test
+    void oneMemberShowsTheVerifiedDetailsWithNullForTheMissingOnes() throws Exception {
+        when(memberService.get(1L)).thenReturn(new MemberResponse(
+                1L, "M-0001", "Uwimana Claudine", "+250788123456", null, "Busogo",
+                LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), true,
+                VerificationMethod.PASSWORD, Instant.parse("2026-10-08T09:55:00Z"), null, "Female", null,
+                List.of("fullName", "phone", "gender")));
+
+        mockMvc.perform(get("/api/members/1").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.birthDate").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.gender").value("Female"))
+                .andExpect(jsonPath("$.email").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.address").value("Busogo"))
+                .andExpect(jsonPath("$.verifiedFields").value(org.hamcrest.Matchers.contains("fullName", "phone",
+                        "gender")));
     }
 
     @Test
@@ -130,7 +170,8 @@ class MemberControllerTest {
         when(memberService.create(any(NewMemberRequest.class), eq(manager))).thenReturn(new MemberResponse(
                 1L, "M-0001", "Uwimana Claudine", "+250788123456", null, "Busogo",
                 LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), true,
-                VerificationMethod.PASSWORD, Instant.parse("2026-10-08T09:55:00Z")));
+                VerificationMethod.PASSWORD, Instant.parse("2026-10-08T09:55:00Z"), null, null, null,
+                List.of("fullName", "phone")));
 
         mockMvc.perform(post("/api/members")
                         .header(HttpHeaders.AUTHORIZATION, bearerToken)
@@ -153,7 +194,11 @@ class MemberControllerTest {
     }
 
     @Test
-    void aNameOrPhoneSentWithTheRegistrationIs400() throws Exception {
+    void aLockedFieldSentWithTheRegistrationIs400WithItsCode() throws Exception {
+        when(memberService.create(any(NewMemberRequest.class), any())).thenThrow(new IdentityRequestException(
+                IdentityErrorCode.VERIFIED_FIELD_LOCKED,
+                "This detail came from the identity check and cannot be changed here."));
+
         mockMvc.perform(post("/api/members")
                         .header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -161,43 +206,49 @@ class MemberControllerTest {
                                 {"verificationId": 9, "fullName": "Someone Else", "phone": "0788999999"}
                                 """))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("fullName: must not be sent: the name comes from the identity "
-                        + "verification; phone: must not be sent: the phone number comes from the identity "
-                        + "verification"));
-
-        verifyNoInteractions(memberService);
+                .andExpect(jsonPath("$.code").value("VERIFIED_FIELD_LOCKED"))
+                .andExpect(jsonPath("$.message")
+                        .value("This detail came from the identity check and cannot be changed here."));
     }
 
     @Test
-    void anEmptyNameIsStillRefused() throws Exception {
-        mockMvc.perform(post("/api/members")
-                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"verificationId": 9, "fullName": ""}
-                                """))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("fullName: must not be sent: the name comes from the identity "
-                        + "verification"));
+    void everyLockableFieldOfTheBodyReachesTheCheck() throws Exception {
+        Manager manager = new Manager();
+        when(authService.currentManager("manager@example.com")).thenReturn(manager);
 
-        verifyNoInteractions(memberService);
+        mockMvc.perform(post("/api/members")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"verificationId": 9, "fullName": "", "phone": "0788999999", "birthdate": "1990-05-17",
+                         "gender": "Male", "email": "x@example.com", "address": "Musanze"}
+                        """));
+
+        ArgumentCaptor<NewMemberRequest> request = ArgumentCaptor.forClass(NewMemberRequest.class);
+        verify(memberService).create(request.capture(), eq(manager));
+        assertEquals("", request.getValue().fullName());
+        assertEquals("0788999999", request.getValue().phone());
+        assertEquals(LocalDate.of(1990, 5, 17), request.getValue().birthDate());
+        assertEquals("Male", request.getValue().gender());
+        assertEquals("x@example.com", request.getValue().email());
+        assertEquals("Musanze", request.getValue().address());
     }
 
     @Test
-    void anOldBirthDateFieldIsIgnored() throws Exception {
-        when(memberService.create(any(NewMemberRequest.class), any())).thenReturn(new MemberResponse(
-                1L, "M-0001", "Uwimana Claudine", "+250788123456", null, null,
-                LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), true,
-                VerificationMethod.PASSWORD, Instant.parse("2026-10-08T09:55:00Z")));
+    void theBirthDateIsAlsoReadWithItsMemberResponseName() throws Exception {
+        Manager manager = new Manager();
+        when(authService.currentManager("manager@example.com")).thenReturn(manager);
 
         mockMvc.perform(post("/api/members")
-                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"verificationId": 9, "birthDate": "1990-05-17"}
-                                """))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.birthDate").doesNotExist());
+                .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"verificationId": 9, "birthDate": "1990-05-17"}
+                        """));
+
+        ArgumentCaptor<NewMemberRequest> request = ArgumentCaptor.forClass(NewMemberRequest.class);
+        verify(memberService).create(request.capture(), eq(manager));
+        assertEquals(LocalDate.of(1990, 5, 17), request.getValue().birthDate());
     }
 
     @Test

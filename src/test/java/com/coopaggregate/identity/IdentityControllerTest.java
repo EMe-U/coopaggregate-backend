@@ -112,8 +112,8 @@ class IdentityControllerTest {
     void callbackReturnsTheVerificationToRegisterTheMemberWith() throws Exception {
         Manager manager = new Manager();
         when(authService.currentManager("manager@example.com")).thenReturn(manager);
-        when(verificationService.complete("the-code", "the-state", manager)).thenReturn(new VerifyResultResponse(9L,
-                true, VerificationMethod.PASSWORD, "UWIMANA Claudine", "+250788123456",
+        when(verificationService.complete("the-code", "the-state", manager)).thenReturn(VerifyResultResponse.of(9L,
+                VerificationMethod.PASSWORD, new VerifiedDetails("UWIMANA Claudine", "+250788123456"),
                 Instant.parse("2026-10-31T10:30:00Z")));
 
         mockMvc.perform(post("/api/members/verify/callback").header(HttpHeaders.AUTHORIZATION, bearerToken)
@@ -127,16 +127,44 @@ class IdentityControllerTest {
                 .andExpect(jsonPath("$.fullName").value("UWIMANA Claudine"))
                 .andExpect(jsonPath("$.phone").value("+250788123456"))
                 .andExpect(jsonPath("$.identityToken").doesNotExist())
-                .andExpect(jsonPath("$.birthDate").doesNotExist());
+                .andExpect(jsonPath("$.birthdate").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.gender").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.email").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.address").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.verifiedFields").value(org.hamcrest.Matchers.contains("fullName", "phone")));
+    }
+
+    @Test
+    void theCallbackReturnsEveryVerifiedDetailInItsFormat() throws Exception {
+        Manager manager = new Manager();
+        when(authService.currentManager("manager@example.com")).thenReturn(manager);
+        when(verificationService.complete("the-code", "the-state", manager)).thenReturn(VerifyResultResponse.of(9L,
+                VerificationMethod.PASSWORD, new VerifiedDetails("UWIMANA Claudine", "+250788123456",
+                        java.time.LocalDate.of(1990, 5, 17), "Female", "claudine@example.com",
+                        "Kacyiru, Gasabo, Kigali, Rwanda"), Instant.parse("2026-10-31T10:30:00Z")));
+
+        mockMvc.perform(post("/api/members/verify/callback").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\": \"the-code\", \"state\": \"the-state\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.birthdate").value("1990-05-17"))
+                .andExpect(jsonPath("$.gender").value("Female"))
+                .andExpect(jsonPath("$.email").value("claudine@example.com"))
+                .andExpect(jsonPath("$.address").value("Kacyiru, Gasabo, Kigali, Rwanda"))
+                .andExpect(jsonPath("$.verifiedFields").value(org.hamcrest.Matchers.contains("fullName", "phone",
+                        "birthdate", "gender", "email", "address")))
+                .andExpect(jsonPath("$.picture").doesNotExist());
     }
 
     @Test
     void theCallbackResultNeverPrintsTheVerifiedDetails() {
-        String text = new VerifyResultResponse(9L, true, VerificationMethod.PASSWORD, "UWIMANA Claudine",
-                "+250788123456", Instant.parse("2026-10-31T10:30:00Z")).toString();
+        String text = VerifyResultResponse.of(9L, VerificationMethod.PASSWORD, new VerifiedDetails("UWIMANA Claudine",
+                "+250788123456", java.time.LocalDate.of(1990, 5, 17), "Female", "claudine@example.com", "Kacyiru"),
+                Instant.parse("2026-10-31T10:30:00Z")).toString();
 
-        assertFalse(text.contains("UWIMANA"));
-        assertFalse(text.contains("788123456"));
+        for (String value : java.util.List.of("UWIMANA", "788123456", "1990", "Female", "claudine", "Kacyiru")) {
+            assertFalse(text.contains(value), value);
+        }
     }
 
     @Test

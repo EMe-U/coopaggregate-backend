@@ -18,6 +18,9 @@ public enum IdentityErrorCode {
     NAME_TOO_LONG,
     // 400: the person logged in at eSignet in a way that is not in MOSIP_ALLOWED_ACRS (for example biometrics).
     ACR_NOT_ALLOWED,
+    // 400: a new member's form sent a value for a detail that came from the identity check (name, phone, birth date,
+    // gender, email or address).
+    VERIFIED_FIELD_LOCKED,
     // 502: eSignet failed or its answer could not be trusted.
     PROVIDER_FAILED,
     // 503: identity verification is switched off.

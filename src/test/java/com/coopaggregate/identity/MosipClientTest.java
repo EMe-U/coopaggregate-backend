@@ -97,6 +97,16 @@ class MosipClientTest {
 
     // A client whose MOSIP_ISSUER and MOSIP_USERINFO_ISSUER are the given values (null: not set).
     private void useIssuers(String issuer, String userinfoIssuer) {
+        useSettings(issuer, userinfoIssuer, null, null, false);
+    }
+
+    // A client with the given MOSIP_OPTIONAL_CLAIMS, MOSIP_NATIONAL_ID_CLAIM and MOSIP_PROMPT_CONSENT.
+    private void useClaimSettings(String optionalClaims, String nationalIdClaim, boolean promptConsent) {
+        useSettings(null, null, optionalClaims, nationalIdClaim, promptConsent);
+    }
+
+    private void useSettings(String issuer, String userinfoIssuer, String optionalClaims, String nationalIdClaim,
+                             boolean promptConsent) {
         RestClient.Builder builder = RestClient.builder();
         http = MockRestServiceServer.bindTo(builder).build();
         RestTemplate jwksTemplate = new RestTemplate();
@@ -105,7 +115,7 @@ class MosipClientTest {
                 .andRespond(withSuccess(new JWKSet(providerKey.toPublicJWK()).toString(), MediaType.APPLICATION_JSON));
         MosipProperties properties = new MosipProperties(true, BASE, "coopaggregate",
                 "http://localhost:5173/identity/callback", "unused", "coopaggregate-key", null, null, null, null, null,
-                null, null, issuer, userinfoIssuer, null);
+                null, null, issuer, userinfoIssuer, null, optionalClaims, nationalIdClaim, promptConsent);
         client = new MosipClient(properties,
                 new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), "coopaggregate-key"), builder.build(),
                 jwksTemplate, Clock.systemUTC());
@@ -131,18 +141,87 @@ class MosipClientTest {
     }
 
     @Test
-    void theAuthorizeUrlAsksForTheNameAndPhoneOnlyBothEssential() throws Exception {
+    void theAuthorizeUrlAsksForTheNameAndPhoneEssentialAndTheFourOptionalDetails() throws Exception {
         String url = client.authorizationUrl("the-state", NONCE, "the-challenge");
 
         String claims = query(url.substring(url.indexOf('?') + 1)).get("claims");
+        assertEquals("{\"userinfo\":{\"name\":{\"essential\":true},\"phone_number\":{\"essential\":true},"
+                + "\"birthdate\":null,\"gender\":null,\"email\":null,\"address\":null}}", claims);
         com.fasterxml.jackson.databind.JsonNode request = new com.fasterxml.jackson.databind.ObjectMapper()
                 .readTree(claims);
         assertEquals(1, request.size(), "userinfo claims only");
         com.fasterxml.jackson.databind.JsonNode userinfo = request.get("userinfo");
-        assertEquals(List.of("name", "phone_number"), iterable(userinfo.fieldNames()));
+        assertEquals(List.of("name", "phone_number", "birthdate", "gender", "email", "address"),
+                iterable(userinfo.fieldNames()));
         assertTrue(userinfo.get("name").get("essential").asBoolean());
         assertTrue(userinfo.get("phone_number").get("essential").asBoolean());
         assertFalse(url.contains("{") || url.contains("}") || url.contains("\""), "the JSON is URL-encoded: " + url);
+        assertFalse(url.contains("picture"), url);
+        assertEquals("openid", query(url.substring(url.indexOf('?') + 1)).get("scope"));
+    }
+
+    @Test
+    void mosipOptionalClaimsChoosesTheOptionalDetailsButNeverThePicture() {
+        useClaimSettings("email picture  birthdate nickname email", null, false);
+
+        String url = client.authorizationUrl("the-state", NONCE, "the-challenge");
+
+        assertEquals("{\"userinfo\":{\"name\":{\"essential\":true},\"phone_number\":{\"essential\":true},"
+                + "\"email\":null,\"birthdate\":null}}", query(url.substring(url.indexOf('?') + 1)).get("claims"));
+        assertFalse(url.contains("picture"), url);
+    }
+
+    @Test
+    void anUnknownOptionalClaimIsNamedInTheLogAtStart(CapturedOutput output) {
+        useClaimSettings("picture gender", null, false);
+
+        assertTrue(output.getOut().contains("MOSIP_OPTIONAL_CLAIMS: not asked for (only birthdate, gender, email "
+                + "and address can be): [picture]"), output.getOut());
+    }
+
+    @Test
+    void theNationalIdClaimIsNotAskedForByDefault() {
+        String url = client.authorizationUrl("the-state", NONCE, "the-challenge");
+
+        assertFalse(query(url.substring(url.indexOf('?') + 1)).get("claims").contains("national"), url);
+    }
+
+    @Test
+    void mosipNationalIdClaimAsksForItAsOptional() {
+        useClaimSettings(null, "individual_id", false);
+
+        String claims = query(client.authorizationUrl("s", NONCE, "c").split("\\?", 2)[1]).get("claims");
+
+        assertTrue(claims.endsWith(",\"address\":null,\"individual_id\":null}}"), claims);
+    }
+
+    @Test
+    void aNationalIdClaimThatIsNotAPlainNameIsNotAskedFor() {
+        for (String name : List.of("picture", "x\",\"picture\":{", "name", "birthdate")) {
+            useClaimSettings(null, name, false);
+
+            String claims = query(client.authorizationUrl("s", NONCE, "c").split("\\?", 2)[1]).get("claims");
+
+            assertFalse(claims.contains("picture"), name);
+            assertEquals(1, claims.split("\"" + "name" + "\"", -1).length - 1, name);
+            assertEquals(1, claims.split("\"birthdate\"", -1).length - 1, name);
+        }
+    }
+
+    @Test
+    void promptConsentIsOffByDefault() {
+        String url = client.authorizationUrl("the-state", NONCE, "the-challenge");
+
+        assertFalse(query(url.substring(url.indexOf('?') + 1)).containsKey("prompt"), url);
+    }
+
+    @Test
+    void mosipPromptConsentAddsPromptConsent() {
+        useClaimSettings(null, null, true);
+
+        String url = client.authorizationUrl("the-state", NONCE, "the-challenge");
+
+        assertEquals("consent", query(url.substring(url.indexOf('?') + 1)).get("prompt"));
     }
 
     private static List<String> iterable(java.util.Iterator<String> names) {
@@ -234,7 +313,7 @@ class MosipClientTest {
     }
 
     @Test
-    void aBirthDateInAnyFormatIsIgnored() throws Exception {
+    void anInvalidBirthDateIsIgnoredAndTheLoginStillSucceeds() throws Exception {
         JWTClaimsSet.Builder claims = userinfoClaims();
         claims.claim("birthdate", "not/a/date");
         provider(idToken(idClaims()), userinfo(claims));
@@ -242,9 +321,85 @@ class MosipClientTest {
         MosipClaims result = client.fetchClaims(CODE, VERIFIER, NONCE);
 
         assertEquals("Uwimana Claudine", result.name());
-        // No birth date is kept: the name and phone, the pairwise sub, and how the person logged in (acr).
-        assertEquals(List.of("acr", "name", "phoneNumber", "subject"), java.util.Arrays.stream(
-                MosipClaims.class.getRecordComponents()).map(c -> c.getName()).sorted().toList());
+        assertNull(result.birthdate());
+        // The details kept: the essential and optional ones, the pairwise sub, and how the person logged in (acr).
+        assertEquals(List.of("acr", "address", "birthdate", "email", "gender", "name", "phoneNumber", "subject"),
+                java.util.Arrays.stream(MosipClaims.class.getRecordComponents()).map(c -> c.getName()).sorted()
+                        .toList());
+    }
+
+    @Test
+    void everyOptionalDetailIsReadAsEsignetSendsIt() throws Exception {
+        provider(idToken(idClaims()), userinfo(esignetDetails()));
+
+        MosipClaims result = client.fetchClaims(CODE, VERIFIER, NONCE);
+
+        assertEquals(java.time.LocalDate.of(1990, 5, 17), result.birthdate());
+        assertEquals("Female", result.gender());
+        assertEquals("claudine@example.com", result.email());
+        assertEquals("KG 7 Ave, Kacyiru, Gasabo, Rwanda", result.address());
+    }
+
+    @Test
+    void refusedOptionalDetailsAreAbsentAndTheLoginStillSucceeds() throws Exception {
+        JWTClaimsSet.Builder claims = userinfoClaims();
+        claims.claim("birthdate", null);
+        claims.claim("email", null);
+        provider(idToken(idClaims()), userinfo(claims));
+
+        MosipClaims result = client.fetchClaims(CODE, VERIFIER, NONCE);
+
+        assertEquals("Uwimana Claudine", result.name());
+        assertEquals("+250788123456", result.phoneNumber());
+        assertNull(result.birthdate());
+        assertNull(result.gender());
+        assertNull(result.email());
+        assertNull(result.address());
+    }
+
+    @Test
+    void detailsThatWereNotAskedForAreNotRead() throws Exception {
+        useClaimSettings("birthdate", null, false);
+        provider(idToken(idClaims()), userinfo(esignetDetails()));
+
+        MosipClaims result = client.fetchClaims(CODE, VERIFIER, NONCE);
+
+        assertEquals(java.time.LocalDate.of(1990, 5, 17), result.birthdate());
+        assertNull(result.gender());
+        assertNull(result.email());
+        assertNull(result.address());
+    }
+
+    @Test
+    void noClaimValueIsEverLoggedOnlyTheClaimNames(CapturedOutput output) throws Exception {
+        JWTClaimsSet.Builder claims = esignetDetails();
+        claims.claim("gender", "a gender that is far too long to keep");
+        provider(idToken(idClaims()), userinfo(claims));
+
+        client.fetchClaims(CODE, VERIFIER, NONCE);
+
+        String log = output.getAll();
+        assertTrue(log.contains("Identity verification userinfo claim birthdate: present"), log);
+        assertTrue(log.contains("Identity verification userinfo claim gender: ignored, unusable"), log);
+        assertTrue(log.contains("Identity verification userinfo claim address: present"), log);
+        for (String value : List.of("Uwimana", "Claudine", "788123456", "1990", "05/17", "far too long", "claudine@",
+                "example.com", "KG 7", "Kacyiru", "Gasabo", "Rwanda", "pairwise-sub", "base64-photo",
+                "Claudine-given", "secret-access-token", CODE, VERIFIER)) {
+            assertFalse(log.contains(value), value);
+        }
+        assertFalse(log.contains("picture"), "not even the name of a claim that was not asked for");
+    }
+
+    // A userinfo answer as the real eSignet sends it: a yyyy/MM/dd birth date, the address as an object without a
+    // postal code, and a picture and other details that were never asked for.
+    private static JWTClaimsSet.Builder esignetDetails() {
+        return userinfoClaims()
+                .claim("gender", "Female")
+                .claim("address", Map.of("street_address", "KG 7 Ave", "locality", "Kacyiru", "region", "Gasabo",
+                        "country", "Rwanda"))
+                .claim("picture", "data:image/jpeg;base64,base64-photo")
+                .claim("given_name", "Claudine-given")
+                .claim("zoneinfo", "Africa/Kigali");
     }
 
     @Test
@@ -462,7 +617,7 @@ class MosipClientTest {
     @Test
     void withoutMosipIssuerTheBaseUrlIsTheIssuer() {
         assertEquals(BASE, new MosipProperties(true, BASE + "/", "c", "r", "k", "kid", null, null, null, null, null,
-                null, null, " ", null, null).issuer());
+                null, null, " ", null, null, null, null, false).issuer());
     }
 
     @Test
@@ -512,9 +667,9 @@ class MosipClientTest {
     @Test
     void theUserinfoIssuerDefaultsToTheIdTokenIssuer() {
         assertEquals(BASE, new MosipProperties(true, BASE + "/", "c", "r", "k", "kid", null, null, null, null, null,
-                null, null, null, " ", null).userinfoIssuer());
+                null, null, null, " ", null, null, null, false).userinfoIssuer());
         assertEquals(ESIGNET_ISSUER, new MosipProperties(true, BASE, "c", "r", "k", "kid", null, null, null, null, null,
-                null, null, ESIGNET_ISSUER, null, null).userinfoIssuer());
+                null, null, ESIGNET_ISSUER, null, null, null, null, false).userinfoIssuer());
     }
 
     @Test
@@ -653,7 +808,7 @@ class MosipClientTest {
         MockRestServiceServer keys = MockRestServiceServer.bindTo(template).build();
         keys.expect(ExpectedCount.manyTimes(), requestTo(BASE + "/oauth2/jwks")).andRespond(withServerError());
         MosipClient broken = new MosipClient(new MosipProperties(true, BASE, "coopaggregate", "r", "k", "kid", null,
-                null, null, null, null, null, null, null, null, null),
+                null, null, null, null, null, null, null, null, null, null, null, false),
                 new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), "kid"), builder.build(), template,
                 Clock.systemUTC());
         httpServer.expect(requestTo(BASE + "/oauth2/token"))
@@ -740,7 +895,7 @@ class MosipClientTest {
 
     private static MosipProperties acrProperties(String acrValues, String allowedAcrs) {
         return new MosipProperties(true, BASE, "coopaggregate", "http://localhost:5173/identity/callback", "unused",
-                "coopaggregate-key", null, acrValues, null, null, null, null, null, null, null, allowedAcrs);
+                "coopaggregate-key", null, acrValues, null, null, null, null, null, null, null, allowedAcrs, null, null, false);
     }
 
     @Test

@@ -30,9 +30,10 @@ import com.coopaggregate.member.MemberRepository;
 /**
  * Verifies a new member's identity before registration: start gives a random one-use state and where to send the
  * member; complete checks the state, asks eSignet who the person is, refuses people who are already members, and keeps
- * the verified name and phone that the member is then registered with. Codes, states and tokens are never logged or
- * returned; the name and phone are returned to the manager once, never logged or written to the change history, and
- * kept only until the member is registered or 30 minutes have passed.
+ * the verified details (name, phone and any released birth date, gender, email and address) that the member is then
+ * registered with. Codes, states and tokens are never logged or returned; the details are returned to the manager
+ * once, never logged or written to the change history, and kept only until the member is registered or 30 minutes
+ * have passed.
  */
 @Service
 public class IdentityVerificationService {
@@ -156,22 +157,25 @@ public class IdentityVerificationService {
         }
         phone = RwandanPhoneNumber.normalize(phone);
 
-        verification.setVerifiedDetails(name, phone);
+        // The optional details were already read by MosipClient: each is null when the member did not allow it or it
+        // did not fit, and the login succeeds either way.
+        VerifiedDetails details = new VerifiedDetails(name, phone, claims.birthdate(), claims.gender(), claims.email(),
+                claims.address());
+        verification.setVerifiedDetails(details);
         verification.markVerified(new VerifiedIdentity(claims.subject(), VerificationMethod.PASSWORD), now);
         record(AuditAction.IDENTITY_VERIFIED, manager,
                 "Provider " + PROVIDER + ", method " + VerificationMethod.PASSWORD);
-        return new VerifyResultResponse(verification.getId(), true, VerificationMethod.PASSWORD, name, phone,
+        return VerifyResultResponse.of(verification.getId(), VerificationMethod.PASSWORD, details,
                 now.plus(USE_WITHIN));
     }
 
     /**
-     * The verified name and phone to register the member with. Only the manager who started the verification can use
-     * it, once, within 30 minutes. Nothing changes here; attach then links the member and clears the details.
+     * Every verified detail to register the member with. Only the manager who started the verification can use it,
+     * once, within 30 minutes. Nothing changes here; attach then links the member and clears the details.
      */
     @Transactional
     public VerifiedDetails verifiedDetails(Long verificationId, Manager manager) {
-        IdentityVerification verification = usableVerification(verificationId, manager);
-        return new VerifiedDetails(verification.getVerifiedName(), verification.getVerifiedPhone());
+        return usableVerification(verificationId, manager).verifiedDetails();
     }
 
     /**

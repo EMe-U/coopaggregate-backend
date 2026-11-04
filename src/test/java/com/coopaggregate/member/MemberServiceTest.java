@@ -306,14 +306,126 @@ class MemberServiceTest {
         assertThrows(DuplicateIdentityException.class, () -> service.create(registration(null), manager));
     }
 
+    // --- Every verified detail
+
+    private static final VerifiedDetails ALL = new VerifiedDetails("Uwimana Claudine", "+250788123456",
+            LocalDate.of(1990, 5, 17), "Female", "claudine@example.com", "KG 7 Ave, Kacyiru, Gasabo, Rwanda");
+
     @Test
-    void theBirthDateIsNeverPartOfTheMember() {
-        for (java.lang.reflect.Field field : Member.class.getDeclaredFields()) {
-            assertFalse(field.getName().toLowerCase().contains("birth"), field.getName());
+    void everyVerifiedDetailComesFromTheVerificationAndIsMarkedVerified() {
+        when(identityVerificationService.verifiedDetails(9L, manager)).thenReturn(ALL);
+        doAnswerMarkVerified();
+
+        MemberResponse response = service.create(registration("1199880012345678"), manager);
+
+        assertEquals("Uwimana Claudine", response.fullName());
+        assertEquals("+250788123456", response.phone());
+        assertEquals(LocalDate.of(1990, 5, 17), response.birthDate());
+        assertEquals("Female", response.gender());
+        assertEquals("claudine@example.com", response.email());
+        assertEquals("KG 7 Ave, Kacyiru, Gasabo, Rwanda", response.address());
+        assertEquals("1199880012345678", response.nationalId(), "the national ID stays typed by the manager");
+        assertEquals(List.of("fullName", "phone", "birthdate", "gender", "email", "address"),
+                response.verifiedFields());
+        ArgumentCaptor<Member> saved = ArgumentCaptor.forClass(Member.class);
+        verify(repository).save(saved.capture());
+        assertTrue(saved.getValue().isBirthDateVerified());
+        assertTrue(saved.getValue().isGenderVerified());
+        assertTrue(saved.getValue().isEmailVerified());
+        assertTrue(saved.getValue().isAddressVerified());
+    }
+
+    @Test
+    void detailsThatWereNotVerifiedStayEmptyAndUnflagged() {
+        when(identityVerificationService.verifiedDetails(9L, manager)).thenReturn(new VerifiedDetails(
+                "Uwimana Claudine", "+250788123456", null, "Female", null, null));
+        doAnswerMarkVerified();
+
+        MemberResponse response = service.create(new NewMemberRequest(9L, null, null, null, "Busogo", null, null),
+                manager);
+
+        assertNull(response.birthDate());
+        assertNull(response.email());
+        assertEquals("Busogo", response.address(), "an address that was not verified is typed as before");
+        assertEquals(List.of("fullName", "phone", "gender"), response.verifiedFields());
+    }
+
+    @Test
+    void aValueSentForAnyVerifiedFieldIsRefusedWithoutSavingAnything() {
+        when(identityVerificationService.verifiedDetails(9L, manager)).thenReturn(ALL);
+        List<NewMemberRequest> overrides = List.of(
+                new NewMemberRequest(9L, "Someone Else", null, null, null, null, null),
+                new NewMemberRequest(9L, null, "0788999999", null, null, null, null),
+                new NewMemberRequest(9L, null, null, null, null, null, null, LocalDate.of(1991, 1, 1), null, null),
+                new NewMemberRequest(9L, null, null, null, null, null, null, null, "Male", null),
+                new NewMemberRequest(9L, null, null, null, null, null, null, null, null, "other@example.com"),
+                new NewMemberRequest(9L, null, null, null, "Musanze", null, null),
+                new NewMemberRequest(9L, "", null, null, null, null, null),
+                new NewMemberRequest(9L, null, null, null, "", null, null));
+
+        for (NewMemberRequest request : overrides) {
+            com.coopaggregate.identity.IdentityRequestException e = assertThrows(
+                    com.coopaggregate.identity.IdentityRequestException.class, () -> service.create(request, manager));
+
+            assertEquals("VERIFIED_FIELD_LOCKED", e.errorCode());
+            assertEquals("This detail came from the identity check and cannot be changed here.", e.getMessage());
         }
-        for (java.lang.reflect.Field field : MemberResponse.class.getDeclaredFields()) {
-            assertFalse(field.getName().toLowerCase().contains("birth"), field.getName());
+        verify(repository, never()).save(any());
+        verify(identityVerificationService, never()).attach(any(), any(), any());
+    }
+
+    @Test
+    void theRefusalNeverRepeatsTheVerifiedValue() {
+        when(identityVerificationService.verifiedDetails(9L, manager)).thenReturn(ALL);
+
+        String message = assertThrows(BadRequestException.class, () -> service.create(new NewMemberRequest(9L,
+                null, null, null, null, null, null, null, null, "other@example.com"), manager)).getMessage();
+
+        for (String value : List.of("claudine", "1990", "Female", "Kacyiru", "Uwimana", "788123456", "other@")) {
+            assertFalse(message.contains(value), value);
         }
+    }
+
+    @Test
+    void theNameAndPhoneAreLockedEvenWithoutOptionalDetails() {
+        BadRequestException e = assertThrows(BadRequestException.class, () -> service.create(
+                new NewMemberRequest(9L, "Someone Else", "0788999999", null, null, null, null), manager));
+
+        assertEquals("VERIFIED_FIELD_LOCKED", ((com.coopaggregate.identity.IdentityRequestException) e).errorCode());
+    }
+
+    @Test
+    void aBirthDateGenderOrEmailThatWasNotVerifiedCannotBeTypedEither() {
+        BadRequestException birth = assertThrows(BadRequestException.class, () -> service.create(new NewMemberRequest(
+                9L, null, null, null, null, null, null, LocalDate.of(1990, 5, 17), null, null), manager));
+        BadRequestException email = assertThrows(BadRequestException.class, () -> service.create(new NewMemberRequest(
+                9L, null, null, null, null, null, null, null, null, "x@example.com"), manager));
+
+        assertEquals("birthDate: must not be sent: it only comes from the identity check", birth.getMessage());
+        assertEquals("email: must not be sent: it only comes from the identity check", email.getMessage());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void changingAVerifiedAddressRemovesItsVerifiedMark() {
+        Member member = existingMember(5L, "M-0005");
+        member.markIdentityVerified(VerificationMethod.PASSWORD, Instant.now(), "sub");
+        member.setVerifiedAddress("KG 7 Ave, Kacyiru");
+        when(repository.findById(5L)).thenReturn(Optional.of(member));
+
+        service.update(5L, new MemberRequest("Existing Member", "+250780000000", null, "KG 7 Ave, Kacyiru", null,
+                null));
+        assertTrue(member.isAddressVerified(), "unchanged");
+
+        MemberResponse response = service.update(5L, new MemberRequest("Existing Member", "+250780000000", null,
+                "Musanze", null, null));
+        assertFalse(member.isAddressVerified());
+        assertEquals(List.of("fullName", "phone"), response.verifiedFields());
+    }
+
+    @Test
+    void aMemberWhoWasNeverVerifiedHasNoVerifiedFields() {
+        assertEquals(List.of(), MemberResponse.from(existingMember(5L, "M-0005")).verifiedFields());
     }
 
     @Test

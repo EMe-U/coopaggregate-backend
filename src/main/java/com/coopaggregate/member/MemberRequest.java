@@ -24,7 +24,8 @@ public record MemberRequest(
         @Pattern(regexp = "^(\\d{16})?$", message = "must be 16 digits")
         String nationalId,
 
-        @Size(max = 255, message = "must be at most 255 characters")
+        // 500, like a verified address, so a member with a long verified address can still be edited.
+        @Size(max = 500, message = "must be at most 500 characters")
         String address,
 
         @PastOrPresent(message = "cannot be in the future")

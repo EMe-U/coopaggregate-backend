@@ -664,7 +664,7 @@ class IdentityDiagnosticsTest {
 
     private static MosipProperties properties(String tokenEndpoint, String userinfoIssuer) {
         return new MosipProperties(true, BASE, "coopaggregate", "http://localhost:5173/identity/callback", "unused",
-                "coopaggregate-key", null, null, null, null, tokenEndpoint, null, null, null, userinfoIssuer, null);
+                "coopaggregate-key", null, null, null, null, tokenEndpoint, null, null, null, userinfoIssuer, null, null, null, false);
     }
 
     private static String tokenBody(String idToken) {

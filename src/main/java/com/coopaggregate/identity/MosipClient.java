@@ -2,8 +2,12 @@ package com.coopaggregate.identity;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +31,7 @@ import org.springframework.web.client.RestOperations;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.coopaggregate.common.KigaliTime;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.proc.JWSVerificationKeySelector;
 import com.nimbusds.jose.proc.SecurityContext;
@@ -43,12 +48,8 @@ public class MosipClient {
     private static final Logger log = LoggerFactory.getLogger(MosipClient.class);
     private static final String UNTRUSTED = "The identity provider's answer could not be verified.";
     private static final String ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
-    // The OIDC claims request: only the name and the phone, both essential, so eSignet shows them as required on its
-    // consent screen. A member who does not allow them can only cancel.
-    static final String CLAIMS_REQUEST =
-            "{\"userinfo\":{\"name\":{\"essential\":true},\"phone_number\":{\"essential\":true}}}";
-
     private final MosipProperties properties;
+    private final String claimsRequest;
     private final MosipSigningKey signingKey;
     private final RestClient restClient;
     private static final Set<JWSAlgorithm> USERINFO_ALGORITHMS = Set.of(JWSAlgorithm.PS256, JWSAlgorithm.RS256);
@@ -66,6 +67,14 @@ public class MosipClient {
         this.signingKey = signingKey;
         this.restClient = restClient;
         this.clock = clock;
+        this.claimsRequest = claimsRequest(properties);
+        if (!properties.ignoredOptionalClaims().isEmpty()) {
+            log.warn("MOSIP_OPTIONAL_CLAIMS: not asked for (only birthdate, gender, email and address can be): {}",
+                    properties.ignoredOptionalClaims());
+        }
+        if (properties.nationalIdClaim() != null && properties.requestedNationalIdClaim() == null) {
+            log.warn("MOSIP_NATIONAL_ID_CLAIM is not a usable claim name, so the national ID is not asked for");
+        }
         log.info("Identity verification is on. Token: {}, userinfo: {}, JWKS: {}", Diagnostics.safeUrl(properties.tokenUrl()),
                 Diagnostics.safeUrl(properties.userinfoUrl()), Diagnostics.safeUrl(properties.jwksUrl()));
         log.info("Client assertion: {}", Diagnostics.signingKey(signingKey, properties.audience(),
@@ -106,13 +115,34 @@ public class MosipClient {
     }
 
     /**
+     * The OIDC claims request: the name and phone essential (eSignet shows them as required; a member who does not
+     * allow them can only cancel), then the optional details of MOSIP_OPTIONAL_CLAIMS and, when set, the national ID
+     * claim, which the member may refuse. Never the picture. With the defaults:
+     * {"userinfo":{"name":{"essential":true},"phone_number":{"essential":true},"birthdate":null,"gender":null,
+     * "email":null,"address":null}}. Claim names are checked in MosipProperties, so they need no JSON escaping.
+     */
+    static String claimsRequest(MosipProperties properties) {
+        StringBuilder json = new StringBuilder(
+                "{\"userinfo\":{\"name\":{\"essential\":true},\"phone_number\":{\"essential\":true}");
+        List<String> optional = new ArrayList<>(properties.requestedOptionalClaims());
+        if (properties.requestedNationalIdClaim() != null) {
+            optional.add(properties.requestedNationalIdClaim());
+        }
+        for (String name : optional) {
+            json.append(",\"").append(name).append("\":null");
+        }
+        return json.append("}}").toString();
+    }
+
+    /**
      * The URL the member is sent to. The challenge is the S256 hash of the verifier kept for the callback; the claims
-     * parameter asks for the name and phone only.
+     * parameter says which details are asked for (see claimsRequest). With MOSIP_PROMPT_CONSENT=true it also carries
+     * prompt=consent, so eSignet shows its Allow page every time.
      */
     public String authorizationUrl(String state, String nonce, String codeChallenge) {
         // Only the configured acr_values, as sent; nothing else from the URL (state, nonce, challenge) is logged.
         log.info("Identity verification authorize request acr_values: {}", properties.acrValues());
-        return UriComponentsBuilder.fromUriString(properties.authorizationUrl())
+        UriComponentsBuilder url = UriComponentsBuilder.fromUriString(properties.authorizationUrl())
                 .queryParam("response_type", "code")
                 .queryParam("client_id", properties.clientId())
                 .queryParam("redirect_uri", properties.redirectUri())
@@ -122,8 +152,11 @@ public class MosipClient {
                 .queryParam("code_challenge", codeChallenge)
                 .queryParam("code_challenge_method", "S256")
                 .queryParam("acr_values", properties.acrValues())
-                .queryParam("claims", "{claims}")
-                .encode().buildAndExpand(Map.of("claims", CLAIMS_REQUEST)).toUriString();
+                .queryParam("claims", "{claims}");
+        if (properties.promptConsent()) {
+            url.queryParam("prompt", "consent");
+        }
+        return url.encode().buildAndExpand(Map.of("claims", claimsRequest)).toUriString();
     }
 
     /**
@@ -149,7 +182,29 @@ public class MosipClient {
                     + userinfoDiagnostics.describe(answer.body(), answer.response(), id.getSubject(), null));
         }
         return new MosipClaims(userinfo.getSubject(), claim(userinfo, "name"), claim(userinfo, "phone_number"),
-                acr(id));
+                acr(id), optional(userinfo, "birthdate", value -> ClaimValues.birthdate(value, today())),
+                optional(userinfo, "gender", ClaimValues::gender), optional(userinfo, "email", ClaimValues::email),
+                optional(userinfo, "address", ClaimValues::address));
+    }
+
+    private LocalDate today() {
+        return LocalDate.now(clock.withZone(KigaliTime.ZONE));
+    }
+
+    // An optional detail, only when it was asked for: anything not asked for is not read, even when eSignet sends it.
+    // null when it is absent (refused or not released) or its value does not fit. Only the claim's name is logged.
+    private <T> T optional(Jwt userinfo, String name, Function<Object, T> read) {
+        if (!properties.requestedOptionalClaims().contains(name)) {
+            return null;
+        }
+        Object raw = userinfo.getClaims().get(name);
+        if (raw == null) {
+            log.info("Identity verification userinfo claim {}: absent", name);
+            return null;
+        }
+        T value = read.apply(raw);
+        log.info("Identity verification userinfo claim {}: {}", name, value == null ? "ignored, unusable" : "present");
+        return value;
     }
 
     /** Whether an id_token acr is one of MOSIP_ALLOWED_ACRS. */
@@ -287,14 +342,15 @@ public class MosipClient {
 
     // eSignet picks the language and sends a plain claim ("name"). A claim tagged with a language ("name#eng") is
     // only used when the plain one is missing; with several, the first language code in alphabetical order wins.
+    // Control characters are removed (ClaimValues.text).
     private static String claim(Jwt jwt, String name) {
-        String plain = text(jwt.getClaims().get(name));
+        String plain = ClaimValues.text(jwt.getClaims().get(name));
         if (plain != null) {
             return plain;
         }
         return jwt.getClaims().entrySet().stream()
                 .filter(entry -> entry.getKey().startsWith(name + "#"))
-                .map(entry -> text(entry.getValue()))
+                .map(entry -> ClaimValues.text(entry.getValue()))
                 .filter(java.util.Objects::nonNull)
                 .sorted()
                 .findFirst()
