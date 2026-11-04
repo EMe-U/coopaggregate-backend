@@ -8,6 +8,7 @@ import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 
 import org.springframework.web.client.RestOperations;
@@ -45,15 +46,25 @@ final class TokenDiagnostics {
     private final String clientId;
     private final Clock clock;
     private final Duration skew;
+    private final Set<JWSAlgorithm> algorithms;
+    private final boolean expiryRequired;
+    private final boolean kidRequired;
 
+    /**
+     * The same rules as the decoder of that token: the allowed algorithms, whether exp must be there, and whether the
+     * key must be named by the header's kid.
+     */
     TokenDiagnostics(RestOperations jwksOperations, String jwksUrl, String issuer, String clientId, Clock clock,
-                     Duration skew) {
+                     Duration skew, Set<JWSAlgorithm> algorithms, boolean expiryRequired, boolean kidRequired) {
         this.jwksOperations = jwksOperations;
         this.jwksUrl = jwksUrl;
         this.issuer = issuer;
         this.clientId = clientId;
         this.clock = clock;
         this.skew = skew;
+        this.algorithms = algorithms;
+        this.expiryRequired = expiryRequired;
+        this.kidRequired = kidRequired;
     }
 
     /**
@@ -75,7 +86,7 @@ final class TokenDiagnostics {
                 JWSHeader h = jwt.getHeader();
                 header = "{alg=" + h.getAlgorithm() + ", kid=" + safe(h.getKeyID()) + ", typ="
                         + (h.getType() == null ? "(none)" : safe(h.getType().toString())) + "}";
-                if (!JWSAlgorithm.PS256.equals(h.getAlgorithm())) {
+                if (!algorithms.contains(h.getAlgorithm())) {
                     failed.add("algorithm not allowed");
                 } else {
                     failed.addAll(signature(jwt, keys));
@@ -131,15 +142,15 @@ final class TokenDiagnostics {
         return parts == 5 ? "encrypted JWT (5 parts)" : "other";
     }
 
-    // The key the header names (or, without a kid, any RSA key) must verify the signature.
-    private static List<String> signature(SignedJWT jwt, JWKSet keys) {
+    // The key the header names (or, without a kid and when none is needed, any RSA key) must verify the signature.
+    private List<String> signature(SignedJWT jwt, JWKSet keys) {
         if (keys == null) {
             return List.of("signature: keys could not be read");
         }
         String kid = jwt.getHeader().getKeyID();
         List<JWK> candidates = keys.getKeys().stream()
                 .filter(key -> key instanceof RSAKey)
-                .filter(key -> kid == null || kid.equals(key.getKeyID()))
+                .filter(key -> kid == null ? !kidRequired : kid.equals(key.getKeyID()))
                 .toList();
         if (candidates.isEmpty()) {
             return List.of("signature: no matching key");
@@ -173,7 +184,9 @@ final class TokenDiagnostics {
         Instant now = clock.instant();
         Instant exp = instant(claims.get("exp"));
         if (claims.get("exp") == null) {
-            failed.add("exp missing");
+            if (expiryRequired) {
+                failed.add("exp missing");
+            }
         } else if (exp == null) {
             failed.add("exp unreadable");
         } else if (exp.plus(skew).isBefore(now)) {

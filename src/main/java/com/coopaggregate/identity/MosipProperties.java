@@ -24,7 +24,8 @@ public record MosipProperties(
         String authorizationEndpoint,
         String tokenEndpoint,
         String userinfoEndpoint,
-        String jwksUri) {
+        String jwksUri,
+        String expectedIssuer) {
 
     // Only openid: the name and phone are asked for with the claims parameter (see MosipClient), so no scope brings
     // in details the cooperative does not use.
@@ -78,9 +79,12 @@ public record MosipProperties(
         return insecure;
     }
 
-    /** The issuer the ID token and the userinfo response must name. */
+    /**
+     * The iss the ID token and the userinfo answer must both carry, compared exactly: MOSIP_ISSUER when it is set,
+     * otherwise MOSIP_BASE_URL.
+     */
     public String issuer() {
-        return baseUrl;
+        return isBlank(expectedIssuer) ? baseUrl : expectedIssuer.trim();
     }
 
     public String authorizationUrl() {

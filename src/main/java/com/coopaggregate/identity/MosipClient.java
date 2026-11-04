@@ -3,6 +3,7 @@ package com.coopaggregate.identity;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,10 +27,14 @@ import org.springframework.web.client.RestOperations;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.proc.JWSVerificationKeySelector;
+import com.nimbusds.jose.proc.SecurityContext;
+
 /**
  * Talks to eSignet: the authorize URL, the token call (authenticated with a signed client assertion and PKCE) and the
- * userinfo call. The ID token and the userinfo answer come back signed only (PS256) and are checked against the
- * provider's published keys (JWKS). Codes, tokens, assertions and claims are never logged, and error messages never
+ * userinfo call. The ID token (PS256) and the userinfo answer (PS256 or RS256) come back signed only and are checked
+ * against the provider's published keys (JWKS). Codes, tokens, assertions and claims are never logged, and error messages never
  * carry the provider's answer.
  */
 public class MosipClient {
@@ -46,9 +51,13 @@ public class MosipClient {
     private final MosipProperties properties;
     private final MosipSigningKey signingKey;
     private final RestClient restClient;
+    private static final Set<JWSAlgorithm> USERINFO_ALGORITHMS = Set.of(JWSAlgorithm.PS256, JWSAlgorithm.RS256);
+
     private final NimbusJwtDecoder decoder;
+    private final NimbusJwtDecoder userinfoDecoder;
     private final Clock clock;
-    private final TokenDiagnostics tokenDiagnostics;
+    private final TokenDiagnostics idTokenDiagnostics;
+    private final TokenDiagnostics userinfoDiagnostics;
 
     /** jwksOperations fetches the provider's keys; both it and restClient should have timeouts. */
     public MosipClient(MosipProperties properties, MosipSigningKey signingKey, RestClient restClient,
@@ -61,8 +70,10 @@ public class MosipClient {
                 Diagnostics.safeUrl(properties.userinfoUrl()), Diagnostics.safeUrl(properties.jwksUrl()));
         log.info("Client assertion: {}", Diagnostics.signingKey(signingKey, properties.audience(),
                 MosipClientAssertion.VALID_SECONDS));
-        this.tokenDiagnostics = new TokenDiagnostics(jwksOperations, properties.jwksUrl(), properties.issuer(),
-                properties.clientId(), clock, CLOCK_SKEW);
+        this.idTokenDiagnostics = new TokenDiagnostics(jwksOperations, properties.jwksUrl(), properties.issuer(),
+                properties.clientId(), clock, CLOCK_SKEW, Set.of(JWSAlgorithm.PS256), true, false);
+        this.userinfoDiagnostics = new TokenDiagnostics(jwksOperations, properties.jwksUrl(), properties.issuer(),
+                properties.clientId(), clock, CLOCK_SKEW, USERINFO_ALGORITHMS, false, true);
         this.decoder = NimbusJwtDecoder.withJwkSetUri(properties.jwksUrl())
                 .jwsAlgorithm(SignatureAlgorithm.PS256)
                 .restOperations(jwksOperations)
@@ -73,6 +84,25 @@ public class MosipClient {
                 new JwtIssuerValidator(properties.issuer()),
                 audienceIsOurClient(),
                 hasExpiryAndSubject()));
+        // The userinfo answer: PS256 or RS256 only (eSignet signs it with RS256), verified with the JWKS key named by
+        // its kid. "none", HMAC, EC and any other algorithm get no key and are refused. exp is optional (OIDC Core
+        // 5.3.2 asks the signed userinfo for iss and aud only) but refused when it has passed; iss, aud and sub are
+        // required as for the id_token.
+        this.userinfoDecoder = NimbusJwtDecoder.withJwkSetUri(properties.jwksUrl())
+                .jwsAlgorithms(algorithms -> {
+                    algorithms.add(SignatureAlgorithm.PS256);
+                    algorithms.add(SignatureAlgorithm.RS256);
+                })
+                .restOperations(jwksOperations)
+                .jwtProcessorCustomizer(processor -> processor.setJWSKeySelector(new UserinfoKeySelector(
+                        USERINFO_ALGORITHMS, ((JWSVerificationKeySelector<SecurityContext>) processor
+                                .getJWSKeySelector()).getJWKSource())))
+                .build();
+        this.userinfoDecoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                new JwtTimestampValidator(CLOCK_SKEW),
+                new JwtIssuerValidator(properties.issuer()),
+                audienceIsOurClient(),
+                hasSubject()));
     }
 
     /**
@@ -105,15 +135,16 @@ public class MosipClient {
         if (idToken == null || accessToken == null) {
             throw untrusted();
         }
-        Jwt id = verify(idToken, "id_token", null, null);
+        Jwt id = verify(decoder, idTokenDiagnostics, idToken, "id_token", null, null);
         if (nonce == null || !nonce.equals(id.getClaimAsString("nonce"))) {
             throw untrusted();
         }
         UserinfoAnswer answer = userinfo(accessToken);
-        Jwt userinfo = verify(answer.body(), "userinfo", answer.response(), id.getSubject());
+        Jwt userinfo = verify(userinfoDecoder, userinfoDiagnostics, answer.body(), "userinfo", answer.response(),
+                id.getSubject());
         if (!id.getSubject().equals(userinfo.getSubject())) {
             throw IdentityProviderException.failed(UNTRUSTED, "userinfo check failed: "
-                    + tokenDiagnostics.describe(answer.body(), answer.response(), id.getSubject(), null));
+                    + userinfoDiagnostics.describe(answer.body(), answer.response(), id.getSubject(), null));
         }
         return new MosipClaims(userinfo.getSubject(), claim(userinfo, "name"), claim(userinfo, "phone_number"));
     }
@@ -168,20 +199,21 @@ public class MosipClient {
                 type == null ? null : type.toString());
         if (body == null || body.isBlank() || body.trim().startsWith("{")) {
             throw IdentityProviderException.failed(UNTRUSTED, "userinfo check failed: "
-                    + tokenDiagnostics.describe(body, response, null, null));
+                    + userinfoDiagnostics.describe(body, response, null, null));
         }
         return new UserinfoAnswer(body.trim(), response);
     }
 
     // A refused token: the existing one-line reason, then (unless the provider's keys could not be fetched) what the
     // token looked like and which of our checks fail. See TokenDiagnostics for what is and is never shown.
-    private Jwt verify(String token, String what, TokenDiagnostics.Response response, String expectedSub) {
+    private Jwt verify(NimbusJwtDecoder tokenDecoder, TokenDiagnostics diagnostics, String token, String what,
+                       TokenDiagnostics.Response response, String expectedSub) {
         try {
-            return decoder.decode(token);
+            return tokenDecoder.decode(token);
         } catch (JwtException e) {
             String detail = Diagnostics.token(what, properties.jwksUrl(), e);
             if (!detail.startsWith("JWKS request")) {
-                detail = detail + "; " + tokenDiagnostics.describe(token, response, expectedSub,
+                detail = detail + "; " + diagnostics.describe(token, response, expectedSub,
                         e.getClass().getSimpleName());
             }
             throw IdentityProviderException.failed(UNTRUSTED, detail);
@@ -220,6 +252,12 @@ public class MosipClient {
 
     private static OAuth2TokenValidator<Jwt> hasExpiryAndSubject() {
         return jwt -> jwt.getExpiresAt() != null && jwt.getSubject() != null && !jwt.getSubject().isBlank()
+                ? OAuth2TokenValidatorResult.success()
+                : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token"));
+    }
+
+    private static OAuth2TokenValidator<Jwt> hasSubject() {
+        return jwt -> jwt.getSubject() != null && !jwt.getSubject().isBlank()
                 ? OAuth2TokenValidatorResult.success()
                 : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token"));
     }

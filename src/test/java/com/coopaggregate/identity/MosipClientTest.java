@@ -65,6 +65,7 @@ class MosipClientTest {
 
     private static RSAKey providerKey;
     private static RSAKey strangerKey;
+    private static RSAKey unknownKey;
     private static KeyPair cooperativeKey;
 
     private MockRestServiceServer http;
@@ -73,8 +74,11 @@ class MosipClientTest {
 
     @BeforeAll
     static void createKeys() throws Exception {
-        providerKey = new RSAKeyGenerator(2048).keyID("provider-1").generate();
+        // Like eSignet's JWKS: the key's metadata says PS256, though the userinfo answer is signed with it using RS256.
+        providerKey = new RSAKeyGenerator(2048).keyID("provider-1").algorithm(JWSAlgorithm.PS256)
+                .keyUse(com.nimbusds.jose.jwk.KeyUse.SIGNATURE).generate();
         strangerKey = new RSAKeyGenerator(2048).keyID("provider-1").generate();
+        unknownKey = new RSAKeyGenerator(2048).keyID("unknown-kid").generate();
         KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
         generator.initialize(2048);
         cooperativeKey = generator.generateKeyPair();
@@ -82,6 +86,11 @@ class MosipClientTest {
 
     @BeforeEach
     void setUp() {
+        useIssuer(null);
+    }
+
+    // A client whose MOSIP_ISSUER is the given value (null: not set).
+    private void useIssuer(String issuer) {
         RestClient.Builder builder = RestClient.builder();
         http = MockRestServiceServer.bindTo(builder).build();
         RestTemplate jwksTemplate = new RestTemplate();
@@ -90,7 +99,7 @@ class MosipClientTest {
                 .andRespond(withSuccess(new JWKSet(providerKey.toPublicJWK()).toString(), MediaType.APPLICATION_JSON));
         MosipProperties properties = new MosipProperties(true, BASE, "coopaggregate",
                 "http://localhost:5173/identity/callback", "unused", "coopaggregate-key", null, null, null, null, null,
-                null, null);
+                null, null, issuer);
         client = new MosipClient(properties,
                 new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), "coopaggregate-key"), builder.build(),
                 jwksTemplate, Clock.systemUTC());
@@ -337,6 +346,157 @@ class MosipClientTest {
     }
 
     @Test
+    void aUserinfoWithoutAnIssuerIsRefused() throws Exception {
+        assertRefused(idToken(idClaims()), userinfo(userinfoClaims().issuer(null)));
+    }
+
+    @Test
+    void aUserinfoWithoutAnAudienceIsRefused() throws Exception {
+        assertRefused(idToken(idClaims()), userinfo(userinfoClaims().audience((String) null)));
+    }
+
+    @Test
+    void anIdTokenWithoutAnIssuerIsRefused() throws Exception {
+        assertRefused(idToken(idClaims().issuer(null)), userinfo(userinfoClaims()));
+    }
+
+    // --- The userinfo algorithm: exactly PS256 or RS256, with the JWKS key its kid names
+
+    @Test
+    void anRs256UserinfoSignedByTheJwksKeyIsAcceptedThoughTheJwksSaysPs256() throws Exception {
+        provider(idToken(idClaims()), sign(providerKey, JWSAlgorithm.RS256, userinfoClaims()));
+
+        MosipClaims claims = client.fetchClaims(CODE, VERIFIER, NONCE);
+
+        assertEquals("pairwise-sub", claims.subject());
+        assertEquals("Uwimana Claudine", claims.name());
+        assertEquals("+250788123456", claims.phoneNumber());
+    }
+
+    @Test
+    void anRs256UserinfoSignedByAnUnknownKeyIsRefused() throws Exception {
+        assertRefused(idToken(idClaims()), sign(unknownKey, JWSAlgorithm.RS256, userinfoClaims()));
+    }
+
+    @Test
+    void anRs256UserinfoWithTheRightKidButAnotherKeyIsRefused() throws Exception {
+        assertRefused(idToken(idClaims()), sign(strangerKey, JWSAlgorithm.RS256, userinfoClaims()));
+    }
+
+    @Test
+    void anRs256UserinfoWithoutAKidIsRefused() throws Exception {
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).build(), userinfoClaims().build());
+        jwt.sign(new RSASSASigner(providerKey));
+
+        assertRefused(idToken(idClaims()), jwt.serialize());
+    }
+
+    @Test
+    void anUnsignedUserinfoIsRefused() throws Exception {
+        assertRefused(idToken(idClaims()), new PlainJWT(new PlainHeader(), userinfoClaims().build()).serialize());
+    }
+
+    @Test
+    void anHs256UserinfoIsRefused() throws Exception {
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.HS256).keyID("provider-1").build(),
+                userinfoClaims().build());
+        jwt.sign(new MACSigner("0123456789abcdef0123456789abcdef"));
+
+        assertRefused(idToken(idClaims()), jwt.serialize());
+    }
+
+    @Test
+    void anEs256UserinfoIsRefused() throws Exception {
+        com.nimbusds.jose.jwk.ECKey ec = new com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256)
+                .keyID("provider-1").generate();
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.ES256).keyID("provider-1").build(),
+                userinfoClaims().build());
+        jwt.sign(new com.nimbusds.jose.crypto.ECDSASigner(ec));
+
+        assertRefused(idToken(idClaims()), jwt.serialize());
+    }
+
+    @Test
+    void anRs384UserinfoIsRefused() throws Exception {
+        assertRefused(idToken(idClaims()), sign(providerKey, JWSAlgorithm.RS384, userinfoClaims()));
+    }
+
+    @Test
+    void anRs256IdTokenIsStillRefused() throws Exception {
+        assertRefused(sign(providerKey, JWSAlgorithm.RS256, idClaims()), userinfo(userinfoClaims()));
+    }
+
+    // --- The userinfo expiry: optional, but refused once passed
+
+    @Test
+    void aUserinfoWithoutExpOrIatIsAccepted() throws Exception {
+        provider(idToken(idClaims()),
+                sign(providerKey, JWSAlgorithm.RS256, userinfoClaims().expirationTime(null).issueTime(null)));
+
+        assertEquals("Uwimana Claudine", client.fetchClaims(CODE, VERIFIER, NONCE).name());
+    }
+
+    @Test
+    void anExpiredRs256UserinfoIsRefused() throws Exception {
+        assertRefused(idToken(idClaims()), sign(providerKey, JWSAlgorithm.RS256,
+                userinfoClaims().issueTime(null).expirationTime(new Date(System.currentTimeMillis() - 600_000))));
+    }
+
+    @Test
+    void anRs256UserinfoForAnotherPersonIsRefused() throws Exception {
+        assertRefused(idToken(idClaims()),
+                sign(providerKey, JWSAlgorithm.RS256, userinfoClaims().subject("another-person")));
+    }
+
+    // --- MOSIP_ISSUER
+
+    private static final String ESIGNET_ISSUER = "http://localhost:8088/v1/esignet";
+
+    @Test
+    void withoutMosipIssuerTheBaseUrlIsTheIssuer() {
+        assertEquals(BASE, new MosipProperties(true, BASE + "/", "c", "r", "k", "kid", null, null, null, null, null,
+                null, null, " ").issuer());
+    }
+
+    @Test
+    void mosipIssuerIsTheIssuerBothTokensMustCarry() throws Exception {
+        useIssuer(ESIGNET_ISSUER);
+        provider(idToken(idClaims().issuer(ESIGNET_ISSUER)),
+                sign(providerKey, JWSAlgorithm.RS256, userinfoClaims().issuer(ESIGNET_ISSUER)));
+
+        assertEquals("Uwimana Claudine", client.fetchClaims(CODE, VERIFIER, NONCE).name());
+    }
+
+    @Test
+    void withMosipIssuerAUserinfoWithTheBaseUrlIsRefused() throws Exception {
+        useIssuer(ESIGNET_ISSUER);
+
+        assertRefused(idToken(idClaims().issuer(ESIGNET_ISSUER)), userinfo(userinfoClaims()));
+    }
+
+    @Test
+    void withMosipIssuerAnIdTokenWithTheBaseUrlIsRefused() throws Exception {
+        useIssuer(ESIGNET_ISSUER);
+
+        assertRefused(idToken(idClaims()), userinfo(userinfoClaims().issuer(ESIGNET_ISSUER)));
+    }
+
+    @Test
+    void withMosipIssuerTheComparisonIsExact() throws Exception {
+        useIssuer(ESIGNET_ISSUER);
+
+        assertRefused(idToken(idClaims().issuer(ESIGNET_ISSUER)),
+                userinfo(userinfoClaims().issuer(ESIGNET_ISSUER + "/")));
+    }
+
+    @Test
+    void withMosipIssuerAUserinfoWithoutAnIssuerIsRefused() throws Exception {
+        useIssuer(ESIGNET_ISSUER);
+
+        assertRefused(idToken(idClaims().issuer(ESIGNET_ISSUER)), userinfo(userinfoClaims().issuer(null)));
+    }
+
+    @Test
     void aUserinfoThatIsPlainJsonIsRefusedBecauseItIsNotSigned() throws Exception {
         assertRefused(idToken(idClaims()), "{\"sub\":\"pairwise-sub\",\"name\":\"Uwimana Claudine\"}");
     }
@@ -406,7 +566,7 @@ class MosipClientTest {
         MockRestServiceServer keys = MockRestServiceServer.bindTo(template).build();
         keys.expect(ExpectedCount.manyTimes(), requestTo(BASE + "/oauth2/jwks")).andRespond(withServerError());
         MosipClient broken = new MosipClient(new MosipProperties(true, BASE, "coopaggregate", "r", "k", "kid", null,
-                null, null, null, null, null, null),
+                null, null, null, null, null, null, null),
                 new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), "kid"), builder.build(), template,
                 Clock.systemUTC());
         httpServer.expect(requestTo(BASE + "/oauth2/token"))
@@ -489,7 +649,11 @@ class MosipClientTest {
     }
 
     private static String sign(RSAKey key, JWTClaimsSet.Builder claims) throws Exception {
-        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.PS256).keyID(key.getKeyID()).build(),
+        return sign(key, JWSAlgorithm.PS256, claims);
+    }
+
+    private static String sign(RSAKey key, JWSAlgorithm algorithm, JWTClaimsSet.Builder claims) throws Exception {
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(algorithm).keyID(key.getKeyID()).build(),
                 claims.build());
         jwt.sign(new RSASSASigner(key));
         return jwt.serialize();

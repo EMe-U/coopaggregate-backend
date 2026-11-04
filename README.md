@@ -101,6 +101,7 @@ cd coopaggregate-backend
 | `MOSIP_PRIVATE_KEY_PATH` | With `MOSIP_ENABLED` | Path to the cooperative's RSA private key file (PKCS#8 PEM or JWK, detected from the content). Keep it outside the repository |
 | `MOSIP_KEY_ID` | With `MOSIP_ENABLED` | The `kid` of the matching public JWK |
 | `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL`. The name and phone are asked for with the `claims` parameter, so leave `MOSIP_SCOPE` out; the app warns at startup if it asks for more than `openid` and `phone` |
+| `MOSIP_ISSUER` | No | The exact `iss` both the ID token and the userinfo answer must carry. Default: `MOSIP_BASE_URL` |
 | `PORT` | No | HTTP port. Default: `8080` |
 
 The manager is the only user who logs in. On startup, if the `manager` table is empty,
@@ -599,7 +600,7 @@ every other feature do not depend on it.
 2. **Back with a code:** `POST /api/members/verify/callback` with `{code, state}`. The backend exchanges the code
    at the token endpoint with a client assertion (PS256, signed with the private key in `MOSIP_PRIVATE_KEY_PATH`,
    with the `kid` of `MOSIP_KEY_ID`), then checks the ID token and the signed userinfo answer against eSignet's
-   JWKS (PS256 only: signature, issuer, audience, expiry, nonce, and the same `sub` in both). Only `name` and
+   JWKS (signature, issuer, audience, expiry, nonce, and the same `sub` in both; see "Token checks" below). Only `name` and
    `phone_number` are read; a birth date, email or anything else eSignet sends is ignored. eSignet picks the
    language and sends a plain `name`; a language-tagged one (`name#eng`) is used only when the plain one is
    missing (with several, the first language code alphabetically). The name is trimmed (runs of spaces become
@@ -649,6 +650,22 @@ text. Older history rows may also show `IDENTITY_MISMATCH` from the comparison t
 tokens, assertions, claims, the verified details and the key are never logged; the server log only gets safe
 one-line descriptions of a failed call to eSignet (address without query, HTTP status, known OAuth error code).
 
+**Token checks.** Both tokens must carry exactly the expected `iss` (`MOSIP_ISSUER`, or `MOSIP_BASE_URL` when it
+is not set; present, and compared character for character), an `aud` containing `MOSIP_CLIENT_ID`, and a `sub`; the
+userinfo `sub` must be the ID token's. The two differ in two places:
+
+| | ID token | Userinfo answer |
+|---|---|---|
+| Algorithm | PS256 only | PS256 or RS256 |
+| Key | a JWKS key that verifies it | the RSA key of the JWKS whose `kid` is in the token header (no `kid`, or no such key: refused) |
+| `exp` | required, and not passed | optional; refused if present and passed |
+| `iat` | not required (as before) | not required |
+
+Why the userinfo answer differs: eSignet signs it with RS256 using the key its JWKS lists as PS256, and without
+`exp` or `iat`. OpenID Connect Core 5.3.2 asks a signed userinfo answer for `iss` and `aud` only, and RS256 is
+still RSA with the same published key, so both are accepted there; the key's `alg` in the JWKS is not compared.
+`none`, HMAC (`HS*`), EC (`ES*`) and every other algorithm stay refused, for both tokens.
+
 **Checking the client assertion.** To match the key with the public JWK registered at eSignet, the app logs one
 INFO line at startup when verification is on, for example:
 
@@ -664,7 +681,7 @@ that thumbprint. Nothing private and never the key file's path is printed. When 
 and the claims (`iss`, `sub`, `aud`, `iat`, `exp` as epoch seconds and time, `jti`). Never its signature or the
 whole token. The assertion is RSASSA-PSS with SHA-256, MGF1-SHA-256 and a 32-byte salt (PS256).
 
-**Checking a refused id_token or userinfo answer.** No check is relaxed; when one fails, the failure line
+**Checking a refused id_token or userinfo answer.** When one of the checks above fails, the failure line
 explains it, for example:
 
 ```
@@ -675,9 +692,10 @@ iat=<epoch> (<time>); subMatchesIdToken=true; jwks [{kid=..., alg=PS256, kty=RSA
 ```
 
 - `failedChecks` are the app's own checks, run again on the refused answer: `format: ...` (not a JWT, JSON instead
-  of a signed JWT, encrypted), `algorithm not allowed` (not PS256), `signature: no matching key` (no published key
-  with that `kid`), `signature: does not verify`, `iss missing` / `iss different`, `aud missing` /
-  `aud different` (must contain `MOSIP_CLIENT_ID`), `exp missing`, `expired`, `not yet valid`, `sub missing`,
+  of a signed JWT, encrypted), `algorithm not allowed` (not PS256; for userinfo not PS256 or RS256),
+  `signature: no matching key` (no published key with that `kid`), `signature: does not verify`, `iss missing` /
+  `iss different` (compared with `MOSIP_ISSUER`), `aud missing` / `aud different` (must contain
+  `MOSIP_CLIENT_ID`), `exp missing` (ID token only), `expired`, `not yet valid`, `sub missing`,
   `sub mismatch` (userinfo `sub` is not the id_token's). `category` is only the class of the exception that refused
   it (Spring reports several different problems as `BadJwtException`), never its message.
 - The response status and Content-Type are for the userinfo call only; the body is described as JWT, JSON,
@@ -695,8 +713,8 @@ column of the `setting` table stays in the database, unused.
 
 The automatic tests use a fake eSignet. Only the real one can confirm that it honours the `claims` parameter with
 `scope=openid`, the error code when the member declines (`essential_consent_denied`), the phone format it
-returns, that it accepts the client assertion (`aud`, `exp`, PS256), the exact redirect URI, and that the same
-person always gets the same `sub`.
+returns, that it accepts the client assertion (`aud`, `exp`, PS256), the exact redirect URI, that the same
+person always gets the same `sub`, and the `iss` of each of its tokens (set `MOSIP_ISSUER` to match).
 
 ### Deliveries
 

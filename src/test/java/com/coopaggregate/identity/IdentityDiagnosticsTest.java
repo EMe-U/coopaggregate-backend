@@ -377,15 +377,32 @@ class IdentityDiagnosticsTest {
 
     @Test
     void aUserinfoSignedWithAnotherAlgorithmSaysTheAlgorithmIsNotAllowed(CapturedOutput output) throws Exception {
-        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID("provider-1")
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.HS256).keyID("provider-1")
                 .type(com.nimbusds.jose.JOSEObjectType.JWT).build(), person().build());
-        jwt.sign(new RSASSASigner(providerKey));
+        jwt.sign(new com.nimbusds.jose.crypto.MACSigner("0123456789abcdef0123456789abcdef"));
 
         userinfoAnswer(jwt.serialize(), MediaType.valueOf("application/jwt"));
 
         assertTrue(output.getAll().contains("failedChecks=[algorithm not allowed], category=BadJwtException"),
                 output.getAll());
-        assertTrue(output.getAll().contains("header {alg=RS256, kid=provider-1, typ=JWT}"), output.getAll());
+        assertTrue(output.getAll().contains("header {alg=HS256, kid=provider-1, typ=JWT}"), output.getAll());
+        assertNoPersonalData(output, jwt.serialize());
+    }
+
+    @Test
+    void anEsignetLikeUserinfoWithAnotherIssuerSaysOnlyThatTheIssuerDiffers(CapturedOutput output) throws Exception {
+        // RS256, no exp or iat, iss of eSignet's own path: only the issuer is wrong for a client without MOSIP_ISSUER.
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID("provider-1").build(),
+                person().issuer("http://localhost:8088/v1/esignet").expirationTime(null).issueTime(null).build());
+        jwt.sign(new RSASSASigner(providerKey));
+
+        userinfoAnswer(jwt.serialize(), MediaType.valueOf("application/jwt"));
+
+        String logs = output.getAll();
+        assertTrue(logs.contains("failedChecks=[iss different], category=JwtValidationException"), logs);
+        assertTrue(logs.contains("header {alg=RS256, kid=provider-1, typ=(none)}"), logs);
+        assertTrue(logs.contains("iss=http://localhost:8088/v1/esignet, aud=[coopaggregate], exp=(none), "
+                + "iat=(none); subMatchesIdToken=true"), logs);
         assertNoPersonalData(output, jwt.serialize());
     }
 
@@ -422,8 +439,8 @@ class IdentityDiagnosticsTest {
         userinfoAnswer(body, MediaType.APPLICATION_JSON);
 
         String logs = output.getAll();
-        assertTrue(logs.contains("[userinfo check failed: failedChecks=[format: JSON, not a signed JWT, aud missing, "
-                + "exp missing], category=(our own check); response HTTP 200, Content-Type application/json; "
+        assertTrue(logs.contains("[userinfo check failed: failedChecks=[format: JSON, not a signed JWT, aud missing], "
+                + "category=(our own check); response HTTP 200, Content-Type application/json; "
                 + "body JSON; claimNames [birthdate, iss, name, phone_number, sub]; iss=http://localhost:8080, "
                 + "aud=(none), exp=(none), iat=(none)"), logs);
         assertNoPersonalData(output, body);
@@ -584,7 +601,7 @@ class IdentityDiagnosticsTest {
 
     private static MosipProperties properties(String tokenEndpoint) {
         return new MosipProperties(true, BASE, "coopaggregate", "http://localhost:5173/identity/callback", "unused",
-                "coopaggregate-key", null, null, null, null, tokenEndpoint, null, null);
+                "coopaggregate-key", null, null, null, null, tokenEndpoint, null, null, null);
     }
 
     private static String tokenBody(String idToken) {
