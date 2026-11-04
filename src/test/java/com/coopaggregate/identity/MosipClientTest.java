@@ -107,6 +107,11 @@ class MosipClientTest {
 
     private void useSettings(String issuer, String userinfoIssuer, String optionalClaims, String nationalIdClaim,
                              boolean promptConsent) {
+        useSettings(issuer, userinfoIssuer, optionalClaims, nationalIdClaim, promptConsent, null);
+    }
+
+    private void useSettings(String issuer, String userinfoIssuer, String optionalClaims, String nationalIdClaim,
+                             boolean promptConsent, String publicAuthorizeUrl) {
         RestClient.Builder builder = RestClient.builder();
         http = MockRestServiceServer.bindTo(builder).build();
         RestTemplate jwksTemplate = new RestTemplate();
@@ -114,14 +119,36 @@ class MosipClientTest {
         jwks.expect(ExpectedCount.manyTimes(), requestTo(BASE + "/oauth2/jwks")).andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess(new JWKSet(providerKey.toPublicJWK()).toString(), MediaType.APPLICATION_JSON));
         MosipProperties properties = new MosipProperties(true, BASE, "coopaggregate",
-                "http://localhost:5173/identity/callback", "unused", "coopaggregate-key", null, null, null, null, null,
-                null, null, issuer, userinfoIssuer, null, optionalClaims, nationalIdClaim, promptConsent);
+                "http://localhost:5173/identity/callback", "unused", "coopaggregate-key", null, null, null,
+                publicAuthorizeUrl, null, null, null, issuer, userinfoIssuer, null, optionalClaims, nationalIdClaim,
+                promptConsent);
         client = new MosipClient(properties,
                 new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), "coopaggregate-key"), builder.build(),
                 jwksTemplate, Clock.systemUTC());
     }
 
     // --- Authorize URL
+
+    @Test
+    void mosipPublicAuthorizeUrlIsWhereTheBrowserIsSentWhileTheServerCallsTheBase(CapturedOutput output) {
+        useSettings(null, null, null, null, false, "https://login.example/oauth2/authorize");
+
+        String url = client.authorizationUrl("the-state", NONCE, "the-challenge");
+
+        assertTrue(url.startsWith("https://login.example/oauth2/authorize?"), url);
+        assertTrue(output.getOut().contains("Identity verification authorize address (sent to the browser): "
+                + "https://login.example (from MOSIP_PUBLIC_AUTHORIZE_URL)"), output.getOut());
+        assertTrue(output.getOut().contains("Token: " + BASE + "/oauth2/token"), output.getOut());
+    }
+
+    @Test
+    void withoutMosipPublicAuthorizeUrlTheLogSaysTheAuthorizeAddressFollowsTheBase(CapturedOutput output) {
+        useSettings(null, null, null, null, false, " ");
+
+        assertTrue(client.authorizationUrl("s", NONCE, "c").startsWith(BASE + "/oauth2/authorize?"));
+        assertTrue(output.getOut().contains("Identity verification authorize address (sent to the browser): "
+                + BASE + " (from MOSIP_BASE_URL)"), output.getOut());
+    }
 
     @Test
     void theAuthorizeUrlHasEveryParameterEsignetNeeds() {

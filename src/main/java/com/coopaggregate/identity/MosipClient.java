@@ -77,6 +77,8 @@ public class MosipClient {
         }
         log.info("Identity verification is on. Token: {}, userinfo: {}, JWKS: {}", Diagnostics.safeUrl(properties.tokenUrl()),
                 Diagnostics.safeUrl(properties.userinfoUrl()), Diagnostics.safeUrl(properties.jwksUrl()));
+        log.info("Identity verification authorize address (sent to the browser): {} (from {})",
+                Diagnostics.origin(properties.authorizationUrl()), properties.authorizationUrlSource());
         log.info("Client assertion: {}", Diagnostics.signingKey(signingKey, properties.audience(),
                 MosipClientAssertion.VALID_SECONDS));
         this.idTokenDiagnostics = new TokenDiagnostics(jwksOperations, properties.jwksUrl(), properties.issuer(),

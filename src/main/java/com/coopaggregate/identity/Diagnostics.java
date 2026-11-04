@@ -103,6 +103,19 @@ final class Diagnostics {
         }
     }
 
+    /** scheme://host:port only, without the path. */
+    static String origin(String url) {
+        try {
+            URI uri = URI.create(url.trim());
+            if (uri.getScheme() == null || uri.getHost() == null) {
+                return "(unreadable address)";
+            }
+            return uri.getScheme() + "://" + uri.getHost() + (uri.getPort() >= 0 ? ":" + uri.getPort() : "");
+        } catch (RuntimeException e) {
+            return "(unreadable address)";
+        }
+    }
+
     /** For a call made with the REST client, for example "token request POST http://localhost:8080/oauth2/token: ...". */
     static String call(String what, String method, String url, RestClientException e) {
         return what + " " + method + " " + safeUrl(url) + ": " + outcome(e);

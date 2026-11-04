@@ -8,7 +8,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * Every eSignet setting is here and nowhere else. The values come only from environment variables, never from code
- * or Git. The four endpoints are derived from baseUrl (eSignet's /oauth2/... paths) unless they are set.
+ * or Git. The four endpoints are derived from baseUrl (eSignet's /oauth2/... paths) unless they are set; the
+ * authorize one (sent to the browser) can be set with MOSIP_PUBLIC_AUTHORIZE_URL.
  */
 @ConfigurationProperties("app.identity.mosip")
 public record MosipProperties(
@@ -129,6 +130,9 @@ public record MosipProperties(
         if (!isBlank(redirectUri) && !isHttpsOrLocal(redirectUri)) {
             insecure.add("MOSIP_REDIRECT_URI");
         }
+        if (!isBlank(authorizationEndpoint) && !isHttpsOrLocal(authorizationEndpoint)) {
+            insecure.add("MOSIP_PUBLIC_AUTHORIZE_URL");
+        }
         return insecure;
     }
 
@@ -145,8 +149,17 @@ public record MosipProperties(
         return isBlank(expectedUserinfoIssuer) ? issuer() : expectedUserinfoIssuer.trim();
     }
 
+    /**
+     * The authorize address sent to the member's browser: MOSIP_PUBLIC_AUTHORIZE_URL when it is set, otherwise
+     * MOSIP_BASE_URL + /oauth2/authorize. Only this one can differ from the server-to-server base.
+     */
     public String authorizationUrl() {
         return endpoint(authorizationEndpoint, "/oauth2/authorize");
+    }
+
+    /** Which setting the authorize address comes from, for the startup log. */
+    public String authorizationUrlSource() {
+        return isBlank(authorizationEndpoint) ? "MOSIP_BASE_URL" : "MOSIP_PUBLIC_AUTHORIZE_URL";
     }
 
     public String tokenUrl() {

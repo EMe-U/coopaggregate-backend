@@ -61,6 +61,53 @@ class MosipSettingsTest {
     }
 
     @Test
+    void mosipPublicAuthorizeUrlChangesOnlyTheAuthorizeUrl() {
+        MosipProperties properties = withPublicAuthorizeUrl("https://abc.tunnel.example",
+                " http://localhost:8080/oauth2/authorize ");
+
+        assertEquals("http://localhost:8080/oauth2/authorize", properties.authorizationUrl());
+        assertEquals("MOSIP_PUBLIC_AUTHORIZE_URL", properties.authorizationUrlSource());
+        assertEquals("https://abc.tunnel.example/oauth2/token", properties.tokenUrl());
+        assertEquals("https://abc.tunnel.example/oauth2/userinfo", properties.userinfoUrl());
+        assertEquals("https://abc.tunnel.example/oauth2/jwks", properties.jwksUrl());
+        assertEquals("https://abc.tunnel.example", properties.issuer());
+        assertEquals("https://abc.tunnel.example", properties.audience());
+        assertTrue(properties.insecure().isEmpty());
+    }
+
+    @Test
+    void anEmptyMosipPublicAuthorizeUrlMeansTheBaseUrl() {
+        MosipProperties properties = withPublicAuthorizeUrl("https://abc.tunnel.example", "");
+
+        assertEquals("https://abc.tunnel.example/oauth2/authorize", properties.authorizationUrl());
+        assertEquals("MOSIP_BASE_URL", properties.authorizationUrlSource());
+    }
+
+    @Test
+    void mosipPublicAuthorizeUrlMayUsePlainHttpOnlyForLocalhost() {
+        assertEquals(List.of("MOSIP_PUBLIC_AUTHORIZE_URL"),
+                withPublicAuthorizeUrl("https://esignet.example", "http://esignet.example/authorize").insecure());
+        assertTrue(withPublicAuthorizeUrl("https://esignet.example", "http://127.0.0.1:8080/oauth2/authorize")
+                .insecure().isEmpty());
+    }
+
+    @Test
+    void theAppStartsWithAPublicAuthorizeUrlOnLocalhostAndAnHttpsBase() throws IOException {
+        Path file = directory.resolve("key.pem");
+        Files.writeString(file, pem(keyPair.getPrivate().getEncoded()));
+
+        runner.withPropertyValues(allSettings(file.toString()))
+                .withPropertyValues("app.identity.mosip.base-url=https://abc.tunnel.example",
+                        "app.identity.mosip.authorization-endpoint=http://localhost:8080/oauth2/authorize")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    MosipProperties properties = context.getBean(MosipProperties.class);
+                    assertEquals("http://localhost:8080/oauth2/authorize", properties.authorizationUrl());
+                    assertEquals("https://abc.tunnel.example/oauth2/token", properties.tokenUrl());
+                });
+    }
+
+    @Test
     void scopeAndAcrHaveTheDefaultsOfTheCooperative() {
         MosipProperties properties = properties("http://localhost:8080", "the-key.pem");
 
@@ -296,6 +343,12 @@ class MosipSettingsTest {
     private static MosipProperties properties(String baseUrl, String keyPath) {
         return new MosipProperties(true, baseUrl, "coopaggregate", "http://localhost:5173/identity/callback", keyPath,
                 "coopaggregate-key", null, null, null, null, null, null, null, null, null, null, null, null, false);
+    }
+
+    private static MosipProperties withPublicAuthorizeUrl(String baseUrl, String publicAuthorizeUrl) {
+        return new MosipProperties(true, baseUrl, "coopaggregate", "http://localhost:5173/identity/callback", "k",
+                "coopaggregate-key", null, null, null, publicAuthorizeUrl, null, null, null, null, null, null, null,
+                null, false);
     }
 
     private static String pem(byte[] der) {
