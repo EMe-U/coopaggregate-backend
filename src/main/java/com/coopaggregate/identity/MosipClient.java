@@ -72,7 +72,7 @@ public class MosipClient {
                 MosipClientAssertion.VALID_SECONDS));
         this.idTokenDiagnostics = new TokenDiagnostics(jwksOperations, properties.jwksUrl(), properties.issuer(),
                 properties.clientId(), clock, CLOCK_SKEW, Set.of(JWSAlgorithm.PS256), true, false);
-        this.userinfoDiagnostics = new TokenDiagnostics(jwksOperations, properties.jwksUrl(), properties.issuer(),
+        this.userinfoDiagnostics = new TokenDiagnostics(jwksOperations, properties.jwksUrl(), properties.userinfoIssuer(),
                 properties.clientId(), clock, CLOCK_SKEW, USERINFO_ALGORITHMS, false, true);
         this.decoder = NimbusJwtDecoder.withJwkSetUri(properties.jwksUrl())
                 .jwsAlgorithm(SignatureAlgorithm.PS256)
@@ -87,7 +87,7 @@ public class MosipClient {
         // The userinfo answer: PS256 or RS256 only (eSignet signs it with RS256), verified with the JWKS key named by
         // its kid. "none", HMAC, EC and any other algorithm get no key and are refused. exp is optional (OIDC Core
         // 5.3.2 asks the signed userinfo for iss and aud only) but refused when it has passed; iss, aud and sub are
-        // required as for the id_token.
+        // required as for the id_token. Its iss is MOSIP_USERINFO_ISSUER, which defaults to the id_token's.
         this.userinfoDecoder = NimbusJwtDecoder.withJwkSetUri(properties.jwksUrl())
                 .jwsAlgorithms(algorithms -> {
                     algorithms.add(SignatureAlgorithm.PS256);
@@ -100,7 +100,7 @@ public class MosipClient {
                 .build();
         this.userinfoDecoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
                 new JwtTimestampValidator(CLOCK_SKEW),
-                new JwtIssuerValidator(properties.issuer()),
+                new JwtIssuerValidator(properties.userinfoIssuer()),
                 audienceIsOurClient(),
                 hasSubject()));
     }

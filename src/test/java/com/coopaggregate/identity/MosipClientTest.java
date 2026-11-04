@@ -86,11 +86,15 @@ class MosipClientTest {
 
     @BeforeEach
     void setUp() {
-        useIssuer(null);
+        useIssuers(null, null);
     }
 
-    // A client whose MOSIP_ISSUER is the given value (null: not set).
     private void useIssuer(String issuer) {
+        useIssuers(issuer, null);
+    }
+
+    // A client whose MOSIP_ISSUER and MOSIP_USERINFO_ISSUER are the given values (null: not set).
+    private void useIssuers(String issuer, String userinfoIssuer) {
         RestClient.Builder builder = RestClient.builder();
         http = MockRestServiceServer.bindTo(builder).build();
         RestTemplate jwksTemplate = new RestTemplate();
@@ -99,7 +103,7 @@ class MosipClientTest {
                 .andRespond(withSuccess(new JWKSet(providerKey.toPublicJWK()).toString(), MediaType.APPLICATION_JSON));
         MosipProperties properties = new MosipProperties(true, BASE, "coopaggregate",
                 "http://localhost:5173/identity/callback", "unused", "coopaggregate-key", null, null, null, null, null,
-                null, null, issuer);
+                null, null, issuer, userinfoIssuer);
         client = new MosipClient(properties,
                 new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), "coopaggregate-key"), builder.build(),
                 jwksTemplate, Clock.systemUTC());
@@ -455,7 +459,7 @@ class MosipClientTest {
     @Test
     void withoutMosipIssuerTheBaseUrlIsTheIssuer() {
         assertEquals(BASE, new MosipProperties(true, BASE + "/", "c", "r", "k", "kid", null, null, null, null, null,
-                null, null, " ").issuer());
+                null, null, " ", null).issuer());
     }
 
     @Test
@@ -494,6 +498,86 @@ class MosipClientTest {
         useIssuer(ESIGNET_ISSUER);
 
         assertRefused(idToken(idClaims().issuer(ESIGNET_ISSUER)), userinfo(userinfoClaims().issuer(null)));
+    }
+
+    // --- MOSIP_USERINFO_ISSUER: this eSignet signs the id_token as BASE and the userinfo answer as ESIGNET_ISSUER
+
+    private String esignetUserinfo(String iss) throws Exception {
+        return sign(providerKey, JWSAlgorithm.RS256, userinfoClaims().issuer(iss).expirationTime(null).issueTime(null));
+    }
+
+    @Test
+    void theUserinfoIssuerDefaultsToTheIdTokenIssuer() {
+        assertEquals(BASE, new MosipProperties(true, BASE + "/", "c", "r", "k", "kid", null, null, null, null, null,
+                null, null, null, " ").userinfoIssuer());
+        assertEquals(ESIGNET_ISSUER, new MosipProperties(true, BASE, "c", "r", "k", "kid", null, null, null, null, null,
+                null, null, ESIGNET_ISSUER, null).userinfoIssuer());
+    }
+
+    @Test
+    void aUserinfoOfTheEsignetIssuerIsAcceptedWhenMosipUserinfoIssuerSaysSo() throws Exception {
+        useIssuers(null, ESIGNET_ISSUER);
+        provider(idToken(idClaims()), esignetUserinfo(ESIGNET_ISSUER));
+
+        MosipClaims claims = client.fetchClaims(CODE, VERIFIER, NONCE);
+
+        assertEquals("Uwimana Claudine", claims.name());
+        assertEquals("+250788123456", claims.phoneNumber());
+    }
+
+    @Test
+    void aUserinfoOfTheEsignetIssuerIsRefusedWithoutMosipUserinfoIssuer() throws Exception {
+        assertRefused(idToken(idClaims()), esignetUserinfo(ESIGNET_ISSUER));
+    }
+
+    @Test
+    void anIdTokenOfTheEsignetIssuerIsStillRefusedWithoutMosipIssuer() throws Exception {
+        useIssuers(null, ESIGNET_ISSUER);
+
+        assertRefused(idToken(idClaims().issuer(ESIGNET_ISSUER)), esignetUserinfo(ESIGNET_ISSUER));
+    }
+
+    @Test
+    void withMosipUserinfoIssuerAUserinfoOfTheBaseUrlIsRefused() throws Exception {
+        useIssuers(null, ESIGNET_ISSUER);
+
+        assertRefused(idToken(idClaims()), esignetUserinfo(BASE));
+    }
+
+    @Test
+    void withMosipUserinfoIssuerAUserinfoWithoutAnIssuerIsRefused() throws Exception {
+        useIssuers(null, ESIGNET_ISSUER);
+
+        assertRefused(idToken(idClaims()), esignetUserinfo(null));
+    }
+
+    @Test
+    void withMosipUserinfoIssuerTheComparisonIsExact() throws Exception {
+        useIssuers(null, ESIGNET_ISSUER);
+        assertRefused(idToken(idClaims()), esignetUserinfo(ESIGNET_ISSUER + "/"));
+
+        useIssuers(null, ESIGNET_ISSUER);
+        assertRefused(idToken(idClaims()), esignetUserinfo("http://localhost:8088/v1"));
+
+        useIssuers(null, ESIGNET_ISSUER);
+        assertRefused(idToken(idClaims()), esignetUserinfo(ESIGNET_ISSUER + "/extra"));
+
+        // A configured value keeps its trailing slash: no trimming of "/" here, only of spaces.
+        useIssuers(null, " " + ESIGNET_ISSUER + "/ ");
+        assertRefused(idToken(idClaims()), esignetUserinfo(ESIGNET_ISSUER));
+    }
+
+    @Test
+    void theDefaultUserinfoIssuerIsTheBaseUrlWithoutItsTrailingSlash() throws Exception {
+        assertRefused(idToken(idClaims()), esignetUserinfo(BASE + "/"));
+    }
+
+    @Test
+    void mosipUserinfoIssuerDoesNotChangeTheIdTokenIssuer() throws Exception {
+        useIssuers(ESIGNET_ISSUER, BASE);
+        provider(idToken(idClaims().issuer(ESIGNET_ISSUER)), esignetUserinfo(BASE));
+
+        assertEquals("Uwimana Claudine", client.fetchClaims(CODE, VERIFIER, NONCE).name());
     }
 
     @Test
@@ -566,7 +650,7 @@ class MosipClientTest {
         MockRestServiceServer keys = MockRestServiceServer.bindTo(template).build();
         keys.expect(ExpectedCount.manyTimes(), requestTo(BASE + "/oauth2/jwks")).andRespond(withServerError());
         MosipClient broken = new MosipClient(new MosipProperties(true, BASE, "coopaggregate", "r", "k", "kid", null,
-                null, null, null, null, null, null, null),
+                null, null, null, null, null, null, null, null),
                 new MosipSigningKey((RSAPrivateKey) cooperativeKey.getPrivate(), "kid"), builder.build(), template,
                 Clock.systemUTC());
         httpServer.expect(requestTo(BASE + "/oauth2/token"))

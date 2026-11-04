@@ -310,6 +310,23 @@ class IdentityDiagnosticsTest {
         assertNoSecrets(output);
     }
 
+    @Test
+    void anIdTokenOfTheUserinfoIssuerIsRefusedAndItsIssIsShown(CapturedOutput output) throws Exception {
+        // MOSIP_USERINFO_ISSUER is for the userinfo answer only; the id_token must still carry MOSIP_BASE_URL.
+        buildService(properties(null, ESIGNET_ISSUER));
+        String state = begin();
+        String idToken = sign(claims("id").issuer(ESIGNET_ISSUER).claim("nonce", currentNonce()));
+        http.expect(requestTo(BASE + "/oauth2/token"))
+                .andRespond(withSuccess(tokenBody(idToken), MediaType.APPLICATION_JSON));
+
+        finish(state);
+
+        String logs = output.getAll();
+        assertTrue(logs.contains("[id_token check failed: JwtValidationException; failedChecks=[iss different], "), logs);
+        assertTrue(logs.contains("; iss=" + ESIGNET_ISSUER + ", aud=[coopaggregate], exp="), logs);
+        assertNoPersonalData(output, idToken);
+    }
+
     // --- The userinfo check
 
     private static final String NAME = "Uwimana Claudine";
@@ -389,12 +406,39 @@ class IdentityDiagnosticsTest {
         assertNoPersonalData(output, jwt.serialize());
     }
 
+    private static final String ESIGNET_ISSUER = "http://localhost:8088/v1/esignet";
+
+    // Like the real answer: RS256, no exp or iat, and the iss of eSignet's own path.
+    private static String esignetUserinfo() throws Exception {
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID("provider-1").build(),
+                person().issuer(ESIGNET_ISSUER).expirationTime(null).issueTime(null).build());
+        jwt.sign(new RSASSASigner(providerKey));
+        return jwt.serialize();
+    }
+
+    @Test
+    void theRealAnswerIsAcceptedWithMosipUserinfoIssuerAndLogsNothingPersonal(CapturedOutput output) throws Exception {
+        buildService(properties(null, ESIGNET_ISSUER));
+        String state = begin();
+        http.expect(requestTo(BASE + "/oauth2/token"))
+                .andRespond(withSuccess(tokenBody(idToken()), MediaType.APPLICATION_JSON));
+        String userinfo = esignetUserinfo();
+        http.expect(requestTo(BASE + "/oauth2/userinfo"))
+                .andRespond(withSuccess(userinfo, MediaType.valueOf("application/jwt")));
+
+        VerifyResultResponse result = service.complete(CODE, state, manager);
+
+        assertTrue(result.verified());
+        assertEquals(NAME, result.fullName());
+        assertEquals(PHONE, result.phone());
+        assertFalse(output.getAll().contains("check failed"), output.getAll());
+        assertNoPersonalData(output, userinfo);
+    }
+
     @Test
     void anEsignetLikeUserinfoWithAnotherIssuerSaysOnlyThatTheIssuerDiffers(CapturedOutput output) throws Exception {
-        // RS256, no exp or iat, iss of eSignet's own path: only the issuer is wrong for a client without MOSIP_ISSUER.
-        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID("provider-1").build(),
-                person().issuer("http://localhost:8088/v1/esignet").expirationTime(null).issueTime(null).build());
-        jwt.sign(new RSASSASigner(providerKey));
+        // Without MOSIP_USERINFO_ISSUER the userinfo answer must carry the id_token's issuer (here BASE).
+        SignedJWT jwt = SignedJWT.parse(esignetUserinfo());
 
         userinfoAnswer(jwt.serialize(), MediaType.valueOf("application/jwt"));
 
@@ -600,8 +644,12 @@ class IdentityDiagnosticsTest {
     }
 
     private static MosipProperties properties(String tokenEndpoint) {
+        return properties(tokenEndpoint, null);
+    }
+
+    private static MosipProperties properties(String tokenEndpoint, String userinfoIssuer) {
         return new MosipProperties(true, BASE, "coopaggregate", "http://localhost:5173/identity/callback", "unused",
-                "coopaggregate-key", null, null, null, null, tokenEndpoint, null, null, null);
+                "coopaggregate-key", null, null, null, null, tokenEndpoint, null, null, null, userinfoIssuer);
     }
 
     private static String tokenBody(String idToken) {

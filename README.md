@@ -101,7 +101,8 @@ cd coopaggregate-backend
 | `MOSIP_PRIVATE_KEY_PATH` | With `MOSIP_ENABLED` | Path to the cooperative's RSA private key file (PKCS#8 PEM or JWK, detected from the content). Keep it outside the repository |
 | `MOSIP_KEY_ID` | With `MOSIP_ENABLED` | The `kid` of the matching public JWK |
 | `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL`. The name and phone are asked for with the `claims` parameter, so leave `MOSIP_SCOPE` out; the app warns at startup if it asks for more than `openid` and `phone` |
-| `MOSIP_ISSUER` | No | The exact `iss` both the ID token and the userinfo answer must carry. Default: `MOSIP_BASE_URL` |
+| `MOSIP_ISSUER` | No | The exact `iss` the ID token must carry (and the userinfo answer, unless the next one is set). Default: `MOSIP_BASE_URL` |
+| `MOSIP_USERINFO_ISSUER` | No | The exact `iss` the userinfo answer must carry, for an eSignet that signs it with another issuer than the ID token (the local one: ID token `http://localhost:8080`, userinfo `http://localhost:8088/v1/esignet`). Default: the ID token's issuer |
 | `PORT` | No | HTTP port. Default: `8080` |
 
 The manager is the only user who logs in. On startup, if the `manager` table is empty,
@@ -650,12 +651,13 @@ text. Older history rows may also show `IDENTITY_MISMATCH` from the comparison t
 tokens, assertions, claims, the verified details and the key are never logged; the server log only gets safe
 one-line descriptions of a failed call to eSignet (address without query, HTTP status, known OAuth error code).
 
-**Token checks.** Both tokens must carry exactly the expected `iss` (`MOSIP_ISSUER`, or `MOSIP_BASE_URL` when it
-is not set; present, and compared character for character), an `aud` containing `MOSIP_CLIENT_ID`, and a `sub`; the
-userinfo `sub` must be the ID token's. The two differ in two places:
+**Token checks.** Both tokens must carry exactly the expected `iss` (present, and compared character for
+character: no prefix or partial match), an `aud` containing `MOSIP_CLIENT_ID`, and a `sub`; the userinfo `sub`
+must be the ID token's. The two differ in these places:
 
 | | ID token | Userinfo answer |
 |---|---|---|
+| Expected `iss` | `MOSIP_ISSUER`, else `MOSIP_BASE_URL` (trailing `/` removed) | `MOSIP_USERINFO_ISSUER`, else the ID token's |
 | Algorithm | PS256 only | PS256 or RS256 |
 | Key | a JWKS key that verifies it | the RSA key of the JWKS whose `kid` is in the token header (no `kid`, or no such key: refused) |
 | `exp` | required, and not passed | optional; refused if present and passed |
@@ -665,6 +667,11 @@ Why the userinfo answer differs: eSignet signs it with RS256 using the key its J
 `exp` or `iat`. OpenID Connect Core 5.3.2 asks a signed userinfo answer for `iss` and `aud` only, and RS256 is
 still RSA with the same published key, so both are accepted there; the key's `alg` in the JWKS is not compared.
 `none`, HMAC (`HS*`), EC (`ES*`) and every other algorithm stay refused, for both tokens.
+
+Why a separate userinfo issuer: the local eSignet signs the ID token with `iss` `http://localhost:8080` (its
+discovery document's `issuer`) but the userinfo answer with `http://localhost:8088/v1/esignet`, so one expected
+value cannot fit both. `MOSIP_USERINFO_ISSUER` names the second exactly, and changes nothing for the ID token. The
+`MOSIP_ISSUER` and `MOSIP_USERINFO_ISSUER` values are only trimmed of spaces; a trailing `/` stays and must match.
 
 **Checking the client assertion.** To match the key with the public JWK registered at eSignet, the app logs one
 INFO line at startup when verification is on, for example:
@@ -694,7 +701,7 @@ iat=<epoch> (<time>); subMatchesIdToken=true; jwks [{kid=..., alg=PS256, kty=RSA
 - `failedChecks` are the app's own checks, run again on the refused answer: `format: ...` (not a JWT, JSON instead
   of a signed JWT, encrypted), `algorithm not allowed` (not PS256; for userinfo not PS256 or RS256),
   `signature: no matching key` (no published key with that `kid`), `signature: does not verify`, `iss missing` /
-  `iss different` (compared with `MOSIP_ISSUER`), `aud missing` / `aud different` (must contain
+  `iss different` (compared with the expected issuer of that token, shown as `iss=` for both), `aud missing` / `aud different` (must contain
   `MOSIP_CLIENT_ID`), `exp missing` (ID token only), `expired`, `not yet valid`, `sub missing`,
   `sub mismatch` (userinfo `sub` is not the id_token's). `category` is only the class of the exception that refused
   it (Spring reports several different problems as `BadJwtException`), never its message.
@@ -714,7 +721,8 @@ column of the `setting` table stays in the database, unused.
 The automatic tests use a fake eSignet. Only the real one can confirm that it honours the `claims` parameter with
 `scope=openid`, the error code when the member declines (`essential_consent_denied`), the phone format it
 returns, that it accepts the client assertion (`aud`, `exp`, PS256), the exact redirect URI, that the same
-person always gets the same `sub`, and the `iss` of each of its tokens (set `MOSIP_ISSUER` to match).
+person always gets the same `sub`, and the `iss` of each of its tokens (set `MOSIP_ISSUER` and
+`MOSIP_USERINFO_ISSUER` to match).
 
 ### Deliveries
 
