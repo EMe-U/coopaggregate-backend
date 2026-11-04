@@ -11,7 +11,7 @@ import java.util.List;
 public record VerifiedDetails(String fullName, String phone, LocalDate birthdate, String gender, String email,
                               String address) {
 
-    static final VerifiedDetails NONE = new VerifiedDetails(null, null);
+    public static final VerifiedDetails NONE = new VerifiedDetails(null, null);
 
     /** The names of the fields, as in verifiedFields, in this order. */
     public static final List<String> FIELDS = List.of("fullName", "phone", "birthdate", "gender", "email", "address");

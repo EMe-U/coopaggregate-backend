@@ -29,6 +29,9 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coopaggregate.audit.AuditAction;
+import com.coopaggregate.audit.AuditLog;
+import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.common.KigaliTime;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.identity.IdentityAvailability;
@@ -51,6 +54,7 @@ class MemberServiceTest {
     private MemberService service;
     private IdentityAvailability identityAvailability;
     private IdentityVerificationService identityVerificationService;
+    private AuditLogRepository auditLogRepository;
     private final Manager manager = new Manager();
 
     @BeforeEach
@@ -59,7 +63,8 @@ class MemberServiceTest {
         identityAvailability = mock(IdentityAvailability.class);
         identityVerificationService = mock(IdentityVerificationService.class);
         when(identityAvailability.isAvailable()).thenReturn(true);
-        service = new MemberService(repository, identityAvailability, identityVerificationService);
+        auditLogRepository = mock(AuditLogRepository.class);
+        service = new MemberService(repository, identityAvailability, identityVerificationService, auditLogRepository);
         when(repository.save(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(repository.highestMemberNumber()).thenReturn(7);
         when(repository.findByPhone(any())).thenReturn(Optional.empty());
@@ -270,6 +275,122 @@ class MemberServiceTest {
 
         assertThrows(IdentityProviderException.class,
                 () -> service.create(new NewMemberRequest(null, null, null, null, null, null, null), manager));
+    }
+
+    // --- MEMBER_REGISTER_UNVERIFIED (identity verification off)
+
+    private void unverifiedAllowed() {
+        when(identityAvailability.isAvailable()).thenReturn(false);
+        when(identityAvailability.isUnverifiedAllowed()).thenReturn(true);
+    }
+
+    private static NewMemberRequest typed(String fullName, String phone) {
+        return new NewMemberRequest(null, fullName, phone, "1199880012345678", "Busogo", LocalDate.of(2024, 3, 1),
+                "en");
+    }
+
+    @Test
+    void withUnverifiedAllowedTheTypedNameAndPhoneAreStoredAsNotVerified() {
+        unverifiedAllowed();
+
+        MemberResponse response = service.create(typed("  Mukamana Alice ", "0788123456"), manager);
+
+        assertEquals("M-0008", response.memberCode());
+        assertEquals("Mukamana Alice", response.fullName());
+        assertEquals("+250788123456", response.phone());
+        assertEquals("1199880012345678", response.nationalId());
+        assertEquals("Busogo", response.address());
+        assertEquals(LocalDate.of(2024, 3, 1), response.joinDate());
+        assertFalse(response.verified());
+        assertNull(response.verificationMethod());
+        assertNull(response.verifiedAt());
+        assertEquals(List.of(), response.verifiedFields());
+        verify(identityVerificationService, never()).verifiedDetails(any(), any());
+        verify(identityVerificationService, never()).attach(any(), any(), any());
+    }
+
+    @Test
+    void anUnverifiedRegistrationWritesAnAuditRow() {
+        unverifiedAllowed();
+
+        service.create(typed("Mukamana Alice", "0788123456"), manager);
+
+        ArgumentCaptor<AuditLog> audit = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogRepository).save(audit.capture());
+        assertEquals(AuditAction.MEMBER_REGISTERED_UNVERIFIED, audit.getValue().getAction());
+        assertEquals("registered without identity verification", audit.getValue().getDetails());
+        assertEquals("M-0008", audit.getValue().getMember().getMemberCode());
+    }
+
+    @Test
+    void anUnverifiedRegistrationNeedsTheNameAndPhoneWithTheRulesOfEditing() {
+        unverifiedAllowed();
+
+        assertEquals("fullName: is required", assertThrows(BadRequestException.class,
+                () -> service.create(typed(null, "0788123456"), manager)).getMessage());
+        assertEquals("fullName: is required", assertThrows(BadRequestException.class,
+                () -> service.create(typed("   ", "0788123456"), manager)).getMessage());
+        assertEquals("fullName: must be at most 150 characters", assertThrows(BadRequestException.class,
+                () -> service.create(typed("a".repeat(151), "0788123456"), manager)).getMessage());
+        assertEquals("phone: is required", assertThrows(BadRequestException.class,
+                () -> service.create(typed("Mukamana Alice", " "), manager)).getMessage());
+        assertTrue(assertThrows(BadRequestException.class,
+                () -> service.create(typed("Mukamana Alice", "12345"), manager)).getMessage()
+                .startsWith("phone: must be a Rwandan mobile number"));
+        verify(repository, never()).save(any());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    void anUnverifiedRegistrationRefusesTheDetailsThatOnlyComeFromTheCheck() {
+        unverifiedAllowed();
+
+        for (NewMemberRequest request : List.of(
+                new NewMemberRequest(null, "Mukamana Alice", "0788123456", null, null, null, null,
+                        LocalDate.of(1990, 5, 17), null, null),
+                new NewMemberRequest(null, "Mukamana Alice", "0788123456", null, null, null, null, null, "Female",
+                        null),
+                new NewMemberRequest(null, "Mukamana Alice", "0788123456", null, null, null, null, null, null,
+                        "alice@example.com"))) {
+            BadRequestException e = assertThrows(BadRequestException.class, () -> service.create(request, manager));
+            assertTrue(e.getMessage().endsWith(": must not be sent: it only comes from the identity check"),
+                    e.getMessage());
+        }
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void anUnverifiedRegistrationRefusesAVerificationId() {
+        unverifiedAllowed();
+
+        BadRequestException e = assertThrows(BadRequestException.class, () -> service.create(
+                new NewMemberRequest(9L, "Mukamana Alice", "0788123456", null, null, null, null), manager));
+
+        assertEquals("verificationId: must not be sent: identity verification is switched off", e.getMessage());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void anUnverifiedRegistrationStillRefusesAPhoneAlreadyUsed() {
+        unverifiedAllowed();
+        when(repository.findByPhone("+250788123456")).thenReturn(Optional.of(existingMember(3L, "M-0003")));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.create(typed("Mukamana Alice", "0788123456"), manager));
+        verify(repository, never()).save(any());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    void whileVerificationIsOnTheUnverifiedPathIsNeverTaken() {
+        when(identityAvailability.isUnverifiedAllowed()).thenReturn(true);
+
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> service.create(typed("Mukamana Alice", "0788123456"), manager));
+
+        assertEquals("verificationId is required. Verify the person's identity first.", e.getMessage());
+        verify(repository, never()).save(any());
+        verify(auditLogRepository, never()).save(any());
     }
 
     @Test

@@ -94,7 +94,8 @@ cd coopaggregate-backend
 | `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
 | `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
 | `SMS_DEMO_CODE` | No | **Temporary, for the demo only.** 6 digits also accepted as the code of any pending delivery. Not set by default (see Delivery confirmation) |
-| `MOSIP_ENABLED` | To register members | `true` switches member identity verification on. Registering a member needs it, so with the default `false` no member can be registered (see Identity verification) |
+| `MOSIP_ENABLED` | To register members | `true` switches member identity verification on. Registering a member needs it, so with the default `false` no member can be registered (see Identity verification), unless `MEMBER_REGISTER_UNVERIFIED=true` |
+| `MEMBER_REGISTER_UNVERIFIED` | No | **For demos and fallbacks only.** `true` lets the manager register a member with a typed name and phone, stored as **not verified**, but only while `MOSIP_ENABLED=false`. Ignored (with a startup warning) while `MOSIP_ENABLED=true`, even when eSignet cannot be reached. Default `false` (see Members) |
 | `MOSIP_BASE_URL` | With `MOSIP_ENABLED` | The eSignet issuer, for example `http://localhost:8080`. Plain `http` only for localhost. The token, userinfo and JWKS URLs follow from it, and the authorize URL unless the next one is set |
 | `MOSIP_PUBLIC_AUTHORIZE_URL` | No | The full authorize address the member's browser is sent to, when it differs from the address the backend uses, for example a backend on Render reaching a local eSignet through a tunnel (`MOSIP_BASE_URL=https://<tunnel-host>`) while the browser opens `http://localhost:8080/oauth2/authorize`. Default (and when empty): `MOSIP_BASE_URL` + `/oauth2/authorize`. Plain `http` only for localhost. The startup log names the authorize host and which setting it came from. With a tunnel, also set `MOSIP_ISSUER` and `MOSIP_ASSERTION_AUDIENCE` to eSignet's own address, since their default is `MOSIP_BASE_URL` |
 | `MOSIP_CLIENT_ID` | With `MOSIP_ENABLED` | The client id registered with eSignet |
@@ -256,8 +257,8 @@ ERD: see `docs/erd.png`.
 | GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional. Without `nationalId` |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member, including `nationalId` |
-| POST | `/api/members` | JWT | Registers a member from a verification and returns it with `201`. Body `{verificationId, nationalId?, address?, joinDate?, preferredLanguage?}`; every verified detail (name, phone, birth date, gender, email, address) comes from the verification and must not be sent (`400 VERIFIED_FIELD_LOCKED`, see Identity verification); `503` when verification is not configured |
-| GET | `/api/members/verify/status` | JWT | `{available, required}`: both are `true` when `MOSIP_ENABLED=true`, both `false` otherwise (registering a member needs verification) |
+| POST | `/api/members` | JWT | Registers a member from a verification and returns it with `201`. Body `{verificationId, nationalId?, address?, joinDate?, preferredLanguage?}`; every verified detail (name, phone, birth date, gender, email, address) comes from the verification and must not be sent (`400 VERIFIED_FIELD_LOCKED`, see Identity verification); `503` when verification is not configured. With `MEMBER_REGISTER_UNVERIFIED=true` and verification off: body `{fullName, phone, nationalId?, address?, joinDate?, preferredLanguage?}`, member stored as not verified (see Members) |
+| GET | `/api/members/verify/status` | JWT | `{available, required, unverifiedAllowed}`: `available` and `required` are both `true` when `MOSIP_ENABLED=true`, both `false` otherwise (registering a member needs verification). `unverifiedAllowed` is `true` only when `MOSIP_ENABLED=false` and `MEMBER_REGISTER_UNVERIFIED=true`: the frontend then shows the plain form |
 | POST | `/api/members/verify/start` | JWT | Starts a verification: `{provider, authorizationUrl, state, expiresAt}`. `503` if not available |
 | POST | `/api/members/verify/callback` | JWT | Body `{code, state}` from eSignet's redirect. Returns `{verificationId, verified, method, fullName, phone, useBefore, birthdate, gender, email, address, verifiedFields}` |
 | POST | `/api/members/verify/cancel` | JWT | Body `{state, error}` when eSignet's redirect has an error instead of a code. Returns `{reason, message}` |
@@ -604,6 +605,32 @@ the details that came from the check, in the order `fullName`, `phone`, `birthda
 `address`; it is `[]` for a member who was never verified. The name and phone of a verified member are
 always verified (members verified before V38 show just those two).
 
+**Registering without verification: for demos and fallbacks only.** With `MOSIP_ENABLED=false` and
+`MEMBER_REGISTER_UNVERIFIED=true` (`GET /api/members/verify/status` then says `"unverifiedAllowed": true`),
+`POST /api/members` takes the name and phone from the body instead, with the same rules as an update:
+
+```json
+{
+  "fullName": "Uwimana Claudine",
+  "phone": "0788123456",
+  "nationalId": "1199880012345678",
+  "address": "Busogo",
+  "joinDate": "2026-10-08",
+  "preferredLanguage": "rw"
+}
+```
+
+**Such a member is unverified:** nobody checked that the name and phone belong to the person. The member is
+stored with `identity_verified = false` and returned with `"verified": false`, `"verificationMethod": null`,
+`"verifiedAt": null` and `"verifiedFields": []`, which the frontend should show as "Not verified". The change
+history gets a `MEMBER_REGISTERED_UNVERIFIED` row ("registered without identity verification") naming the
+member. `fullName` and `phone` are required (`400` with `fullName: is required`, `phone: must be a Rwandan
+mobile number...`, and so on), a `verificationId` is refused, and so are `birthDate`, `gender` and `email`,
+which only ever come from the identity check. Duplicate phones and national IDs are refused as for any member.
+The setting is ignored while `MOSIP_ENABLED=true`: if eSignet is on but cannot be reached, nothing falls back
+by itself; switching to this path is a deliberate change of both settings. A verification can only be attached
+at registration, so such a member stays unverified.
+
 - The member code is generated on create as `M-` and 4 digits (`M-0001`, `M-0002`, ...):
   the highest existing number plus one. It never changes.
 - The national ID is left out of `GET /api/members`; it is only shown when one member is
@@ -624,8 +651,9 @@ always verified (members verified before V38 show just those two).
 ### Identity verification
 
 Every new member is verified with MOSIP eSignet first, and is registered with every detail eSignet releases
-(name, phone, and when allowed the birth date, gender, email and address); there is no setting to skip it and
-nothing to type or compare. Existing members, updating members and every other feature do not depend on it.
+(name, phone, and when allowed the birth date, gender, email and address); while it is on there is no setting to
+skip it and nothing to type or compare. Only with it switched off can `MEMBER_REGISTER_UNVERIFIED` register
+unverified members, for demos and fallbacks (see Members). Existing members, updating members and every other feature do not depend on it.
 
 1. **Start.** "Add member" calls `POST /api/members/verify/start`, which returns `authorizationUrl`: eSignet's
    login page, with a one-use `state` (valid 10 minutes), a `nonce`, PKCE (S256), `scope=openid` only (`profile`
@@ -705,7 +733,7 @@ nothing to type or compare. Existing members, updating members and every other f
 | `ACR_NOT_ALLOWED` | 400 | The id_token says the person logged in a way not in `MOSIP_ALLOWED_ACRS` (for example biometrics) |
 | `VERIFIED_FIELD_LOCKED` | 400 | `POST /api/members` sent a value for a detail the check verified (`fullName`, `phone`, `birthDate`, `gender`, `email`, `address`). Message: "This detail came from the identity check and cannot be changed here."; it never repeats the verified value |
 | `PROVIDER_FAILED` | 502 | eSignet failed or its answer could not be trusted |
-| `NOT_CONFIGURED` | 503 | Identity verification is switched off |
+| `NOT_CONFIGURED` | 503 | Identity verification is switched off (and `MEMBER_REGISTER_UNVERIFIED` is not `true`) |
 
 `VERIFIED_FIELD_LOCKED` replaces the earlier `400` without a code for a `fullName` or `phone` in the body.
 `POST /api/members` also refuses a birth date, gender or email that was not verified (`400`, no code), and a
@@ -1254,7 +1282,8 @@ Environment variables to set in Render:
 | `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
 | `SMS_TRACCAR_TOKEN`, `SMS_TRACCAR_URL` | Only with `SMS_PROVIDER=traccar`: the gateway token and, if different, its `https` URL |
 | `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
-| `MOSIP_*` | To register members, with a real eSignet over `https`: `MOSIP_ENABLED`, `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY_PATH` (a secret file mounted on the service) and `MOSIP_KEY_ID` |
+| `MOSIP_*` | To register members, with a real eSignet over `https`: `MOSIP_ENABLED`, `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY_PATH` (a Render secret file, read at `/etc/secrets/<file name>`) and `MOSIP_KEY_ID`. With a local eSignet reached through a tunnel: `MOSIP_BASE_URL=https://<tunnel-host>`, `MOSIP_PUBLIC_AUTHORIZE_URL=http://localhost:8080/oauth2/authorize`, and `MOSIP_ISSUER`, `MOSIP_USERINFO_ISSUER` and `MOSIP_ASSERTION_AUDIENCE` set to eSignet's own addresses |
+| `MEMBER_REGISTER_UNVERIFIED` | Leave it unset. Only for a demo or fallback with `MOSIP_ENABLED=false`: members are then registered **unverified** (see Members) |
 
 Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app
 refuses to start if it is `true` with any provider but `log`.

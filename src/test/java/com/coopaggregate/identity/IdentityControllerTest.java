@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -76,12 +77,22 @@ class IdentityControllerTest {
 
     @Test
     void statusSaysWhetherVerificationIsAvailableAndRequired() throws Exception {
-        when(identityAvailability.status()).thenReturn(new IdentityStatusResponse(true, false));
+        when(identityAvailability.status()).thenReturn(new IdentityStatusResponse(true, false, false));
 
         mockMvc.perform(get("/api/members/verify/status").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.available").value(true))
-                .andExpect(jsonPath("$.required").value(false));
+                .andExpect(jsonPath("$.required").value(false))
+                .andExpect(jsonPath("$.unverifiedAllowed").value(false));
+    }
+
+    @Test
+    void statusSaysWhenAMemberMayBeRegisteredWithoutVerification() throws Exception {
+        when(identityAvailability.status()).thenReturn(new IdentityStatusResponse(false, false, true));
+
+        mockMvc.perform(get("/api/members/verify/status").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"available\":false,\"required\":false,\"unverifiedAllowed\":true}", true));
     }
 
     @Test
@@ -302,7 +313,7 @@ class IdentityControllerTest {
 
     @Test
     void statusShowsARequirementThatCannotBeMet() throws Exception {
-        when(identityAvailability.status()).thenReturn(new IdentityStatusResponse(false, true));
+        when(identityAvailability.status()).thenReturn(new IdentityStatusResponse(false, true, false));
 
         mockMvc.perform(get("/api/members/verify/status").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())

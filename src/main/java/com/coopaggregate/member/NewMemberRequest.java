@@ -12,7 +12,9 @@ import jakarta.validation.constraints.Size;
  * Registers a member from a completed identity verification. The name, phone, birth date, gender, email and address
  * the check verified are taken from the verification: a request that sends a value for one of them is refused with
  * VERIFIED_FIELD_LOCKED. The name and phone are always verified, so they are never sent. An address that was not
- * verified may be typed as before; a birth date, gender or email can only come from the check.
+ * verified may be typed as before; a birth date, gender or email can only come from the check. Only with
+ * MOSIP_ENABLED=false and MEMBER_REGISTER_UNVERIFIED=true (demos and fallbacks) are the name and phone sent instead of
+ * verificationId, and the member is stored as not verified.
  */
 public record NewMemberRequest(
         // From POST /api/members/verify/callback.

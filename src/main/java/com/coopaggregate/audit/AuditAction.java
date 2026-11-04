@@ -16,6 +16,8 @@ public enum AuditAction {
     // From the old comparison of typed details, kept only so earlier history rows can still be read.
     IDENTITY_MISMATCH,
     IDENTITY_VERIFICATION_FAILED,
+    // A member registered with a typed name and phone while identity verification was off (MEMBER_REGISTER_UNVERIFIED).
+    MEMBER_REGISTERED_UNVERIFIED,
     // Changes the manager makes to buyers' purchase requests. The details hold the request code, not personal data.
     BUYER_REQUEST_STATUS_CHANGED,
     BUYER_REQUEST_CONVERTED,
