@@ -38,6 +38,8 @@ import jakarta.persistence.criteria.Predicate;
 public class MemberService {
 
     private static final int MAX_PAGE_SIZE = 100;
+    // ASCII digits only ([0-9], not \d), exactly 16.
+    private static final java.util.regex.Pattern NATIONAL_ID = java.util.regex.Pattern.compile("[0-9]{16}");
 
     private final MemberRepository memberRepository;
     private final IdentityAvailability identityAvailability;
@@ -105,8 +107,9 @@ public class MemberService {
         }
         VerifiedDetails verified = identityVerificationService.verifiedDetails(request.verificationId(), manager);
         refuseVerifiedFieldsInTheRequest(request, verified, Set.of("address"));
+        String nationalId = requiredNationalId(request.nationalId());
         Member member = new Member();
-        applyDetails(member, verified.fullName(), verified.phone(), request.nationalId(),
+        applyDetails(member, verified.fullName(), verified.phone(), nationalId,
                 verified.address() != null ? verified.address() : request.address(), request.preferredLanguage());
         member.setVerifiedDetails(verified.birthdate(), verified.gender(), verified.email());
         if (verified.address() != null) {
@@ -144,8 +147,9 @@ public class MemberService {
                     "phone: must be a Rwandan mobile number: 07XXXXXXXX, 2507XXXXXXXX or +2507XXXXXXXX");
         }
         refuseVerifiedFieldsInTheRequest(request, VerifiedDetails.NONE, Set.of("fullName", "phone", "address"));
+        String nationalId = requiredNationalId(request.nationalId());
         Member member = new Member();
-        applyDetails(member, fullName, request.phone(), request.nationalId(), request.address(),
+        applyDetails(member, fullName, request.phone(), nationalId, request.address(),
                 request.preferredLanguage());
         member.setJoinDate(request.joinDate() != null ? request.joinDate() : KigaliTime.today());
         member.setMemberCode(String.format("M-%04d", memberRepository.highestMemberNumber() + 1));
@@ -192,8 +196,8 @@ public class MemberService {
         if (member.isAddressVerified() && !Objects.equals(member.getAddress(), trimToNull(request.address()))) {
             member.unmarkAddressVerified();
         }
-        applyDetails(member, request.fullName(), request.phone(), request.nationalId(), request.address(),
-                request.preferredLanguage());
+        applyDetails(member, request.fullName(), request.phone(), nationalIdForUpdate(member, request.nationalId()),
+                request.address(), request.preferredLanguage());
         if (request.joinDate() != null) {
             member.setJoinDate(request.joinDate());
         }
@@ -207,10 +211,44 @@ public class MemberService {
         return MemberResponse.from(member);
     }
 
-    private void applyDetails(Member member, String fullName, String rawPhone, String rawNationalId, String address,
+    // A new member needs a national ID: exactly 16 digits once the spaces around it are trimmed. The messages never
+    // repeat the value.
+    private static String requiredNationalId(String raw) {
+        String nationalId = trimToNull(raw);
+        if (nationalId == null) {
+            throw new NationalIdException(NationalIdErrorCode.NATIONAL_ID_REQUIRED, "nationalId: is required");
+        }
+        return validNationalId(nationalId);
+    }
+
+    // Members registered before the national ID was required may have none. An edit may add one, or change it to
+    // another valid one, but never remove one that is set. The stored value sent back unchanged is always accepted,
+    // so a member with an older ID in another format can still be edited.
+    private static String nationalIdForUpdate(Member member, String raw) {
+        String current = trimToNull(member.getNationalId());
+        String nationalId = trimToNull(raw);
+        if (nationalId == null) {
+            if (current != null) {
+                throw new NationalIdException(NationalIdErrorCode.NATIONAL_ID_REQUIRED,
+                        "nationalId: cannot be removed once it is set");
+            }
+            return null;
+        }
+        return nationalId.equals(current) ? current : validNationalId(nationalId);
+    }
+
+    private static String validNationalId(String nationalId) {
+        if (!NATIONAL_ID.matcher(nationalId).matches()) {
+            throw new NationalIdException(NationalIdErrorCode.NATIONAL_ID_INVALID,
+                    "nationalId: must be exactly 16 digits");
+        }
+        return nationalId;
+    }
+
+    // nationalId is already checked (see requiredNationalId and nationalIdForUpdate); null means the member has none.
+    private void applyDetails(Member member, String fullName, String rawPhone, String nationalId, String address,
                               String preferredLanguage) {
         String phone = RwandanPhoneNumber.normalize(rawPhone);
-        String nationalId = trimToNull(rawNationalId);
 
         memberRepository.findByPhone(phone)
                 .filter(other -> !other.getId().equals(member.getId()))
@@ -222,8 +260,7 @@ public class MemberService {
             memberRepository.findByNationalId(nationalId)
                     .filter(other -> !other.getId().equals(member.getId()))
                     .ifPresent(other -> {
-                        throw new IllegalStateException(
-                                "National ID " + nationalId + " is already used by member " + other.getMemberCode() + ".");
+                        throw new NationalIdTakenException(other.getMemberCode());
                     });
         }
 
@@ -258,11 +295,15 @@ public class MemberService {
                 String textPattern = "%" + term.toLowerCase(Locale.ROOT) + "%";
                 // Phones are stored as +2507XXXXXXXX, so a search for 07XXXXXXXX must be converted first.
                 String phoneTerm = RwandanPhoneNumber.isValid(term) ? RwandanPhoneNumber.normalize(term) : term;
-                predicates.add(cb.or(
-                        cb.like(cb.lower(root.get("fullName")), textPattern),
-                        cb.like(cb.lower(root.get("memberCode")), textPattern),
-                        cb.like(root.get("phone"), "%" + phoneTerm + "%"),
-                        cb.like(root.get("nationalId"), "%" + term + "%")));
+                List<Predicate> any = new ArrayList<>();
+                any.add(cb.like(cb.lower(root.get("fullName")), textPattern));
+                any.add(cb.like(cb.lower(root.get("memberCode")), textPattern));
+                any.add(cb.like(root.get("phone"), "%" + phoneTerm + "%"));
+                // The national ID only matches as a whole: part of an ID never finds a member.
+                if (NATIONAL_ID.matcher(term).matches()) {
+                    any.add(cb.equal(root.get("nationalId"), term));
+                }
+                predicates.add(cb.or(any.toArray(Predicate[]::new)));
             }
 
             return cb.and(predicates.toArray(Predicate[]::new));

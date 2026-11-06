@@ -56,6 +56,7 @@ class MemberServiceTest {
     private IdentityVerificationService identityVerificationService;
     private AuditLogRepository auditLogRepository;
     private final Manager manager = new Manager();
+    private static final String ID = "1199880012345678";
 
     @BeforeEach
     void setUp() {
@@ -96,14 +97,14 @@ class MemberServiceTest {
     void firstMemberGetsNumberOne() {
         when(repository.highestMemberNumber()).thenReturn(0);
 
-        assertEquals("M-0001", service.create(registration(null), manager).memberCode());
+        assertEquals("M-0001", service.create(registration(ID), manager).memberCode());
     }
 
     @Test
     void theNameAndPhoneAreTheVerifiedOnes() {
         verifiedAs("Habimana Eric", "+250722123456");
 
-        MemberResponse response = service.create(registration(null), manager);
+        MemberResponse response = service.create(registration(ID), manager);
 
         assertEquals("Habimana Eric", response.fullName());
         assertEquals("+250722123456", response.phone());
@@ -111,9 +112,8 @@ class MemberServiceTest {
 
     @Test
     void createUsesDefaultsForOptionalFields() {
-        MemberResponse response = service.create(new NewMemberRequest(9L, null, null, " ", "", null, null), manager);
+        MemberResponse response = service.create(new NewMemberRequest(9L, null, null, ID, "", null, null), manager);
 
-        assertNull(response.nationalId());
         assertNull(response.address());
         assertEquals(KigaliTime.today(), response.joinDate());
         assertEquals("rw", response.preferredLanguage());
@@ -124,7 +124,7 @@ class MemberServiceTest {
         when(repository.findByPhone("+250788123456")).thenReturn(Optional.of(existingMember(3L, "M-0003")));
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> service.create(registration(null), manager));
+                () -> service.create(registration(ID), manager));
 
         assertEquals("Phone number +250788123456 is already used by member M-0003.", e.getMessage());
         verify(repository, never()).highestMemberNumber();
@@ -136,11 +136,168 @@ class MemberServiceTest {
     void createWithDuplicateNationalIdIsRejected() {
         when(repository.findByNationalId("1199880012345678")).thenReturn(Optional.of(existingMember(4L, "M-0004")));
 
-        IllegalStateException e = assertThrows(IllegalStateException.class,
+        NationalIdTakenException e = assertThrows(NationalIdTakenException.class,
                 () -> service.create(registration("1199880012345678"), manager));
 
-        assertEquals("National ID 1199880012345678 is already used by member M-0004.", e.getMessage());
+        assertEquals("NATIONAL_ID_TAKEN", e.errorCode());
+        assertEquals("M-0004", e.memberCode());
+        assertEquals("This national ID is already used by member M-0004.", e.getMessage());
         verify(repository, never()).save(any());
+        verify(identityVerificationService, never()).attach(any(), any(), any());
+    }
+
+    // --- National ID: required for a new member, exactly 16 digits, unique
+
+    @Test
+    void aNewMemberWithoutANationalIdIsRefused() {
+        for (String missing : Arrays.asList(null, "", "   ")) {
+            NationalIdException e = assertThrows(NationalIdException.class,
+                    () -> service.create(registration(missing), manager));
+
+            assertEquals("NATIONAL_ID_REQUIRED", e.errorCode());
+            assertEquals("nationalId: is required", e.getMessage());
+        }
+        verify(repository, never()).save(any());
+        verify(identityVerificationService, never()).attach(any(), any(), any());
+    }
+
+    @Test
+    void aNationalIdOfTheWrongLengthIsRefused() {
+        for (String wrong : List.of("119988001234567", "11998800123456789", "1")) {
+            NationalIdException e = assertThrows(NationalIdException.class,
+                    () -> service.create(registration(wrong), manager));
+
+            assertEquals("NATIONAL_ID_INVALID", e.errorCode());
+            assertEquals("nationalId: must be exactly 16 digits", e.getMessage());
+        }
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void aNationalIdWithLettersOrOtherCharactersIsRefused() {
+        for (String wrong : List.of("119988001234567A", "1199 8800 1234 5678", "1199-880012345678",
+                "١١٩٩٨٨٠٠١٢٣٤٥٦٧٨", "+199880012345678")) {
+            NationalIdException e = assertThrows(NationalIdException.class,
+                    () -> service.create(registration(wrong), manager), wrong);
+
+            assertEquals("NATIONAL_ID_INVALID", e.errorCode(), wrong);
+            assertFalse(e.getMessage().contains(wrong), "the message never repeats the value");
+        }
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void theSpacesAroundANationalIdAreTrimmed() {
+        MemberResponse response = service.create(registration("  1199880012345678 "), manager);
+
+        assertEquals("1199880012345678", response.nationalId());
+    }
+
+    @Test
+    void theUnverifiedPathNeedsAValidNationalIdToo() {
+        when(identityAvailability.isAvailable()).thenReturn(false);
+        when(identityAvailability.isUnverifiedAllowed()).thenReturn(true);
+
+        assertEquals("NATIONAL_ID_REQUIRED", assertThrows(NationalIdException.class, () -> service.create(
+                new NewMemberRequest(null, "Mukamana Alice", "0788123456", null, null, null, null), manager))
+                .errorCode());
+        assertEquals("NATIONAL_ID_INVALID", assertThrows(NationalIdException.class, () -> service.create(
+                new NewMemberRequest(null, "Mukamana Alice", "0788123456", "12345", null, null, null), manager))
+                .errorCode());
+        when(repository.findByNationalId(ID)).thenReturn(Optional.of(existingMember(4L, "M-0004")));
+        assertEquals("M-0004", assertThrows(NationalIdTakenException.class, () -> service.create(
+                new NewMemberRequest(null, "Mukamana Alice", "0788123456", ID, null, null, null), manager))
+                .memberCode());
+        verify(repository, never()).save(any());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    void theTakenAnswerNamesOnlyTheOtherMembersCode() {
+        Member other = existingMember(4L, "M-0004");
+        other.setNationalId(ID);
+        when(repository.findByNationalId(ID)).thenReturn(Optional.of(other));
+
+        NationalIdTakenException e = assertThrows(NationalIdTakenException.class,
+                () -> service.create(registration(ID), manager));
+
+        for (String detail : List.of(ID, "Existing Member", "780000000")) {
+            assertFalse(e.getMessage().contains(detail), detail);
+        }
+    }
+
+    // --- National ID on edit
+
+    @Test
+    void anOldMemberWithoutANationalIdStillLoadsAndCanBeEditedWithoutOne() {
+        Member old = existingMember(5L, "M-0005");
+        when(repository.findById(5L)).thenReturn(Optional.of(old));
+
+        assertNull(service.get(5L).nationalId());
+        MemberResponse response = service.update(5L, request("0722123456", null));
+
+        assertNull(response.nationalId());
+        assertEquals("+250722123456", response.phone());
+        verify(repository, never()).findByNationalId(any());
+    }
+
+    @Test
+    void anEditMayAddANationalIdToAnOldMember() {
+        Member old = existingMember(5L, "M-0005");
+        when(repository.findById(5L)).thenReturn(Optional.of(old));
+
+        assertEquals(ID, service.update(5L, request("0722123456", " " + ID + " ")).nationalId());
+    }
+
+    @Test
+    void anEditCanNeverRemoveANationalIdThatIsSet() {
+        Member member = existingMember(5L, "M-0005");
+        member.setNationalId(ID);
+        when(repository.findById(5L)).thenReturn(Optional.of(member));
+
+        for (String empty : Arrays.asList(null, "", "  ")) {
+            NationalIdException e = assertThrows(NationalIdException.class,
+                    () -> service.update(5L, request("0722123456", empty)));
+
+            assertEquals("NATIONAL_ID_REQUIRED", e.errorCode());
+            assertEquals("nationalId: cannot be removed once it is set", e.getMessage());
+        }
+        assertEquals(ID, member.getNationalId());
+        assertEquals("+250780000000", member.getPhone(), "nothing changed");
+    }
+
+    @Test
+    void anEditChecksANewNationalIdLikeACreate() {
+        Member member = existingMember(5L, "M-0005");
+        when(repository.findById(5L)).thenReturn(Optional.of(member));
+
+        assertEquals("NATIONAL_ID_INVALID", assertThrows(NationalIdException.class,
+                () -> service.update(5L, request("0722123456", "12345678901234AB"))).errorCode());
+        when(repository.findByNationalId(ID)).thenReturn(Optional.of(existingMember(4L, "M-0004")));
+        assertEquals("M-0004", assertThrows(NationalIdTakenException.class,
+                () -> service.update(5L, request("0722123456", ID))).memberCode());
+        assertNull(member.getNationalId());
+    }
+
+    @Test
+    void anEditKeepingTheMembersOwnNationalIdIsNotADuplicate() {
+        Member member = existingMember(5L, "M-0005");
+        member.setNationalId(ID);
+        when(repository.findById(5L)).thenReturn(Optional.of(member));
+        when(repository.findByNationalId(ID)).thenReturn(Optional.of(member));
+
+        assertEquals(ID, service.update(5L, request("0722123456", ID)).nationalId());
+    }
+
+    @Test
+    void anOlderNationalIdInAnotherFormatSurvivesAnEditThatSendsItBackUnchanged() {
+        Member member = existingMember(5L, "M-0005");
+        member.setNationalId("RW-12345");
+        when(repository.findById(5L)).thenReturn(Optional.of(member));
+
+        assertEquals("RW-12345", service.update(5L, request("0722123456", "RW-12345")).nationalId());
+        assertEquals("NATIONAL_ID_INVALID", assertThrows(NationalIdException.class,
+                () -> service.update(5L, request("0722123456", "RW-99999"))).errorCode());
     }
 
     @Test
@@ -262,7 +419,7 @@ class MemberServiceTest {
         when(identityAvailability.isAvailable()).thenReturn(false);
 
         IdentityProviderException e = assertThrows(IdentityProviderException.class,
-                () -> service.create(registration(null), manager));
+                () -> service.create(registration(ID), manager));
 
         assertTrue(e.isNotConfigured());
         assertEquals("Member registration needs identity verification, which is not configured.", e.getMessage());
@@ -397,7 +554,7 @@ class MemberServiceTest {
     void theVerificationIsReadBeforeTheMemberIsSavedAndAttachedAfter() {
         doAnswerMarkVerified();
 
-        MemberResponse response = service.create(registration(null), manager);
+        MemberResponse response = service.create(registration(ID), manager);
 
         InOrder order = inOrder(identityVerificationService, repository);
         order.verify(identityVerificationService).verifiedDetails(9L, manager);
@@ -413,7 +570,7 @@ class MemberServiceTest {
         when(identityVerificationService.verifiedDetails(9L, manager))
                 .thenThrow(new BadRequestException("Unknown verification. Verify the person again."));
 
-        assertThrows(BadRequestException.class, () -> service.create(registration(null), manager));
+        assertThrows(BadRequestException.class, () -> service.create(registration(ID), manager));
 
         verify(repository, never()).save(any());
         verify(identityVerificationService, never()).attach(any(), any(), any());
@@ -424,7 +581,7 @@ class MemberServiceTest {
         org.mockito.Mockito.doThrow(new DuplicateIdentityException()).when(identityVerificationService)
                 .attach(eq(9L), eq(manager), any(Member.class));
 
-        assertThrows(DuplicateIdentityException.class, () -> service.create(registration(null), manager));
+        assertThrows(DuplicateIdentityException.class, () -> service.create(registration(ID), manager));
     }
 
     // --- Every verified detail
@@ -462,7 +619,7 @@ class MemberServiceTest {
                 "Uwimana Claudine", "+250788123456", null, "Female", null, null));
         doAnswerMarkVerified();
 
-        MemberResponse response = service.create(new NewMemberRequest(9L, null, null, null, "Busogo", null, null),
+        MemberResponse response = service.create(new NewMemberRequest(9L, null, null, ID, "Busogo", null, null),
                 manager);
 
         assertNull(response.birthDate());
@@ -588,14 +745,6 @@ class MemberServiceTest {
     }
 
     @Test
-    void memberCanBeRegisteredWithoutANationalId() {
-        MemberResponse response = service.create(registration(null), manager);
-
-        assertNull(response.nationalId());
-        verify(repository, never()).findByNationalId(any());
-    }
-
-    @Test
     void summaryReturnsCounts() {
         when(repository.count()).thenReturn(12L);
         when(repository.countByStatus(MemberStatus.ACTIVE)).thenReturn(10L);
@@ -618,11 +767,11 @@ class MemberServiceTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void searchIncludesNationalId() {
+    void searchFindsTheFullNationalIdByExactMatch() {
         ArgumentCaptor<Specification<Member>> spec = ArgumentCaptor.forClass(Specification.class);
         when(repository.findAll(spec.capture(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
 
-        service.list("1199880012345678", null, 0, 20);
+        service.list(" 1199880012345678 ", null, 0, 20);
 
         Root<Member> root = mock(Root.class);
         Path<String> nationalId = mock(Path.class);
@@ -631,7 +780,27 @@ class MemberServiceTest {
 
         spec.getValue().toPredicate(root, mock(CriteriaQuery.class), cb);
 
-        verify(cb).like(nationalId, "%1199880012345678%");
+        verify(cb).equal(nationalId, "1199880012345678");
+        verify(cb, never()).like(eq(nationalId), any(String.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void partOfANationalIdNeverFindsAMember() {
+        ArgumentCaptor<Specification<Member>> spec = ArgumentCaptor.forClass(Specification.class);
+        when(repository.findAll(spec.capture(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
+
+        service.list("11998800", null, 0, 20);
+
+        Root<Member> root = mock(Root.class);
+        Path<String> nationalId = mock(Path.class);
+        doReturn(nationalId).when(root).get("nationalId");
+        CriteriaBuilder cb = mock(CriteriaBuilder.class);
+
+        spec.getValue().toPredicate(root, mock(CriteriaQuery.class), cb);
+
+        verify(root, never()).get("nationalId");
+        verify(cb, never()).equal(eq(nationalId), any(Object.class));
     }
 
     private static MemberRequest request(String phone, String nationalId) {

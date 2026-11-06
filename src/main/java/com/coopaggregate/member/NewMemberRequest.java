@@ -26,8 +26,8 @@ public record NewMemberRequest(
         // Never sent: always verified.
         String phone,
 
-        // Optional: leave it out or empty. When given, it must be 16 digits and unique.
-        @Pattern(regexp = "^(\\d{16})?$", message = "must be 16 digits")
+        // Required: exactly 16 digits (spaces around it are trimmed) and unique. Checked in MemberService, so the
+        // errors carry NATIONAL_ID_REQUIRED, NATIONAL_ID_INVALID or NATIONAL_ID_TAKEN.
         String nationalId,
 
         // Only when the check did not verify one.

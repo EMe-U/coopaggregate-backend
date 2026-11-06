@@ -4,4 +4,9 @@ package com.coopaggregate.error;
 public interface ErrorCoded {
 
     String errorCode();
+
+    /** The member code (M-xxxx) the error is about, for the few errors that name one; otherwise null. */
+    default String memberCode() {
+        return null;
+    }
 }
