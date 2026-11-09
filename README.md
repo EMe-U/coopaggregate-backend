@@ -586,7 +586,9 @@ was not verified is refused too (`400`, no code). An address that was not verifi
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
 
 A member (from create, update, `GET /api/members/{id}`, activate and deactivate) looks like this;
-the list items are the same without `nationalId`:
+the list items are the same without `nationalId`, and with `nationalIdMasked` instead: the last 4 digits only,
+as `"••••••••••••5678"` (always 16 characters; an older ID shorter than 8 characters is all dots), or `null`
+when the member has no national ID:
 
 ```json
 {

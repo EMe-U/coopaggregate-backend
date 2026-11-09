@@ -96,12 +96,42 @@ class MemberControllerTest {
         when(memberService.list(null, null, 0, 20)).thenReturn(new PageResponse<>(List.of(new MemberListItem(
                 1L, "M-0001", "Uwimana Claudine", "+250788123456", null, LocalDate.of(2026, 10, 8),
                 MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), false, null, null, null, null, null,
-                List.of())), 0, 20, 1, 1));
+                List.of(), null)), 0, 20, 1, 1));
 
         mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].fullName").value("Uwimana Claudine"))
                 .andExpect(jsonPath("$.content[0].nationalId").doesNotExist());
+    }
+
+    @Test
+    void theListShowsTheMaskedNationalIdAndNeverTheFullOne(CapturedOutput output) throws Exception {
+        Member withId = listMember("M-0001", "1199880012345678");
+        Member old = listMember("M-0002", null);
+        when(memberService.list(null, null, 0, 20)).thenReturn(new PageResponse<>(
+                List.of(MemberListItem.from(withId), MemberListItem.from(old)), 0, 20, 2, 1));
+
+        String body = mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].nationalIdMasked").value("••••••••••••5678"))
+                .andExpect(jsonPath("$.content[0].nationalId").doesNotExist())
+                .andExpect(jsonPath("$.content[1].memberCode").value("M-0002"))
+                .andExpect(jsonPath("$.content[1].nationalIdMasked").value(org.hamcrest.Matchers.nullValue()))
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+
+        assertFalse(body.contains("1199880012345678"), body);
+        assertFalse(body.contains("119988001234"), body);
+        assertFalse(output.getAll().contains("1199880012345678"));
+    }
+
+    private static Member listMember(String memberCode, String nationalId) {
+        Member member = new Member();
+        member.setMemberCode(memberCode);
+        member.setFullName("Uwimana Claudine");
+        member.setPhone("+250788123456");
+        member.setNationalId(nationalId);
+        member.setJoinDate(LocalDate.of(2026, 10, 8));
+        return member;
     }
 
     @Test
@@ -111,7 +141,7 @@ class MemberControllerTest {
                 LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), true,
                 VerificationMethod.PASSWORD, Instant.parse("2026-10-08T09:55:00Z"), LocalDate.of(1990, 5, 17),
                 "Female", "claudine@example.com", List.of("fullName", "phone", "birthdate", "gender", "email",
-                "address"))), 0, 20, 1, 1));
+                "address"), null)), 0, 20, 1, 1));
 
         mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
