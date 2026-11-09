@@ -20,8 +20,9 @@ public record MemberRequest(
                 message = "must be a Rwandan mobile number: 07XXXXXXXX, 2507XXXXXXXX or +2507XXXXXXXX")
         String phone,
 
-        // Optional: leave it out or empty. When given, it must be 16 digits and unique.
-        @Pattern(regexp = "^(\\d{16})?$", message = "must be 16 digits")
+        // May stay empty only for a member who has none (registered before it was required). When given, exactly 16
+        // digits (spaces around it are trimmed) and unique; one that is set cannot be removed. Checked in
+        // MemberService, so the errors carry NATIONAL_ID_REQUIRED, NATIONAL_ID_INVALID or NATIONAL_ID_TAKEN.
         String nationalId,
 
         // 500, like a verified address, so a member with a long verified address can still be edited.

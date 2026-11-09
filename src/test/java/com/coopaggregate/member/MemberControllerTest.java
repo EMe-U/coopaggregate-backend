@@ -1,6 +1,7 @@
 package com.coopaggregate.member;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -10,6 +11,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -23,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -48,6 +51,7 @@ import com.coopaggregate.manager.Manager;
 
 import jakarta.persistence.EntityNotFoundException;
 
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 @WebMvcTest(MemberController.class)
 @Import({SecurityConfig.class, JwtConfig.class})
 @TestPropertySource(properties = "app.jwt.secret=test-secret-that-is-at-least-32-characters")
@@ -92,12 +96,42 @@ class MemberControllerTest {
         when(memberService.list(null, null, 0, 20)).thenReturn(new PageResponse<>(List.of(new MemberListItem(
                 1L, "M-0001", "Uwimana Claudine", "+250788123456", null, LocalDate.of(2026, 10, 8),
                 MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), false, null, null, null, null, null,
-                List.of())), 0, 20, 1, 1));
+                List.of(), null)), 0, 20, 1, 1));
 
         mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].fullName").value("Uwimana Claudine"))
                 .andExpect(jsonPath("$.content[0].nationalId").doesNotExist());
+    }
+
+    @Test
+    void theListShowsTheMaskedNationalIdAndNeverTheFullOne(CapturedOutput output) throws Exception {
+        Member withId = listMember("M-0001", "1199880012345678");
+        Member old = listMember("M-0002", null);
+        when(memberService.list(null, null, 0, 20)).thenReturn(new PageResponse<>(
+                List.of(MemberListItem.from(withId), MemberListItem.from(old)), 0, 20, 2, 1));
+
+        String body = mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].nationalIdMasked").value("••••••••••••5678"))
+                .andExpect(jsonPath("$.content[0].nationalId").doesNotExist())
+                .andExpect(jsonPath("$.content[1].memberCode").value("M-0002"))
+                .andExpect(jsonPath("$.content[1].nationalIdMasked").value(org.hamcrest.Matchers.nullValue()))
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+
+        assertFalse(body.contains("1199880012345678"), body);
+        assertFalse(body.contains("119988001234"), body);
+        assertFalse(output.getAll().contains("1199880012345678"));
+    }
+
+    private static Member listMember(String memberCode, String nationalId) {
+        Member member = new Member();
+        member.setMemberCode(memberCode);
+        member.setFullName("Uwimana Claudine");
+        member.setPhone("+250788123456");
+        member.setNationalId(nationalId);
+        member.setJoinDate(LocalDate.of(2026, 10, 8));
+        return member;
     }
 
     @Test
@@ -107,7 +141,7 @@ class MemberControllerTest {
                 LocalDate.of(2026, 10, 8), MemberStatus.ACTIVE, "rw", Instant.parse("2026-10-08T10:00:00Z"), true,
                 VerificationMethod.PASSWORD, Instant.parse("2026-10-08T09:55:00Z"), LocalDate.of(1990, 5, 17),
                 "Female", "claudine@example.com", List.of("fullName", "phone", "birthdate", "gender", "email",
-                "address"))), 0, 20, 1, 1));
+                "address"), null)), 0, 20, 1, 1));
 
         mockMvc.perform(get("/api/members").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
@@ -282,7 +316,26 @@ class MemberControllerTest {
     }
 
     @Test
-    void createWithShortNationalIdReturns400() throws Exception {
+    void aMissingNationalIdReturns400WithItsCode() throws Exception {
+        when(memberService.create(any(NewMemberRequest.class), any())).thenThrow(
+                new NationalIdException(NationalIdErrorCode.NATIONAL_ID_REQUIRED, "nationalId: is required"));
+
+        mockMvc.perform(post("/api/members")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"verificationId": 9}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().json(
+                        "{\"message\":\"nationalId: is required\",\"code\":\"NATIONAL_ID_REQUIRED\"}", true));
+    }
+
+    @Test
+    void aShortNationalIdReachesTheServiceAndReturns400WithItsCode() throws Exception {
+        when(memberService.create(any(NewMemberRequest.class), any())).thenThrow(
+                new NationalIdException(NationalIdErrorCode.NATIONAL_ID_INVALID, "nationalId: must be exactly 16 digits"));
+
         mockMvc.perform(post("/api/members")
                         .header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -290,7 +343,61 @@ class MemberControllerTest {
                                 {"verificationId": 9, "nationalId": "12345"}
                                 """))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("nationalId: must be 16 digits"));
+                .andExpect(jsonPath("$.code").value("NATIONAL_ID_INVALID"))
+                .andExpect(jsonPath("$.message").value("nationalId: must be exactly 16 digits"));
+    }
+
+    @Test
+    void aTakenNationalIdReturns409WithTheOtherMembersCodeOnly() throws Exception {
+        when(memberService.create(any(NewMemberRequest.class), any())).thenThrow(new NationalIdTakenException("M-0004"));
+
+        mockMvc.perform(post("/api/members")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"verificationId": 9, "nationalId": "1199880012345678"}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(content().json("{\"message\":\"This national ID is already used by member M-0004.\","
+                        + "\"code\":\"NATIONAL_ID_TAKEN\",\"memberCode\":\"M-0004\"}", true));
+    }
+
+    @Test
+    void anEditThatWouldRemoveTheNationalIdReturns400() throws Exception {
+        when(memberService.update(eq(5L), any(MemberRequest.class))).thenThrow(new NationalIdException(
+                NationalIdErrorCode.NATIONAL_ID_REQUIRED, "nationalId: cannot be removed once it is set"));
+
+        mockMvc.perform(put("/api/members/5")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName": "Uwimana Claudine", "phone": "0788123456", "nationalId": ""}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("NATIONAL_ID_REQUIRED"));
+    }
+
+    @Test
+    void aSearchByNationalIdNeverShowsOrLogsTheId(CapturedOutput output) throws Exception {
+        Member member = new Member();
+        member.setMemberCode("M-0001");
+        member.setFullName("Uwimana Claudine");
+        member.setPhone("+250788123456");
+        member.setNationalId("1199880012345678");
+        member.setJoinDate(LocalDate.of(2026, 10, 8));
+        when(memberService.list("1199880012345678", null, 0, 20))
+                .thenReturn(new PageResponse<>(List.of(MemberListItem.from(member)), 0, 20, 1, 1));
+
+        String body = mockMvc.perform(get("/api/members").param("search", "1199880012345678")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].memberCode").value("M-0001"))
+                .andExpect(jsonPath("$.content[0].nationalId").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+
+        assertFalse(body.contains("1199880012345678"), body);
+        assertFalse(MemberListItem.from(member).toString().contains("1199880012345678"));
+        assertFalse(output.getAll().contains("1199880012345678"));
     }
 
     @Test

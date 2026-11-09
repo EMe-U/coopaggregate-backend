@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import com.coopaggregate.identity.IdentityProviderException;
+import com.coopaggregate.member.NationalIdTakenException;
 
 import jakarta.persistence.EntityNotFoundException;
 
@@ -68,9 +69,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public ApiError handleDataConflict(DataIntegrityViolationException e) {
-        log.warn("Data integrity violation: {}", e.getMostSpecificCause().getMessage());
+        String cause = String.valueOf(e.getMostSpecificCause().getMessage());
+        // Two registrations with the same national ID at the same moment: the database refuses the second. The ID is
+        // never logged (Postgres would put it in its message), and the member is not known here.
+        if (cause.contains(NATIONAL_ID_CONSTRAINT)) {
+            log.warn("Data integrity violation: national ID already used (constraint {})", NATIONAL_ID_CONSTRAINT);
+            return ApiError.of(new NationalIdTakenException(null));
+        }
+        log.warn("Data integrity violation: {}", cause);
         return new ApiError("The request conflicts with existing data.");
     }
+
+    // The UNIQUE constraint on member.national_id (V2), as Postgres named it.
+    static final String NATIONAL_ID_CONSTRAINT = "member_national_id_key";
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleUnexpected(Exception e) {

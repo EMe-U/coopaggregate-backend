@@ -254,10 +254,10 @@ ERD: see `docs/erd.png`.
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
 | GET | `/api/ledger/verify` | JWT | Recomputes every hash. Returns `{valid, checkedEntries, firstBrokenEntryId}` |
 | POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Reverses the entry through its business action (see Reversals) and returns the REVERSAL entry |
-| GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional. Without `nationalId` |
+| GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional; a full 16-digit national ID in `search` finds that member (exact match only). Without `nationalId` |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member, including `nationalId` |
-| POST | `/api/members` | JWT | Registers a member from a verification and returns it with `201`. Body `{verificationId, nationalId?, address?, joinDate?, preferredLanguage?}`; every verified detail (name, phone, birth date, gender, email, address) comes from the verification and must not be sent (`400 VERIFIED_FIELD_LOCKED`, see Identity verification); `503` when verification is not configured. With `MEMBER_REGISTER_UNVERIFIED=true` and verification off: body `{fullName, phone, nationalId?, address?, joinDate?, preferredLanguage?}`, member stored as not verified (see Members) |
+| POST | `/api/members` | JWT | Registers a member from a verification and returns it with `201`. Body `{verificationId, nationalId, address?, joinDate?, preferredLanguage?}` (`nationalId` required: 16 digits, unique; `NATIONAL_ID_REQUIRED`, `NATIONAL_ID_INVALID`, `409 NATIONAL_ID_TAKEN`); every verified detail (name, phone, birth date, gender, email, address) comes from the verification and must not be sent (`400 VERIFIED_FIELD_LOCKED`, see Identity verification); `503` when verification is not configured. With `MEMBER_REGISTER_UNVERIFIED=true` and verification off: body `{fullName, phone, nationalId, address?, joinDate?, preferredLanguage?}`, member stored as not verified (see Members) |
 | GET | `/api/members/verify/status` | JWT | `{available, required, unverifiedAllowed}`: `available` and `required` are both `true` when `MOSIP_ENABLED=true`, both `false` otherwise (registering a member needs verification). `unverifiedAllowed` is `true` only when `MOSIP_ENABLED=false` and `MEMBER_REGISTER_UNVERIFIED=true`: the frontend then shows the plain form |
 | POST | `/api/members/verify/start` | JWT | Starts a verification: `{provider, authorizationUrl, state, expiresAt}`. `503` if not available |
 | POST | `/api/members/verify/callback` | JWT | Body `{code, state}` from eSignet's redirect. Returns `{verificationId, verified, method, fullName, phone, useBefore, birthdate, gender, email, address, verifiedFields}` |
@@ -580,13 +580,15 @@ was not verified is refused too (`400`, no code). An address that was not verifi
 | `verificationId` | Create only, required: the `verificationId` from `POST /api/members/verify/callback` |
 | `fullName` | Update only: required, at most 150 characters. On create it is the verified name and must not be sent |
 | `phone` | Update only: required. A Rwandan mobile number (072, 073, 078 or 079) written as `07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`. On create it is the verified phone and must not be sent. Always stored and returned as `+2507XXXXXXXX` |
-| `nationalId` | Optional: leave it out or empty. When given, 16 digits and unique. Only returned for one member, never in the list |
+| `nationalId` | **Required on create** (both the verified path and `MEMBER_REGISTER_UNVERIFIED`): exactly 16 digits `0`–`9` once the spaces around it are trimmed (spaces inside, dashes or letters are refused), and unique. On update it may stay empty only for a member who has none (registered before it was required); it can be added, or changed to another valid one, but a national ID that is set can never be removed. A member's own stored value sent back unchanged is always accepted. Only returned for one member, never in the list. Stored as plain text in `member.national_id` |
 | `address` | Optional. On create at most 255 characters, and only when the check did not verify an address. On update at most 500 (a verified address can be that long); changing a verified address removes it from `verifiedFields` |
 | `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
 
 A member (from create, update, `GET /api/members/{id}`, activate and deactivate) looks like this;
-the list items are the same without `nationalId`:
+the list items are the same without `nationalId`, and with `nationalIdMasked` instead: the last 4 digits only,
+as `"••••••••••••5678"` (always 16 characters; an older ID shorter than 8 characters is all dots), or `null`
+when the member has no national ID:
 
 ```json
 {
@@ -626,7 +628,8 @@ stored with `identity_verified = false` and returned with `"verified": false`, `
 history gets a `MEMBER_REGISTERED_UNVERIFIED` row ("registered without identity verification") naming the
 member. `fullName` and `phone` are required (`400` with `fullName: is required`, `phone: must be a Rwandan
 mobile number...`, and so on), a `verificationId` is refused, and so are `birthDate`, `gender` and `email`,
-which only ever come from the identity check. Duplicate phones and national IDs are refused as for any member.
+which only ever come from the identity check. The national ID is required, and duplicate phones and national
+IDs are refused, as for any member.
 The setting is ignored while `MOSIP_ENABLED=true`: if eSignet is on but cannot be reached, nothing falls back
 by itself; switching to this path is a deliberate change of both settings. A verification can only be attached
 at registration, so such a member stays unverified.
@@ -635,11 +638,21 @@ at registration, so such a member stays unverified.
   the highest existing number plus one. It never changes.
 - The national ID is left out of `GET /api/members`; it is only shown when one member is
   returned (`GET /api/members/{id}`, and the responses of create, update, activate and
-  deactivate). `search` still matches it.
-- Phone numbers and national IDs must be unique. A duplicate returns `409`, for example
+  deactivate). It is never logged.
+- National ID errors carry a `code`, and their message never repeats the ID:
+
+  | Code | Status | When |
+  |------|--------|------|
+  | `NATIONAL_ID_REQUIRED` | 400 | Missing or empty on create (`nationalId: is required`), or empty on an update of a member who has one (`nationalId: cannot be removed once it is set`) |
+  | `NATIONAL_ID_INVALID` | 400 | Not exactly 16 digits (`nationalId: must be exactly 16 digits`) |
+  | `NATIONAL_ID_TAKEN` | 409 | Another member has it: `{"message": "This national ID is already used by member M-0004.", "code": "NATIONAL_ID_TAKEN", "memberCode": "M-0004"}`. Nothing else about that member is returned. When two registrations race, the database refuses the second and the answer has no `memberCode` |
+
+- Phone numbers must be unique. A duplicate returns `409`, for example
   `{"message": "Phone number +250788123456 is already used by member M-0003."}`.
-- `search` matches part of the name, member code, phone number or national ID, ignoring
-  case. A full number such as `0788123456` also finds `+250788123456`.
+- `search` matches part of the name, member code or phone number, ignoring case. A full
+  number such as `0788123456` also finds `+250788123456`. The national ID only matches
+  as a whole: a search for the full 16 digits finds that member (exact match), and part
+  of an ID finds nothing.
 - `GET /api/members/summary` returns `{total, active, inactive, joinedThisMonth}`.
   `joinedThisMonth` counts members whose join date is in the current month in
   Africa/Kigali time.
@@ -719,7 +732,8 @@ unverified members, for demos and fallbacks (see Members). Existing members, upd
    (a phone or national ID already used) leaves the verification usable until then.
 
 **Errors.** Identity errors have a `code` next to the `message`, for the frontend to choose its own text
-(`{"message": "...", "code": "CLAIMS_MISSING"}`); other errors have no `code`.
+(`{"message": "...", "code": "CLAIMS_MISSING"}`); so do the national ID errors (see Members); other errors
+have no `code`.
 
 | Code | Status | When |
 |------|--------|------|
@@ -736,8 +750,9 @@ unverified members, for demos and fallbacks (see Members). Existing members, upd
 | `NOT_CONFIGURED` | 503 | Identity verification is switched off (and `MEMBER_REGISTER_UNVERIFIED` is not `true`) |
 
 `VERIFIED_FIELD_LOCKED` replaces the earlier `400` without a code for a `fullName` or `phone` in the body.
-`POST /api/members` also refuses a birth date, gender or email that was not verified (`400`, no code), and a
-phone or national ID that belongs to another member (`409`, no code), as before.
+`POST /api/members` also refuses a birth date, gender or email that was not verified (`400`, no code), a
+phone that belongs to another member (`409`, no code), as before, and a missing, invalid or taken national ID
+(`NATIONAL_ID_REQUIRED`, `NATIONAL_ID_INVALID`, `NATIONAL_ID_TAKEN`; see Members).
 
 What is kept: eSignet's `sub` is pairwise (not a national ID number), so it is only used as `identity_token`:
 one person, one membership (`ALREADY_MEMBER` for the second). The verified details (name, phone, birth date,
