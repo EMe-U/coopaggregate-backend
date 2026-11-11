@@ -40,6 +40,9 @@ public class MemberService {
     private static final int MAX_PAGE_SIZE = 100;
     // ASCII digits only ([0-9], not \d), exactly 16.
     private static final java.util.regex.Pattern NATIONAL_ID = java.util.regex.Pattern.compile("[0-9]{16}");
+    // A search term that can be a whole national ID: 6 to 20 letters or digits (member.national_id holds up to 20).
+    private static final java.util.regex.Pattern SEARCHABLE_NATIONAL_ID =
+            java.util.regex.Pattern.compile("[A-Za-z0-9]{6,20}");
 
     private final MemberRepository memberRepository;
     private final IdentityAvailability identityAvailability;
@@ -322,8 +325,9 @@ public class MemberService {
                 any.add(cb.like(cb.lower(root.get("fullName")), textPattern));
                 any.add(cb.like(cb.lower(root.get("memberCode")), textPattern));
                 any.add(cb.like(root.get("phone"), "%" + phoneTerm + "%"));
-                // The national ID only matches as a whole: part of an ID never finds a member.
-                if (NATIONAL_ID.matcher(term).matches()) {
+                // The national ID only matches as a whole (equal, never like): part of an ID never finds a member. Any
+                // length a stored ID can have is searched: a typed 16-digit one, or one from the identity check.
+                if (SEARCHABLE_NATIONAL_ID.matcher(term).matches()) {
                     any.add(cb.equal(root.get("nationalId"), term));
                 }
                 predicates.add(cb.or(any.toArray(Predicate[]::new)));

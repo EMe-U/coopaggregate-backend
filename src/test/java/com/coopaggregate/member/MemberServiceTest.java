@@ -903,42 +903,77 @@ class MemberServiceTest {
         verify(repository).countByJoinDateBetween(LocalDate.of(2028, 2, 1), LocalDate.of(2028, 2, 29));
     }
 
+    // --- Search by national ID: a whole ID of 6 to 20 letters or digits, exact match only
+
     @Test
-    @SuppressWarnings("unchecked")
-    void searchFindsTheFullNationalIdByExactMatch() {
-        ArgumentCaptor<Specification<Member>> spec = ArgumentCaptor.forClass(Specification.class);
-        when(repository.findAll(spec.capture(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
+    void searchFindsAWholeNationalIdOfAnyLengthByExactMatch() {
+        for (String term : List.of(" 1199880012345678 ", "5860356276", "AB1234", "12345678901234567890")) {
+            SearchQuery search = search(term);
 
-        service.list(" 1199880012345678 ", null, 0, 20);
-
-        Root<Member> root = mock(Root.class);
-        Path<String> nationalId = mock(Path.class);
-        doReturn(nationalId).when(root).get("nationalId");
-        CriteriaBuilder cb = mock(CriteriaBuilder.class);
-
-        spec.getValue().toPredicate(root, mock(CriteriaQuery.class), cb);
-
-        verify(cb).equal(nationalId, "1199880012345678");
-        verify(cb, never()).like(eq(nationalId), any(String.class));
+            verify(search.cb()).equal(search.nationalId(), term.trim());
+            verify(search.cb(), never()).like(eq(search.nationalId()), any(String.class));
+        }
     }
 
     @Test
-    @SuppressWarnings("unchecked")
+    void aTermThatCannotBeAWholeNationalIdNeverSearchesIt() {
+        for (String term : List.of("12345", "123456789012345678901", "RW-1199-88", "1199 8800 1234", "M-0005",
+                "+250788123456")) {
+            SearchQuery search = search(term);
+
+            verify(search.root(), never()).get("nationalId");
+            verify(search.cb(), never()).equal(eq(search.nationalId()), any(Object.class));
+        }
+    }
+
+    @Test
     void partOfANationalIdNeverFindsAMember() {
+        // 11998800 is the start of the member's 1199880012345678: it is only compared as a whole ID, never as a part.
+        SearchQuery search = search("11998800");
+
+        verify(search.cb()).equal(search.nationalId(), "11998800");
+        verify(search.cb(), never()).equal(search.nationalId(), "1199880012345678");
+        verify(search.cb(), never()).like(eq(search.nationalId()), any(String.class));
+    }
+
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
+    void aSearchByNationalIdIsNeverLoggedAndTheListNeverHoldsTheFullId(
+            org.springframework.boot.test.system.CapturedOutput output) {
+        Member member = existingMember(5L, "M-0005");
+        member.setNationalId("5860356276");
+        when(repository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(member)));
+
+        var page = service.list("5860356276", null, 0, 20);
+
+        assertEquals(1, page.content().size());
+        assertEquals("\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20226276",
+                page.content().get(0).nationalIdMasked());
+        assertFalse(page.content().get(0).toString().contains("5860356276"));
+        assertFalse(java.util.Arrays.stream(MemberListItem.class.getRecordComponents())
+                .anyMatch(component -> component.getName().equals("nationalId")));
+        assertFalse(output.getAll().contains("5860356276"));
+    }
+
+    private record SearchQuery(Root<Member> root, CriteriaBuilder cb, Path<String> nationalId) {
+    }
+
+    // Runs a list search and builds its query against mocks, to see which comparisons it makes.
+    @SuppressWarnings("unchecked")
+    private SearchQuery search(String term) {
+        org.mockito.Mockito.clearInvocations(repository);
         ArgumentCaptor<Specification<Member>> spec = ArgumentCaptor.forClass(Specification.class);
         when(repository.findAll(spec.capture(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
 
-        service.list("11998800", null, 0, 20);
+        service.list(term, null, 0, 20);
 
         Root<Member> root = mock(Root.class);
         Path<String> nationalId = mock(Path.class);
         doReturn(nationalId).when(root).get("nationalId");
         CriteriaBuilder cb = mock(CriteriaBuilder.class);
-
         spec.getValue().toPredicate(root, mock(CriteriaQuery.class), cb);
-
-        verify(root, never()).get("nationalId");
-        verify(cb, never()).equal(eq(nationalId), any(Object.class));
+        return new SearchQuery(root, cb, nationalId);
     }
 
     private static MemberRequest request(String phone, String nationalId) {
