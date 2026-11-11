@@ -134,7 +134,7 @@ class LossServiceTest {
 
     @Test
     void lossOnSoldOrSharedLotIsRejected() {
-        for (LotStatus status : new LotStatus[] {LotStatus.SOLD, LotStatus.SHARED}) {
+        for (LotStatus status : new LotStatus[] {LotStatus.SOLD, LotStatus.SHARED, LotStatus.EMPTIED}) {
             lot.setStatus(status);
 
             IllegalStateException e = assertThrows(IllegalStateException.class,

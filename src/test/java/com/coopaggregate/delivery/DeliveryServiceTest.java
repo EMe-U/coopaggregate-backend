@@ -577,18 +577,54 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void aFullLotThatTheReversalLeavesWithNothingToSellIsSoldOut() {
+    void reversingTheLastDeliveryOfAFullLotWithNothingSoldEmptiesItInsteadOfSellingIt() {
+        Lot full = givenFullLotEmptiedByTheReversal(BigDecimal.ZERO);
+
+        service.reverse(42L, "Wrong", manager);
+
+        assertEquals(LotStatus.EMPTIED, full.getStatus());
+    }
+
+    @Test
+    void correctingTheLastDeliveryOfAFullLotWithNothingSoldAlsoEmptiesIt() {
+        Lot full = givenFullLotEmptiedByTheReversal(BigDecimal.ZERO);
+
+        service.correct(42L, new CorrectDeliveryRequest("Weight", 5L, 1L, new BigDecimal("39.00")), manager);
+
+        assertEquals(LotStatus.EMPTIED, full.getStatus());
+    }
+
+    @Test
+    void aPartlySoldFullLotThatTheReversalLeavesWithNothingToSellIsStillSold() {
+        // Another delivery's 60 kg in the lot were sold; reversing this unsold one leaves nothing.
+        Lot full = givenFullLotEmptiedByTheReversal(new BigDecimal("60.00"));
+
+        service.reverse(42L, "Wrong", manager);
+
+        assertEquals(LotStatus.SOLD, full.getStatus());
+    }
+
+    @Test
+    void aFullLotWithKgLeftAfterTheReversalStaysFull() {
+        Lot full = givenFullLotEmptiedByTheReversal(BigDecimal.ZERO);
+        when(lotPortionRepository.remainingKg(7L)).thenReturn(new BigDecimal("0.01"));
+
+        service.reverse(42L, "Wrong", manager);
+
+        assertEquals(LotStatus.FULL, full.getStatus());
+    }
+
+    // A full lot that this delivery's 40 kg are in, with 0 kg left once it is reversed, and soldKg sold from it.
+    private Lot givenFullLotEmptiedByTheReversal(BigDecimal soldKg) {
         Delivery delivery = givenStoredDelivery("40.00");
         delivery.setLot(null);
         when(deliveryRepository.findLotIdById(42L)).thenReturn(Optional.empty());
         Lot full = fixedLot(7L, "A-2026-05", LotStatus.FULL);
         givenPortion(delivery, full, "40.00", 70L);
         when(lotPortionRepository.remainingKg(7L)).thenReturn(BigDecimal.ZERO);
+        when(lotPortionRepository.soldKg(7L)).thenReturn(soldKg);
         when(ledgerService.reverse(any(), any(), any())).thenReturn(reversalEntry("Wrong"));
-
-        service.reverse(42L, "Wrong", manager);
-
-        assertEquals(LotStatus.SOLD, full.getStatus());
+        return full;
     }
 
     @Test
