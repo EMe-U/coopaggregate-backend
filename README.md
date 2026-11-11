@@ -1169,6 +1169,8 @@ saves it and sets the lot to `SHARED`.
 
 - A lot with nothing to share returns `409` with a `code`: `LOT_EMPTY` for an `EMPTIED` lot or one
   with 0 kg delivered, and `LOT_NO_SALE_MONEY` for a lot with no sale money.
+- A fixed-size lot (one with a `capacityKg`) is never shared: each sale already credited the members
+  of the batches it used. Its share and share-preview return `409` with `LOT_PAID_BY_SALES`.
 
 - A lot that has sales (every `SOLD` lot) is refused with `409`: its members are paid by batch, and
   sharing as well would pay them twice. A lot that is already `SHARED` returns `409`, and a lot

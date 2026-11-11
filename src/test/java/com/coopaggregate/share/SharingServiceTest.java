@@ -271,6 +271,42 @@ class SharingServiceTest {
         assertNothingShared(LotStatus.SOLD);
     }
 
+    // --- Fixed-size lots: each sale already credited the members of the batches it used
+
+    @Test
+    void aSoldFixedSizeLotCannotBeSharedOrPreviewedBecauseItsSalesPaidItsMembers() {
+        // The case the "has sales" checks missed: sales by grade reach the lot through its portions only.
+        lot.setCapacityKg(new BigDecimal("10000.00"));
+
+        LotNotShareableException e = assertThrows(LotNotShareableException.class, () -> service.share(3L, manager));
+
+        assertEquals("LOT_PAID_BY_SALES", e.errorCode());
+        assertEquals("Lot A-2026-01 is a fixed-size lot: its members are paid by each sale of their batches, so it "
+                + "is never shared.", e.getMessage());
+        assertEquals("LOT_PAID_BY_SALES",
+                assertThrows(LotNotShareableException.class, () -> service.preview(3L)).errorCode());
+        assertNothingShared(LotStatus.SOLD);
+        verify(lotShareRepository, never()).findDeliveredByMember(anyLong());
+    }
+
+    @Test
+    void anEmptiedFixedSizeLotSaysItIsEmpty() {
+        lot.setCapacityKg(new BigDecimal("10000.00"));
+        lot.setStatus(LotStatus.EMPTIED);
+        when(lotService.quantitiesOf(lot)).thenReturn(new LotQuantities(3L, null, null, null, null, null));
+
+        assertEquals("LOT_EMPTY",
+                assertThrows(LotNotShareableException.class, () -> service.share(3L, manager)).errorCode());
+        assertNothingShared(LotStatus.EMPTIED);
+    }
+
+    @Test
+    void anOlderLotWithoutACapacityIsStillCheckedAsBefore() {
+        // previewSharesSaleMoneyByDeliveredKg covers the sharing itself; the lot there has no capacity.
+        assertEquals(null, lot.getCapacityKg());
+        assertEquals(2_952_000L, service.preview(3L).saleAmountRwf());
+    }
+
     @Test
     void aLotWithNothingToShareIsAnsweredWithItsCode() {
         com.coopaggregate.error.ApiError body = new com.coopaggregate.error.GlobalExceptionHandler()
