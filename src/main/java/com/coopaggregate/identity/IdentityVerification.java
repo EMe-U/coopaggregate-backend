@@ -65,6 +65,9 @@ public class IdentityVerification {
     private String verifiedGender;
     private String verifiedEmail;
     private String verifiedAddress;
+    // The national ID from the claim MOSIP_NATIONAL_ID_CLAIM (V39), null when it was not released. Kept and cleared
+    // together with the other details.
+    private String verifiedNationalId;
 
     // The member registered with this verification. Set once, so one verification gives one member.
     @ManyToOne(fetch = FetchType.LAZY)
@@ -193,18 +196,23 @@ public class IdentityVerification {
         this.verifiedGender = details.gender();
         this.verifiedEmail = details.email();
         this.verifiedAddress = details.address();
+        this.verifiedNationalId = details.nationalId();
     }
 
     public VerifiedDetails verifiedDetails() {
         return new VerifiedDetails(verifiedName, verifiedPhone, verifiedBirthdate, verifiedGender, verifiedEmail,
-                verifiedAddress);
+                verifiedAddress, verifiedNationalId);
+    }
+
+    public String getVerifiedNationalId() {
+        return verifiedNationalId;
     }
 
     public boolean hasVerifiedDetails() {
         return verifiedName != null && verifiedPhone != null;
     }
 
-    /** Clears every verified detail: the name, phone, birth date, gender, email and address. */
+    /** Clears every verified detail: the name, phone, birth date, gender, email, address and national ID. */
     public void clearVerifiedDetails() {
         setVerifiedDetails(VerifiedDetails.NONE);
     }

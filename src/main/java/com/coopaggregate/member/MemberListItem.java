@@ -41,7 +41,7 @@ public record MemberListItem(
      * "••••••••••••5678" for 1199880012345678: the last 4 characters only. null when the member has no national ID.
      * An older ID shorter than 8 characters is shown as dots only.
      */
-    static String maskNationalId(String nationalId) {
+    public static String maskNationalId(String nationalId) {
         if (nationalId == null || nationalId.isBlank()) {
             return null;
         }

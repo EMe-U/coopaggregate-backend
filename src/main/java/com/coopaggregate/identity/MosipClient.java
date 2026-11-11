@@ -186,7 +186,14 @@ public class MosipClient {
         return new MosipClaims(userinfo.getSubject(), claim(userinfo, "name"), claim(userinfo, "phone_number"),
                 acr(id), optional(userinfo, "birthdate", value -> ClaimValues.birthdate(value, today())),
                 optional(userinfo, "gender", ClaimValues::gender), optional(userinfo, "email", ClaimValues::email),
-                optional(userinfo, "address", ClaimValues::address));
+                optional(userinfo, "address", ClaimValues::address), nationalId(userinfo));
+    }
+
+    // The national ID, from the claim MOSIP_NATIONAL_ID_CLAIM names, only when it is asked for. Like the other optional
+    // details: null when absent or unusable, and only the claim's name is logged, never the value.
+    private String nationalId(Jwt userinfo) {
+        String name = properties.requestedNationalIdClaim();
+        return name == null ? null : read(userinfo, name, ClaimValues::nationalId);
     }
 
     private LocalDate today() {
@@ -199,12 +206,17 @@ public class MosipClient {
         if (!properties.requestedOptionalClaims().contains(name)) {
             return null;
         }
+        return read(userinfo, name, read);
+    }
+
+    // Reads one optional claim and logs only its name and whether it was there.
+    private static <T> T read(Jwt userinfo, String name, Function<Object, T> parse) {
         Object raw = userinfo.getClaims().get(name);
         if (raw == null) {
             log.info("Identity verification userinfo claim {}: absent", name);
             return null;
         }
-        T value = read.apply(raw);
+        T value = parse.apply(raw);
         log.info("Identity verification userinfo claim {}: {}", name, value == null ? "ignored, unusable" : "present");
         return value;
     }

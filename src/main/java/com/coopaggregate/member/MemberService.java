@@ -107,7 +107,7 @@ public class MemberService {
         }
         VerifiedDetails verified = identityVerificationService.verifiedDetails(request.verificationId(), manager);
         refuseVerifiedFieldsInTheRequest(request, verified, Set.of("address"));
-        String nationalId = requiredNationalId(request.nationalId());
+        String nationalId = nationalIdForVerified(request, verified);
         Member member = new Member();
         applyDetails(member, verified.fullName(), verified.phone(), nationalId,
                 verified.address() != null ? verified.address() : request.address(), request.preferredLanguage());
@@ -189,6 +189,21 @@ public class MemberService {
         }
     }
 
+    // A national ID released by the identity check (MOSIP_NATIONAL_ID_CLAIM) is the member's, as the provider gave it:
+    // the 16-digit rule is only for a typed one. Any value sent for it is refused, like the other verified details
+    // (even an empty one), and the message never repeats it. Without one the manager types it, as before. Uniqueness is
+    // checked for both in applyDetails.
+    private static String nationalIdForVerified(NewMemberRequest request, VerifiedDetails verified) {
+        if (verified.nationalId() == null) {
+            return requiredNationalId(request.nationalId());
+        }
+        if (request.nationalId() != null) {
+            throw new IdentityRequestException(IdentityErrorCode.VERIFIED_FIELD_LOCKED,
+                    "This detail came from the identity check and cannot be changed here.");
+        }
+        return verified.nationalId();
+    }
+
     @Transactional
     public MemberResponse update(Long id, MemberRequest request) {
         Member member = findMember(id);
@@ -223,7 +238,8 @@ public class MemberService {
 
     // Members registered before the national ID was required may have none. An edit may add one, or change it to
     // another valid one, but never remove one that is set. The stored value sent back unchanged is always accepted,
-    // so a member with an older ID in another format can still be edited.
+    // so a member with an older ID in another format can still be edited. A verified member's national ID that is set
+    // cannot be changed at all (VERIFIED_FIELD_LOCKED); one with none may still get one, typed with the 16-digit rule.
     private static String nationalIdForUpdate(Member member, String raw) {
         String current = trimToNull(member.getNationalId());
         String nationalId = trimToNull(raw);
@@ -234,7 +250,14 @@ public class MemberService {
             }
             return null;
         }
-        return nationalId.equals(current) ? current : validNationalId(nationalId);
+        if (nationalId.equals(current)) {
+            return current;
+        }
+        if (member.isIdentityVerified() && current != null) {
+            throw new IdentityRequestException(IdentityErrorCode.VERIFIED_FIELD_LOCKED,
+                    "The national ID of a verified member cannot be changed.");
+        }
+        return validNationalId(nationalId);
     }
 
     private static String validNationalId(String nationalId) {

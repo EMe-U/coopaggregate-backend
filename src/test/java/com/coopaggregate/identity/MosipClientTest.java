@@ -350,7 +350,8 @@ class MosipClientTest {
         assertEquals("Uwimana Claudine", result.name());
         assertNull(result.birthdate());
         // The details kept: the essential and optional ones, the pairwise sub, and how the person logged in (acr).
-        assertEquals(List.of("acr", "address", "birthdate", "email", "gender", "name", "phoneNumber", "subject"),
+        assertEquals(List.of("acr", "address", "birthdate", "email", "gender", "name", "nationalId", "phoneNumber",
+                        "subject"),
                 java.util.Arrays.stream(MosipClaims.class.getRecordComponents()).map(c -> c.getName()).sorted()
                         .toList());
     }
@@ -415,6 +416,66 @@ class MosipClientTest {
             assertFalse(log.contains(value), value);
         }
         assertFalse(log.contains("picture"), "not even the name of a claim that was not asked for");
+    }
+
+    // --- The national ID (MOSIP_NATIONAL_ID_CLAIM)
+
+    private static final String UIN = "5860356276";
+
+    @Test
+    void preferredUsernameIsAskedForAsOptionalWhileTheNameAndPhoneStayEssential() {
+        useClaimSettings(null, "preferred_username", false);
+
+        String claims = query(client.authorizationUrl("s", NONCE, "c").split("\\?", 2)[1]).get("claims");
+
+        assertEquals("{\"userinfo\":{\"name\":{\"essential\":true},\"phone_number\":{\"essential\":true},"
+                + "\"birthdate\":null,\"gender\":null,\"email\":null,\"address\":null,\"preferred_username\":null}}",
+                claims);
+    }
+
+    @Test
+    void theNationalIdIsReadFromTheClaimSetAndOnlyItsNameIsLogged(CapturedOutput output) throws Exception {
+        useClaimSettings(null, "preferred_username", false);
+        provider(idToken(idClaims()), userinfo(userinfoClaims().claim("preferred_username", UIN)));
+
+        MosipClaims result = client.fetchClaims(CODE, VERIFIER, NONCE);
+
+        assertEquals(UIN, result.nationalId());
+        assertTrue(output.getAll().contains("Identity verification userinfo claim preferred_username: present"));
+        assertFalse(output.getAll().contains(UIN), "never the value");
+        assertFalse(result.toString().contains(UIN));
+    }
+
+    @Test
+    void aNationalIdThatWasNotReleasedIsAbsentAndTheLoginStillSucceeds(CapturedOutput output) throws Exception {
+        useClaimSettings(null, "preferred_username", false);
+        provider(idToken(idClaims()), userinfo(userinfoClaims()));
+
+        MosipClaims result = client.fetchClaims(CODE, VERIFIER, NONCE);
+
+        assertEquals("Uwimana Claudine", result.name());
+        assertNull(result.nationalId());
+        assertTrue(output.getAll().contains("Identity verification userinfo claim preferred_username: absent"));
+    }
+
+    @Test
+    void withoutMosipNationalIdClaimNoNationalIdIsReadEvenWhenSent(CapturedOutput output) throws Exception {
+        provider(idToken(idClaims()), userinfo(userinfoClaims().claim("preferred_username", UIN)));
+
+        assertNull(client.fetchClaims(CODE, VERIFIER, NONCE).nationalId());
+        assertFalse(output.getAll().contains("preferred_username"));
+        assertFalse(output.getAll().contains(UIN));
+    }
+
+    @Test
+    void anUnusableNationalIdIsLeftOutAndItsValueIsNotLogged(CapturedOutput output) throws Exception {
+        useClaimSettings(null, "preferred_username", false);
+        provider(idToken(idClaims()), userinfo(userinfoClaims().claim("preferred_username", "RW/1199-unusable")));
+
+        assertNull(client.fetchClaims(CODE, VERIFIER, NONCE).nationalId());
+        assertTrue(output.getAll().contains(
+                "Identity verification userinfo claim preferred_username: ignored, unusable"));
+        assertFalse(output.getAll().contains("1199-unusable"));
     }
 
     // A userinfo answer as the real eSignet sends it: a yyyy/MM/dd birth date, the address as an object without a

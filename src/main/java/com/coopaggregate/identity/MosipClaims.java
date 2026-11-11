@@ -4,13 +4,13 @@ import java.time.LocalDate;
 
 /**
  * What the provider says about the person, kept in memory only for the moment of the callback. subject is the pairwise
- * id (not a national ID number). name and phoneNumber are essential; birthdate, gender, email and address are optional
- * and null when the member did not allow them, they were not asked for, or their value did not fit. Anything else
- * eSignet sends (a picture, given_name) is never read. acr is the id_token's "acr" (how the person logged in), null
- * when the id_token has none.
+ * id (not a national ID number). name and phoneNumber are essential; birthdate, gender, email, address and nationalId
+ * are optional and null when the member did not allow them, they were not asked for, or their value did not fit.
+ * nationalId is the claim MOSIP_NATIONAL_ID_CLAIM names. Anything else eSignet sends (a picture, given_name) is never
+ * read. acr is the id_token's "acr" (how the person logged in), null when the id_token has none.
  */
 public record MosipClaims(String subject, String name, String phoneNumber, String acr, LocalDate birthdate,
-                          String gender, String email, String address) {
+                          String gender, String email, String address, String nationalId) {
 
     /** Claims from an id_token without an acr and with no optional details. */
     public MosipClaims(String subject, String name, String phoneNumber) {
@@ -20,6 +20,12 @@ public record MosipClaims(String subject, String name, String phoneNumber, Strin
     /** Claims with no optional details. */
     public MosipClaims(String subject, String name, String phoneNumber, String acr) {
         this(subject, name, phoneNumber, acr, null, null, null, null);
+    }
+
+    /** Claims without a national ID. */
+    public MosipClaims(String subject, String name, String phoneNumber, String acr, LocalDate birthdate,
+                       String gender, String email, String address) {
+        this(subject, name, phoneNumber, acr, birthdate, gender, email, address, null);
     }
 
     // Records print their fields; the claims must never end up in a log line.

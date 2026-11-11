@@ -30,9 +30,11 @@ public interface IdentityVerificationRepository extends JpaRepository<IdentityVe
     // cleared, so nothing personal stays even if only an optional detail were set.
     @Modifying
     @Query("update IdentityVerification v set v.verifiedName = null, v.verifiedPhone = null, "
-            + "v.verifiedBirthdate = null, v.verifiedGender = null, v.verifiedEmail = null, v.verifiedAddress = null "
+            + "v.verifiedBirthdate = null, v.verifiedGender = null, v.verifiedEmail = null, v.verifiedAddress = null, "
+            + "v.verifiedNationalId = null "
             + "where (v.verifiedName is not null or v.verifiedPhone is not null or v.verifiedBirthdate is not null "
-            + "or v.verifiedGender is not null or v.verifiedEmail is not null or v.verifiedAddress is not null) "
+            + "or v.verifiedGender is not null or v.verifiedEmail is not null or v.verifiedAddress is not null "
+            + "or v.verifiedNationalId is not null) "
             + "and (v.verifiedAt is null or v.verifiedAt < :cutoff)")
     int clearOldDetails(@Param("cutoff") Instant cutoff);
 }
