@@ -528,7 +528,8 @@ anywhere: lot kilograms, stock, the dashboard, sharing, member statements and ba
 - **A delivery that is in lots** leaves them: its lost kg are handed to the other portions of
   each lot, in proportion to what each has left, so the lot's losses stay the same. A lot still
   being filled gets the space back. A `FULL` lot keeps the shortfall (for example capacity 100,
-  80 kg in it) and is never filled again; it becomes `SOLD` if nothing is left in it. Its
+  80 kg in it) and is never filled again. If nothing is left in it, it becomes `SOLD` when some of
+  its kg were sold, and `EMPTIED` when none were (every delivery in it reversed or corrected). Its
   portions stay as a record but no longer count. A waiting delivery is in no lot, so nothing
   else changes.
 - **Correction:** `POST /api/deliveries/{id}/correct` reverses the delivery and saves the
@@ -939,7 +940,10 @@ capacity. Nobody opens or closes a lot: the system fills them.
   One delivery can be split across two or more lots, and deliveries of different members share a
   lot. Lots are filled in the order deliveries are **confirmed**: a delivery confirmed late goes into
   the lot being filled then, and nothing ever moves between lots afterwards.
-- **Statuses:** `FILLING`, `FULL`, and `SOLD` once a full lot has nothing left. Lots from before
+- **Statuses:** `FILLING`, `FULL`, and `SOLD` once a full lot has nothing left after selling some
+  of it. `EMPTIED` is a full lot left with nothing because its deliveries were all reversed or
+  corrected before any kg were sold: it is never filled, sold from, given a loss or shared, and
+  shows 0 kg (V40). Lots from before
   fixed-size lots keep their size and status (`OPEN`, `CLOSED`, `SOLD`, `SHARED`), have no capacity
   (`olderLot: true`) and get no new kg; their kg are sold first (see Sales).
 - **Lot codes** are the grade code, the year the lot was opened (Kigali time) and the grade's lot
@@ -1162,6 +1166,11 @@ lots shared before. The endpoints are kept as they were.
 
 `GET /api/lots/{id}/share-preview` shows the result without saving; `POST /api/lots/{id}/share`
 saves it and sets the lot to `SHARED`.
+
+- A lot with nothing to share returns `409` with a `code`: `LOT_EMPTY` for an `EMPTIED` lot or one
+  with 0 kg delivered, and `LOT_NO_SALE_MONEY` for a lot with no sale money.
+- A fixed-size lot (one with a `capacityKg`) is never shared: each sale already credited the members
+  of the batches it used. Its share and share-preview return `409` with `LOT_PAID_BY_SALES`.
 
 - A lot that has sales (every `SOLD` lot) is refused with `409`: its members are paid by batch, and
   sharing as well would pay them twice. A lot that is already `SHARED` returns `409`, and a lot

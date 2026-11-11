@@ -425,12 +425,14 @@ public class DeliveryService {
     private record Locked(Delivery delivery, Optional<Grade> otherGrade) {
     }
 
-    // A full lot that the reversal left with nothing to sell is sold out. A lot being filled stays FILLING.
+    // A full lot that the reversal left with nothing to sell is SOLD when some of its kg were sold, and EMPTIED when
+    // none were (all its deliveries reversed or corrected first). A lot being filled stays FILLING.
     private void markSoldOutLots(Delivery reversed) {
         for (LotPortion portion : lotPortionRepository.findByDeliveryIdOrderById(reversed.getId())) {
             Lot lot = portion.getLot();
             if (lot.getStatus() == LotStatus.FULL && lotPortionRepository.remainingKg(lot.getId()).signum() == 0) {
-                lot.setStatus(LotStatus.SOLD);
+                lot.setStatus(lotPortionRepository.soldKg(lot.getId()).signum() > 0 ? LotStatus.SOLD
+                        : LotStatus.EMPTIED);
             }
         }
     }

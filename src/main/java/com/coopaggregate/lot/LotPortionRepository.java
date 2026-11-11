@@ -61,6 +61,10 @@ public interface LotPortionRepository extends JpaRepository<LotPortion, Long> {
             """)
     BigDecimal remainingKg(Long lotId);
 
+    // The kg sold from a lot. A delivery with kg sold can never be reversed, so its portions all still count.
+    @Query("SELECT COALESCE(SUM(p.soldKg), 0) FROM LotPortion p WHERE p.lot.id = :lotId")
+    BigDecimal soldKg(Long lotId);
+
     // The kg in a lot: its portions of deliveries that are not reversed. A reversed delivery's portion stays as a
     // record but no longer counts, so a lot being filled gets the space back. A full lot is never filled again: it
     // keeps a shortfall instead (only the lot being filled is ever filled).

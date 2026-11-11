@@ -133,6 +133,15 @@ public class SharingService {
         if (lot.getStatus() == LotStatus.SHARED) {
             throw new IllegalStateException("Lot " + lot.getLotCode() + " has already been shared.");
         }
+        // An EMPTIED lot, or any lot whose deliveries were all reversed, has nothing to divide.
+        LotQuantities quantities = lotService.quantitiesOf(lot);
+        if (lot.getStatus() == LotStatus.EMPTIED || quantities.deliveredKg().signum() == 0) {
+            throw LotNotShareableException.empty(lot.getLotCode());
+        }
+        // A fixed-size lot's members are paid by each sale (one credit per batch), so sharing never applies to it.
+        if (lot.getCapacityKg() != null) {
+            throw LotNotShareableException.paidBySales(lot.getLotCode());
+        }
         // Sales now pay the members of the batches they used, when they are made. Sharing the lot pro rata as well
         // would pay those members twice.
         if (saleRepository.existsByLotId(lot.getId()) || saleAllocationRepository.existsByDeliveryLotId(lot.getId())) {
@@ -142,6 +151,9 @@ public class SharingService {
         if (lot.getStatus() != LotStatus.SOLD) {
             throw new BadRequestException("Lot " + lot.getLotCode() + " is " + lot.getStatus()
                     + ". Only a sold lot can be shared.");
+        }
+        if (quantities.saleAmountRwf() <= 0) {
+            throw LotNotShareableException.noSaleMoney(lot.getLotCode());
         }
     }
 }

@@ -72,4 +72,15 @@ class ShareControllerTest {
                 .andExpect(jsonPath("$.deliveries[0].quantityKg").value(120.50))
                 .andExpect(jsonPath("$.deliveries[0].status").value("PENDING"));
     }
+
+    @Test
+    void aFixedSizeLotIsRefusedWith409AndItsCode() throws Exception {
+        when(sharingService.preview(3L)).thenThrow(LotNotShareableException.paidBySales("A-2026-05"));
+
+        mockMvc.perform(get("/api/lots/3/share-preview").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("LOT_PAID_BY_SALES"))
+                .andExpect(jsonPath("$.message").value("Lot A-2026-05 is a fixed-size lot: its members are paid by "
+                        + "each sale of their batches, so it is never shared."));
+    }
 }

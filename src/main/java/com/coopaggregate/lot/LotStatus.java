@@ -8,5 +8,8 @@ public enum LotStatus {
     SHARED,
     // A fixed-size lot being filled (at most one per grade), and one that holds its capacity.
     FILLING,
-    FULL
+    FULL,
+    // A full lot left with nothing because its deliveries were reversed or corrected before any kg were sold. It
+    // cannot be filled, sold from, given a loss or shared.
+    EMPTIED
 }
