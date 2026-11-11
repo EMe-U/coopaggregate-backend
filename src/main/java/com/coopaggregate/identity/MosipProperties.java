@@ -77,7 +77,8 @@ public record MosipProperties(
 
     /**
      * The claim MOSIP_NATIONAL_ID_CLAIM names, asked for as optional, or null when it is empty (the default) or not a
-     * plain claim name. The national ID itself stays entered by the manager.
+     * plain claim name. When the member allows it, the member is registered with the national ID it holds; otherwise
+     * the manager types the national ID.
      */
     public String requestedNationalIdClaim() {
         return nationalIdClaim != null && CLAIM_NAME.matcher(nationalIdClaim).matches()

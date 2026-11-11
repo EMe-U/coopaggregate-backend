@@ -16,6 +16,28 @@ class ClaimValuesTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 11, 4);
 
+    // --- national ID (the claim MOSIP_NATIONAL_ID_CLAIM names)
+
+    @Test
+    void theNationalIdIsKeptAsReleasedWithoutTheSixteenDigitRule() {
+        assertEquals("5860356276", ClaimValues.nationalId("5860356276"));
+        assertEquals("1199880012345678", ClaimValues.nationalId(" 1 1998 8 0012345 6 78 "));
+        assertEquals("5860356276", ClaimValues.nationalId(5860356276L));
+        assertEquals("AB12", ClaimValues.nationalId("AB12"));
+        assertEquals("12345678901234567890", ClaimValues.nationalId("12345678901234567890"));
+    }
+
+    @Test
+    void aNationalIdThatDoesNotFitIsLeftOut() {
+        assertEquals(null, ClaimValues.nationalId(null));
+        assertEquals(null, ClaimValues.nationalId("   "));
+        assertEquals(null, ClaimValues.nationalId("123456789012345678901"), "longer than the 20 of member.national_id");
+        assertEquals(null, ClaimValues.nationalId("RW-1199"));
+        assertEquals(null, ClaimValues.nationalId("1199/8800"));
+        assertEquals(null, ClaimValues.nationalId(java.util.Map.of("id", "1199")));
+        assertEquals(null, ClaimValues.nationalId(12.5));
+    }
+
     // --- birthdate
 
     @Test

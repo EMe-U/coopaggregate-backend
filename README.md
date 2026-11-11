@@ -104,7 +104,7 @@ cd coopaggregate-backend
 | `MOSIP_KEY_ID` | With `MOSIP_ENABLED` | The `kid` of the matching public JWK |
 | `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL`. The details are asked for with the `claims` parameter, so leave `MOSIP_SCOPE` out (`profile` would also release the picture); the app warns at startup if it asks for more than `openid` and `phone`. `MOSIP_ACR_VALUES` may hold several login methods, space-separated; it is sent as `acr_values` exactly as set |
 | `MOSIP_OPTIONAL_CLAIMS` | No | The optional details asked for besides the name and phone, space-separated. Default (and when empty): `birthdate gender email address`. Only those four can be asked for; any other name, `picture` included, is left out and named in a startup warning |
-| `MOSIP_NATIONAL_ID_CLAIM` | No | The claim name of the national ID, asked for as optional. Default: empty, not asked for (the local eSignet does not release it). The national ID stays entered by the manager either way |
+| `MOSIP_NATIONAL_ID_CLAIM` | No | The claim name of the national ID, asked for as optional (`"<name>":null`). Default: empty, not asked for, and the manager types the national ID. When it is set and the member allows it, the member is registered with that national ID and it cannot be typed (see Identity verification). Locally: `preferred_username`, which this test eSignet fills with the UIN. It stands in for the national ID because the test eSignet only allows a fixed list of claim names; in production the national ID service (NIDA) would release a proper national ID claim, and this setting would name that claim instead |
 | `MOSIP_PROMPT_CONSENT` | No | Demo setting. `true` adds `prompt=consent` so eSignet shows its Allow page on every login, not only the first. Default `false` |
 | `MOSIP_ALLOWED_ACRS` | No | The id_token `acr` values (login methods) that count as a verification, space-separated, compared exactly. Default: `mosip:idp:acr:generated-code` (the one-time code) |
 | `MOSIP_ISSUER` | No | The exact `iss` the ID token must carry (and the userinfo answer, unless the next one is set). Default: `MOSIP_BASE_URL` |
@@ -254,13 +254,13 @@ ERD: see `docs/erd.png`.
 | GET | `/api/ledger?page=0&size=20` | JWT | Ledger entries, newest first (max 100 per page) |
 | GET | `/api/ledger/verify` | JWT | Recomputes every hash. Returns `{valid, checkedEntries, firstBrokenEntryId}` |
 | POST | `/api/ledger/{id}/reverse` | JWT | Body `{"reason"}` (required). Reverses the entry through its business action (see Reversals) and returns the REVERSAL entry |
-| GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional; a full 16-digit national ID in `search` finds that member (exact match only). Without `nationalId` |
+| GET | `/api/members?search=&active=&page=0&size=20` | JWT | Members sorted by name (max 100 per page). `search` and `active` are optional; a whole national ID in `search` (6 to 20 letters or digits, spaces around it trimmed) finds that member by exact match only, never by part of an ID. Without `nationalId` |
 | GET | `/api/members/summary` | JWT | Counts: `{total, active, inactive, joinedThisMonth}` |
 | GET | `/api/members/{id}` | JWT | One member, including `nationalId` |
-| POST | `/api/members` | JWT | Registers a member from a verification and returns it with `201`. Body `{verificationId, nationalId, address?, joinDate?, preferredLanguage?}` (`nationalId` required: 16 digits, unique; `NATIONAL_ID_REQUIRED`, `NATIONAL_ID_INVALID`, `409 NATIONAL_ID_TAKEN`); every verified detail (name, phone, birth date, gender, email, address) comes from the verification and must not be sent (`400 VERIFIED_FIELD_LOCKED`, see Identity verification); `503` when verification is not configured. With `MEMBER_REGISTER_UNVERIFIED=true` and verification off: body `{fullName, phone, nationalId, address?, joinDate?, preferredLanguage?}`, member stored as not verified (see Members) |
+| POST | `/api/members` | JWT | Registers a member from a verification and returns it with `201`. Body `{verificationId, nationalId, address?, joinDate?, preferredLanguage?}` (`nationalId` required: 16 digits, unique; `NATIONAL_ID_REQUIRED`, `NATIONAL_ID_INVALID`, `409 NATIONAL_ID_TAKEN`; when the verification released a national ID it is taken from there and must not be sent, still unique); every verified detail (name, phone, birth date, gender, email, address, national ID) comes from the verification and must not be sent (`400 VERIFIED_FIELD_LOCKED`, see Identity verification); `503` when verification is not configured. With `MEMBER_REGISTER_UNVERIFIED=true` and verification off: body `{fullName, phone, nationalId, address?, joinDate?, preferredLanguage?}`, member stored as not verified (see Members) |
 | GET | `/api/members/verify/status` | JWT | `{available, required, unverifiedAllowed}`: `available` and `required` are both `true` when `MOSIP_ENABLED=true`, both `false` otherwise (registering a member needs verification). `unverifiedAllowed` is `true` only when `MOSIP_ENABLED=false` and `MEMBER_REGISTER_UNVERIFIED=true`: the frontend then shows the plain form |
 | POST | `/api/members/verify/start` | JWT | Starts a verification: `{provider, authorizationUrl, state, expiresAt}`. `503` if not available |
-| POST | `/api/members/verify/callback` | JWT | Body `{code, state}` from eSignet's redirect. Returns `{verificationId, verified, method, fullName, phone, useBefore, birthdate, gender, email, address, verifiedFields}` |
+| POST | `/api/members/verify/callback` | JWT | Body `{code, state}` from eSignet's redirect. Returns `{verificationId, verified, method, fullName, phone, useBefore, birthdate, gender, email, address, verifiedFields, nationalIdMasked}` (never the full national ID) |
 | POST | `/api/members/verify/cancel` | JWT | Body `{state, error}` when eSignet's redirect has an error instead of a code. Returns `{reason, message}` |
 | PUT | `/api/members/{id}` | JWT | Updates a member's details |
 | PATCH | `/api/members/{id}/deactivate` | JWT | Sets the member's status to `INACTIVE` |
@@ -580,7 +580,7 @@ was not verified is refused too (`400`, no code). An address that was not verifi
 | `verificationId` | Create only, required: the `verificationId` from `POST /api/members/verify/callback` |
 | `fullName` | Update only: required, at most 150 characters. On create it is the verified name and must not be sent |
 | `phone` | Update only: required. A Rwandan mobile number (072, 073, 078 or 079) written as `07XXXXXXXX`, `2507XXXXXXXX` or `+2507XXXXXXXX`. On create it is the verified phone and must not be sent. Always stored and returned as `+2507XXXXXXXX` |
-| `nationalId` | **Required on create** (both the verified path and `MEMBER_REGISTER_UNVERIFIED`): exactly 16 digits `0`–`9` once the spaces around it are trimmed (spaces inside, dashes or letters are refused), and unique. On update it may stay empty only for a member who has none (registered before it was required); it can be added, or changed to another valid one, but a national ID that is set can never be removed. A member's own stored value sent back unchanged is always accepted. Only returned for one member, never in the list. Stored as plain text in `member.national_id` |
+| `nationalId` | **Required on create** (both the verified path and `MEMBER_REGISTER_UNVERIFIED`), unless the identity check released one (`MOSIP_NATIONAL_ID_CLAIM`): then it is taken from the check, must not be sent (`VERIFIED_FIELD_LOCKED`) and is not held to the 16-digit rule. A typed one is exactly 16 digits `0`–`9` once the spaces around it are trimmed (spaces inside, dashes or letters are refused), and unique. On update it may stay empty only for a member who has none (registered before it was required); it can be added, or changed to another valid one, but a national ID that is set can never be removed. A verified member's national ID that is set cannot be changed at all (`VERIFIED_FIELD_LOCKED`); a verified member without one may still get one. A member's own stored value sent back unchanged is always accepted. Only returned for one member, never in the list. Stored as plain text in `member.national_id` |
 | `address` | Optional. On create at most 255 characters, and only when the check did not verify an address. On update at most 500 (a verified address can be that long); changing a verified address removes it from `verifiedFields` |
 | `joinDate` | Optional, not in the future. Defaults to today on create; left unchanged on update if not sent |
 | `preferredLanguage` | Optional, `rw` or `en`. Defaults to `rw` |
@@ -679,8 +679,8 @@ unverified members, for demos and fallbacks (see Members). Existing members, upd
 
    `name` and `phone_number` are essential, so eSignet's consent screen shows them as required; the optional
    ones come from `MOSIP_OPTIONAL_CLAIMS` and the member may refuse each of them. `picture` is never asked for
-   or kept. With `MOSIP_NATIONAL_ID_CLAIM` set, that claim is added as optional (`"<name>":null`); it is empty
-   by default because this eSignet does not release the national ID, which stays entered by the manager. With
+   or kept. With `MOSIP_NATIONAL_ID_CLAIM` set, that claim is added as optional (`"<name>":null`) and read like
+   the other optional details; it is empty by default, and then the manager types the national ID. With
    `MOSIP_PROMPT_CONSENT=true` (a demo setting) the URL also carries `prompt=consent`, so the Allow page shows
    every time. The frontend sends the member there; eSignet sends them back to `MOSIP_REDIRECT_URI` with
    `code` and `state`, or with `error` and `state`.
@@ -700,6 +700,7 @@ unverified members, for demos and fallbacks (see Members). Existing members, upd
    | `gender` | A plain string, for example `"Female"` | As given, trimmed. Longer than 20 characters: left out |
    | `email` | A plain string | Trimmed. No `@` or longer than 254 characters: left out |
    | `address` | A JSON object with `street_address`, `locality`, `region`, `country` (`postal_code` may be missing); a plain string is also accepted | One line: the parts present, in that order, joined with `, ` (`postal_code` and `formatted` are not used). Longer than 500 characters: cut at the last whole word |
+   | `MOSIP_NATIONAL_ID_CLAIM` (only when set; locally `preferred_username`, holding the UIN) | A string (a whole number is also accepted) | The national ID: spaces removed, then letters and digits only, at most 20. Anything else: left out. The 16-digit rule of a typed ID does not apply. Kept on the verification (`verified_national_id`) only until the member is saved or for 30 minutes, like the other details |
 
    A refused or missing optional detail, or one left out because it does not fit, never fails the login: that
    field is just `null`. A missing name or phone is still an error (`CLAIMS_MISSING`), and a member who refuses
@@ -712,12 +713,15 @@ unverified members, for demos and fallbacks (see Members). Existing members, upd
      "fullName": "UWIMANA Claudine", "phone": "+250788123456", "useBefore": "2026-11-03T10:30:00Z",
      "birthdate": "1990-05-17", "gender": "Female", "email": null,
      "address": "KG 7 Ave, Kacyiru, Gasabo, Rwanda",
-     "verifiedFields": ["fullName", "phone", "birthdate", "gender", "address"] }
+     "verifiedFields": ["fullName", "phone", "birthdate", "gender", "address", "nationalId"],
+     "nationalIdMasked": "••••••••••••6276" }
    ```
 
    `birthdate` is `yyyy-MM-dd`; `birthdate`, `gender`, `email` and `address` are `null` when not released.
+   `nationalIdMasked` shows only the last 4 characters of a released national ID (always 16 characters, the same
+   mask as the member list), `null` when none was released; the full national ID is never returned here.
    `verifiedFields` names the fields that hold a verified value, in the order `fullName`, `phone`, `birthdate`,
-   `gender`, `email`, `address`. The frontend shows them read-only in the new member form and leaves them out of
+   `gender`, `email`, `address`, `nationalId`. The frontend shows them read-only in the new member form and leaves them out of
    the registration.
 3. **Back with an error:** `POST /api/members/verify/cancel` with `{state, error}` (eSignet's `error` code;
    never its `error_description`). The state is used up and the outcome written to the change history. It
@@ -726,8 +730,11 @@ unverified members, for demos and fallbacks (see Members). Existing members, upd
    and the same answer whether or not the state is known.
 4. **Register:** `POST /api/members` with `verificationId` and the other fields before `useBefore` (30 minutes).
    Every verified detail is copied from the verification to the member, with its flag set (`verifiedFields`);
-   a value for one of them in the body is refused with `VERIFIED_FIELD_LOCKED`. The national ID, join date,
-   preferred language, and an address that was not verified come from the body as before.
+   a value for one of them in the body is refused with `VERIFIED_FIELD_LOCKED`. A released national ID becomes the
+   member's national ID: a `nationalId` in the body is then refused with `VERIFIED_FIELD_LOCKED` (even empty), the
+   16-digit rule does not apply, and it must still be unique (`409 NATIONAL_ID_TAKEN`). Without one, the national
+   ID is typed (required, 16 digits) as before. The join date, preferred language, and an address that was not
+   verified come from the body as before.
    Only the manager who started the verification can use it, once. A registration refused for another reason
    (a phone or national ID already used) leaves the verification usable until then.
 
@@ -745,7 +752,7 @@ have no `code`.
 | `PHONE_NOT_RWANDAN` | 400 | The verified phone is not a Rwandan mobile number |
 | `NAME_TOO_LONG` | 400 | The verified name is longer than 150 characters |
 | `ACR_NOT_ALLOWED` | 400 | The id_token says the person logged in a way not in `MOSIP_ALLOWED_ACRS` (for example biometrics) |
-| `VERIFIED_FIELD_LOCKED` | 400 | `POST /api/members` sent a value for a detail the check verified (`fullName`, `phone`, `birthDate`, `gender`, `email`, `address`). Message: "This detail came from the identity check and cannot be changed here."; it never repeats the verified value |
+| `VERIFIED_FIELD_LOCKED` | 400 | `POST /api/members` sent a value for a detail the check verified (`fullName`, `phone`, `birthDate`, `gender`, `email`, `address`, `nationalId`). Message: "This detail came from the identity check and cannot be changed here."; it never repeats the verified value. Also `PUT /api/members/{id}` changing the national ID of a verified member ("The national ID of a verified member cannot be changed.") |
 | `PROVIDER_FAILED` | 502 | eSignet failed or its answer could not be trusted |
 | `NOT_CONFIGURED` | 503 | Identity verification is switched off (and `MEMBER_REGISTER_UNVERIFIED` is not `true`) |
 

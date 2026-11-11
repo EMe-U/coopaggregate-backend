@@ -732,6 +732,144 @@ class MemberServiceTest {
         assertFalse(member.isIdentityVerified());
     }
 
+    // --- A national ID released by the identity check (MOSIP_NATIONAL_ID_CLAIM)
+
+    private static final String UIN = "5860356276";
+
+    private void verifiedWithNationalId(String nationalId) {
+        when(identityVerificationService.verifiedDetails(9L, manager)).thenReturn(new VerifiedDetails(
+                "Uwimana Claudine", "+250788123456", null, null, null, null, nationalId));
+    }
+
+    @Test
+    void aReleasedNationalIdIsStoredWithoutTheSixteenDigitRule() {
+        verifiedWithNationalId(UIN);
+        doAnswerMarkVerified();
+
+        MemberResponse response = service.create(registration(null), manager);
+
+        assertEquals(UIN, response.nationalId(), "the 10-digit UIN, not held to the 16 digits of a typed ID");
+        ArgumentCaptor<Member> saved = ArgumentCaptor.forClass(Member.class);
+        verify(repository).save(saved.capture());
+        assertEquals(UIN, saved.getValue().getNationalId());
+        verify(repository).findByNationalId(UIN);
+        verify(identityVerificationService).attach(eq(9L), eq(manager), any(Member.class));
+    }
+
+    @Test
+    void aNationalIdSentWhenTheCheckReleasedOneIsRefusedWithoutSavingAnything() {
+        verifiedWithNationalId(UIN);
+
+        for (String sent : List.of(ID, UIN, "", "  ")) {
+            com.coopaggregate.identity.IdentityRequestException e = assertThrows(
+                    com.coopaggregate.identity.IdentityRequestException.class,
+                    () -> service.create(registration(sent), manager));
+
+            assertEquals("VERIFIED_FIELD_LOCKED", e.errorCode());
+            assertEquals("This detail came from the identity check and cannot be changed here.", e.getMessage());
+        }
+        verify(repository, never()).save(any());
+        verify(identityVerificationService, never()).attach(any(), any(), any());
+    }
+
+    @Test
+    void aReleasedNationalIdAlreadyUsedIsRefusedWithTheOtherMembersCodeOnly() {
+        verifiedWithNationalId(UIN);
+        when(repository.findByNationalId(UIN)).thenReturn(Optional.of(existingMember(4L, "M-0004")));
+
+        NationalIdTakenException e = assertThrows(NationalIdTakenException.class,
+                () -> service.create(registration(null), manager));
+
+        assertEquals("NATIONAL_ID_TAKEN", e.errorCode());
+        assertEquals("M-0004", e.memberCode());
+        assertFalse(e.getMessage().contains(UIN));
+        verify(repository, never()).save(any());
+        verify(identityVerificationService, never()).attach(any(), any(), any());
+    }
+
+    @Test
+    void withoutAReleasedNationalIdTheTypedOneIsRequiredWithTheSixteenDigitRule() {
+        verifiedWithNationalId(null);
+
+        assertEquals("NATIONAL_ID_REQUIRED", assertThrows(NationalIdException.class,
+                () -> service.create(registration(null), manager)).errorCode());
+        assertEquals("NATIONAL_ID_INVALID", assertThrows(NationalIdException.class,
+                () -> service.create(registration(UIN), manager)).errorCode());
+        verify(repository, never()).save(any());
+
+        assertEquals(ID, service.create(registration(ID), manager).nationalId());
+    }
+
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
+    void aReleasedNationalIdIsNeverInAnErrorOrALog(org.springframework.boot.test.system.CapturedOutput output) {
+        verifiedWithNationalId(UIN);
+        List<String> messages = new java.util.ArrayList<>();
+        messages.add(assertThrows(RuntimeException.class,
+                () -> service.create(registration(ID), manager)).getMessage());
+        when(repository.findByNationalId(UIN)).thenReturn(Optional.of(existingMember(4L, "M-0004")));
+        messages.add(assertThrows(RuntimeException.class,
+                () -> service.create(registration(null), manager)).getMessage());
+        Member member = verifiedMember(UIN);
+        when(repository.findById(5L)).thenReturn(Optional.of(member));
+        messages.add(assertThrows(RuntimeException.class,
+                () -> service.update(5L, request("0722123456", ID))).getMessage());
+
+        for (String message : messages) {
+            assertFalse(message.contains(UIN), message);
+            assertFalse(message.contains("6276"), message);
+            assertFalse(message.contains(ID), message);
+        }
+        assertFalse(output.getAll().contains(UIN));
+        assertFalse(output.getAll().contains(ID));
+    }
+
+    @Test
+    void aVerifiedMembersNationalIdCannotBeChanged() {
+        Member member = verifiedMember(UIN);
+        when(repository.findById(5L)).thenReturn(Optional.of(member));
+
+        for (String other : List.of(ID, "5860356277")) {
+            com.coopaggregate.identity.IdentityRequestException e = assertThrows(
+                    com.coopaggregate.identity.IdentityRequestException.class,
+                    () -> service.update(5L, request("0722123456", other)));
+
+            assertEquals("VERIFIED_FIELD_LOCKED", e.errorCode());
+            assertEquals("The national ID of a verified member cannot be changed.", e.getMessage());
+        }
+        assertEquals(UIN, member.getNationalId());
+        assertEquals("+250780000000", member.getPhone(), "nothing changed");
+    }
+
+    @Test
+    void aVerifiedMembersOwnNationalIdSentBackUnchangedIsAccepted() {
+        Member member = verifiedMember(UIN);
+        when(repository.findById(5L)).thenReturn(Optional.of(member));
+        when(repository.findByNationalId(UIN)).thenReturn(Optional.of(member));
+
+        assertEquals(UIN, service.update(5L, request("0722123456", " " + UIN + " ")).nationalId());
+        assertEquals("NATIONAL_ID_REQUIRED", assertThrows(NationalIdException.class,
+                () -> service.update(5L, request("0722123456", null))).errorCode(), "still never removed");
+    }
+
+    @Test
+    void aVerifiedMemberWithoutANationalIdMayStillGetATypedOne() {
+        Member member = verifiedMember(null);
+        when(repository.findById(5L)).thenReturn(Optional.of(member));
+
+        assertEquals("NATIONAL_ID_INVALID", assertThrows(NationalIdException.class,
+                () -> service.update(5L, request("0722123456", UIN))).errorCode());
+        assertEquals(ID, service.update(5L, request("0722123456", ID)).nationalId());
+    }
+
+    private static Member verifiedMember(String nationalId) {
+        Member member = existingMember(5L, "M-0005");
+        member.setNationalId(nationalId);
+        member.markIdentityVerified(VerificationMethod.PASSWORD, Instant.parse("2026-10-22T08:00:00Z"),
+                "pairwise-sub");
+        return member;
+    }
+
     private void doAnswerMarkVerified() {
         org.mockito.Mockito.doAnswer(invocation -> {
             invocation.<Member>getArgument(2).markIdentityVerified(VerificationMethod.PASSWORD,
@@ -765,42 +903,77 @@ class MemberServiceTest {
         verify(repository).countByJoinDateBetween(LocalDate.of(2028, 2, 1), LocalDate.of(2028, 2, 29));
     }
 
+    // --- Search by national ID: a whole ID of 6 to 20 letters or digits, exact match only
+
     @Test
-    @SuppressWarnings("unchecked")
-    void searchFindsTheFullNationalIdByExactMatch() {
-        ArgumentCaptor<Specification<Member>> spec = ArgumentCaptor.forClass(Specification.class);
-        when(repository.findAll(spec.capture(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
+    void searchFindsAWholeNationalIdOfAnyLengthByExactMatch() {
+        for (String term : List.of(" 1199880012345678 ", "5860356276", "AB1234", "12345678901234567890")) {
+            SearchQuery search = search(term);
 
-        service.list(" 1199880012345678 ", null, 0, 20);
-
-        Root<Member> root = mock(Root.class);
-        Path<String> nationalId = mock(Path.class);
-        doReturn(nationalId).when(root).get("nationalId");
-        CriteriaBuilder cb = mock(CriteriaBuilder.class);
-
-        spec.getValue().toPredicate(root, mock(CriteriaQuery.class), cb);
-
-        verify(cb).equal(nationalId, "1199880012345678");
-        verify(cb, never()).like(eq(nationalId), any(String.class));
+            verify(search.cb()).equal(search.nationalId(), term.trim());
+            verify(search.cb(), never()).like(eq(search.nationalId()), any(String.class));
+        }
     }
 
     @Test
-    @SuppressWarnings("unchecked")
+    void aTermThatCannotBeAWholeNationalIdNeverSearchesIt() {
+        for (String term : List.of("12345", "123456789012345678901", "RW-1199-88", "1199 8800 1234", "M-0005",
+                "+250788123456")) {
+            SearchQuery search = search(term);
+
+            verify(search.root(), never()).get("nationalId");
+            verify(search.cb(), never()).equal(eq(search.nationalId()), any(Object.class));
+        }
+    }
+
+    @Test
     void partOfANationalIdNeverFindsAMember() {
+        // 11998800 is the start of the member's 1199880012345678: it is only compared as a whole ID, never as a part.
+        SearchQuery search = search("11998800");
+
+        verify(search.cb()).equal(search.nationalId(), "11998800");
+        verify(search.cb(), never()).equal(search.nationalId(), "1199880012345678");
+        verify(search.cb(), never()).like(eq(search.nationalId()), any(String.class));
+    }
+
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
+    void aSearchByNationalIdIsNeverLoggedAndTheListNeverHoldsTheFullId(
+            org.springframework.boot.test.system.CapturedOutput output) {
+        Member member = existingMember(5L, "M-0005");
+        member.setNationalId("5860356276");
+        when(repository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(member)));
+
+        var page = service.list("5860356276", null, 0, 20);
+
+        assertEquals(1, page.content().size());
+        assertEquals("\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20226276",
+                page.content().get(0).nationalIdMasked());
+        assertFalse(page.content().get(0).toString().contains("5860356276"));
+        assertFalse(java.util.Arrays.stream(MemberListItem.class.getRecordComponents())
+                .anyMatch(component -> component.getName().equals("nationalId")));
+        assertFalse(output.getAll().contains("5860356276"));
+    }
+
+    private record SearchQuery(Root<Member> root, CriteriaBuilder cb, Path<String> nationalId) {
+    }
+
+    // Runs a list search and builds its query against mocks, to see which comparisons it makes.
+    @SuppressWarnings("unchecked")
+    private SearchQuery search(String term) {
+        org.mockito.Mockito.clearInvocations(repository);
         ArgumentCaptor<Specification<Member>> spec = ArgumentCaptor.forClass(Specification.class);
         when(repository.findAll(spec.capture(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
 
-        service.list("11998800", null, 0, 20);
+        service.list(term, null, 0, 20);
 
         Root<Member> root = mock(Root.class);
         Path<String> nationalId = mock(Path.class);
         doReturn(nationalId).when(root).get("nationalId");
         CriteriaBuilder cb = mock(CriteriaBuilder.class);
-
         spec.getValue().toPredicate(root, mock(CriteriaQuery.class), cb);
-
-        verify(root, never()).get("nationalId");
-        verify(cb, never()).equal(eq(nationalId), any(Object.class));
+        return new SearchQuery(root, cb, nationalId);
     }
 
     private static MemberRequest request(String phone, String nationalId) {

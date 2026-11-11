@@ -158,9 +158,9 @@ public class IdentityVerificationService {
         phone = RwandanPhoneNumber.normalize(phone);
 
         // The optional details were already read by MosipClient: each is null when the member did not allow it or it
-        // did not fit, and the login succeeds either way.
+        // did not fit, and the login succeeds either way. Without a national ID the manager types it at registration.
         VerifiedDetails details = new VerifiedDetails(name, phone, claims.birthdate(), claims.gender(), claims.email(),
-                claims.address());
+                claims.address(), claims.nationalId());
         verification.setVerifiedDetails(details);
         verification.markVerified(new VerifiedIdentity(claims.subject(), VerificationMethod.PASSWORD), now);
         record(AuditAction.IDENTITY_VERIFIED, manager,

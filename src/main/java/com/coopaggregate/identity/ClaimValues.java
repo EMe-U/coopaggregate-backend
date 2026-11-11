@@ -18,6 +18,7 @@ final class ClaimValues {
     static final int MAX_GENDER = 20;
     static final int MAX_EMAIL = 254;
     static final int MAX_ADDRESS = 500;
+    static final int MAX_NATIONAL_ID = 20;
     static final LocalDate EARLIEST_BIRTHDATE = LocalDate.of(1900, 1, 1);
     // The parts of an address object, in the order they are joined. Any other key (postal_code, formatted) is ignored.
     static final List<String> ADDRESS_PARTS = List.of("street_address", "locality", "region", "country");
@@ -66,6 +67,21 @@ final class ClaimValues {
     static String email(Object value) {
         String text = text(value);
         return text == null || text.length() > MAX_EMAIL || !text.contains("@") ? null : text;
+    }
+
+    /**
+     * The national ID as released (eSignet's UIN in the local setup): text or a whole number, spaces removed, then only
+     * letters and digits, at most 20 (the size of member.national_id). null when it does not fit. Not checked against
+     * the 16 digits a typed ID needs: the identity provider is the source.
+     */
+    static String nationalId(Object value) {
+        String text = value instanceof Long || value instanceof Integer || value instanceof java.math.BigInteger
+                ? value.toString() : text(value);
+        if (text == null) {
+            return null;
+        }
+        String id = text.replaceAll("\\s+", "");
+        return id.matches("[A-Za-z0-9]{1," + MAX_NATIONAL_ID + "}") ? id : null;
     }
 
     /**

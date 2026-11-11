@@ -40,6 +40,9 @@ public class MemberService {
     private static final int MAX_PAGE_SIZE = 100;
     // ASCII digits only ([0-9], not \d), exactly 16.
     private static final java.util.regex.Pattern NATIONAL_ID = java.util.regex.Pattern.compile("[0-9]{16}");
+    // A search term that can be a whole national ID: 6 to 20 letters or digits (member.national_id holds up to 20).
+    private static final java.util.regex.Pattern SEARCHABLE_NATIONAL_ID =
+            java.util.regex.Pattern.compile("[A-Za-z0-9]{6,20}");
 
     private final MemberRepository memberRepository;
     private final IdentityAvailability identityAvailability;
@@ -107,7 +110,7 @@ public class MemberService {
         }
         VerifiedDetails verified = identityVerificationService.verifiedDetails(request.verificationId(), manager);
         refuseVerifiedFieldsInTheRequest(request, verified, Set.of("address"));
-        String nationalId = requiredNationalId(request.nationalId());
+        String nationalId = nationalIdForVerified(request, verified);
         Member member = new Member();
         applyDetails(member, verified.fullName(), verified.phone(), nationalId,
                 verified.address() != null ? verified.address() : request.address(), request.preferredLanguage());
@@ -189,6 +192,21 @@ public class MemberService {
         }
     }
 
+    // A national ID released by the identity check (MOSIP_NATIONAL_ID_CLAIM) is the member's, as the provider gave it:
+    // the 16-digit rule is only for a typed one. Any value sent for it is refused, like the other verified details
+    // (even an empty one), and the message never repeats it. Without one the manager types it, as before. Uniqueness is
+    // checked for both in applyDetails.
+    private static String nationalIdForVerified(NewMemberRequest request, VerifiedDetails verified) {
+        if (verified.nationalId() == null) {
+            return requiredNationalId(request.nationalId());
+        }
+        if (request.nationalId() != null) {
+            throw new IdentityRequestException(IdentityErrorCode.VERIFIED_FIELD_LOCKED,
+                    "This detail came from the identity check and cannot be changed here.");
+        }
+        return verified.nationalId();
+    }
+
     @Transactional
     public MemberResponse update(Long id, MemberRequest request) {
         Member member = findMember(id);
@@ -223,7 +241,8 @@ public class MemberService {
 
     // Members registered before the national ID was required may have none. An edit may add one, or change it to
     // another valid one, but never remove one that is set. The stored value sent back unchanged is always accepted,
-    // so a member with an older ID in another format can still be edited.
+    // so a member with an older ID in another format can still be edited. A verified member's national ID that is set
+    // cannot be changed at all (VERIFIED_FIELD_LOCKED); one with none may still get one, typed with the 16-digit rule.
     private static String nationalIdForUpdate(Member member, String raw) {
         String current = trimToNull(member.getNationalId());
         String nationalId = trimToNull(raw);
@@ -234,7 +253,14 @@ public class MemberService {
             }
             return null;
         }
-        return nationalId.equals(current) ? current : validNationalId(nationalId);
+        if (nationalId.equals(current)) {
+            return current;
+        }
+        if (member.isIdentityVerified() && current != null) {
+            throw new IdentityRequestException(IdentityErrorCode.VERIFIED_FIELD_LOCKED,
+                    "The national ID of a verified member cannot be changed.");
+        }
+        return validNationalId(nationalId);
     }
 
     private static String validNationalId(String nationalId) {
@@ -299,8 +325,9 @@ public class MemberService {
                 any.add(cb.like(cb.lower(root.get("fullName")), textPattern));
                 any.add(cb.like(cb.lower(root.get("memberCode")), textPattern));
                 any.add(cb.like(root.get("phone"), "%" + phoneTerm + "%"));
-                // The national ID only matches as a whole: part of an ID never finds a member.
-                if (NATIONAL_ID.matcher(term).matches()) {
+                // The national ID only matches as a whole (equal, never like): part of an ID never finds a member. Any
+                // length a stored ID can have is searched: a typed 16-digit one, or one from the identity check.
+                if (SEARCHABLE_NATIONAL_ID.matcher(term).matches()) {
                     any.add(cb.equal(root.get("nationalId"), term));
                 }
                 predicates.add(cb.or(any.toArray(Predicate[]::new)));

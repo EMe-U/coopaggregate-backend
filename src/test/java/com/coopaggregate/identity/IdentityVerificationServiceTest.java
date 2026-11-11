@@ -191,6 +191,54 @@ class IdentityVerificationServiceTest {
         assertEquals("KG 7 Ave, Kacyiru, Gasabo, Rwanda", verification.getVerifiedAddress());
     }
 
+    // --- The national ID released by the check (MOSIP_NATIONAL_ID_CLAIM)
+
+    private static final String UIN = "5860356276";
+    private static final MosipClaims CLAIMS_WITH_ID = new MosipClaims("pairwise-sub", "Uwimana Claudine",
+            "+250788123456", null, null, null, null, null, UIN);
+
+    @Test
+    void aReleasedNationalIdIsKeptOnTheVerificationAndOnlyItsMaskIsReturned() {
+        when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(CLAIMS_WITH_ID);
+        String state = service.start(manager).state();
+
+        VerifyResultResponse result = service.complete("the-code", state, manager);
+
+        assertEquals("••••••••••••6276",
+                result.nationalIdMasked());
+        assertEquals(List.of("fullName", "phone", "nationalId"), result.verifiedFields());
+        assertFalse(java.util.Arrays.stream(VerifyResultResponse.class.getRecordComponents())
+                .anyMatch(component -> component.getName().equals("nationalId")), "never the full ID");
+        IdentityVerification verification = stored.get(IdentityVerificationService.sha256(state));
+        assertEquals(UIN, verification.getVerifiedNationalId());
+        assertEquals(UIN, service.verifiedDetails(result.verificationId(), manager).nationalId());
+    }
+
+    @Test
+    void withoutAReleasedNationalIdNothingIsKeptAndNoMaskIsReturned() {
+        String state = service.start(manager).state();
+
+        VerifyResultResponse result = service.complete("the-code", state, manager);
+
+        assertNull(result.nationalIdMasked());
+        assertNull(stored.get(IdentityVerificationService.sha256(state)).getVerifiedNationalId());
+    }
+
+    @Test
+    void theNationalIdIsNeverLoggedOrInTheHistoryAndIsClearedOnceTheMemberIsSaved(CapturedOutput output) {
+        when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(CLAIMS_WITH_ID);
+        String state = service.start(manager).state();
+
+        VerifyResultResponse result = service.complete("the-code", state, manager);
+        service.attach(result.verificationId(), manager, new Member());
+
+        assertFalse(output.getAll().contains(UIN));
+        assertFalse(lastAudit().getDetails().contains(UIN));
+        assertFalse(result.toString().contains(UIN));
+        assertFalse(result.toString().contains("6276"));
+        assertNull(stored.get(IdentityVerificationService.sha256(state)).getVerifiedNationalId());
+    }
+
     @Test
     void refusedOptionalDetailsAreAbsentAndThePersonIsStillVerified() {
         when(client.fetchClaims(anyString(), anyString(), anyString())).thenReturn(new MosipClaims("pairwise-sub",
@@ -731,7 +779,7 @@ class IdentityVerificationServiceTest {
                 .getAnnotation(org.springframework.data.jpa.repository.Query.class).value();
 
         for (String field : List.of("verifiedName", "verifiedPhone", "verifiedBirthdate", "verifiedGender",
-                "verifiedEmail", "verifiedAddress")) {
+                "verifiedEmail", "verifiedAddress", "verifiedNationalId")) {
             assertTrue(query.contains("v." + field + " = null"), field);
             assertTrue(query.contains("v." + field + " is not null"), field);
         }

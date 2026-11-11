@@ -168,6 +168,44 @@ class IdentityControllerTest {
     }
 
     @Test
+    void theCallbackGivesOnlyTheMaskedNationalIdNeverTheFullOne() throws Exception {
+        Manager manager = new Manager();
+        when(authService.currentManager("manager@example.com")).thenReturn(manager);
+        when(verificationService.complete("the-code", "the-state", manager)).thenReturn(VerifyResultResponse.of(9L,
+                VerificationMethod.PASSWORD, new VerifiedDetails("UWIMANA Claudine", "+250788123456", null, null, null,
+                        null, "5860356276"), Instant.parse("2026-10-31T10:30:00Z")));
+
+        String body = mockMvc.perform(post("/api/members/verify/callback")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\": \"the-code\", \"state\": \"the-state\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.nationalIdMasked").value(
+                        "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20226276"))
+                .andExpect(jsonPath("$.nationalId").doesNotExist())
+                .andExpect(jsonPath("$.verifiedFields").value(org.hamcrest.Matchers.contains("fullName", "phone",
+                        "nationalId")))
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+
+        assertFalse(body.contains("5860356276"), body);
+    }
+
+    @Test
+    void withoutAReleasedNationalIdTheCallbackHasNoMask() throws Exception {
+        Manager manager = new Manager();
+        when(authService.currentManager("manager@example.com")).thenReturn(manager);
+        when(verificationService.complete("the-code", "the-state", manager)).thenReturn(VerifyResultResponse.of(9L,
+                VerificationMethod.PASSWORD, new VerifiedDetails("UWIMANA Claudine", "+250788123456"),
+                Instant.parse("2026-10-31T10:30:00Z")));
+
+        mockMvc.perform(post("/api/members/verify/callback").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\": \"the-code\", \"state\": \"the-state\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.nationalIdMasked").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
     void theCallbackResultNeverPrintsTheVerifiedDetails() {
         String text = VerifyResultResponse.of(9L, VerificationMethod.PASSWORD, new VerifiedDetails("UWIMANA Claudine",
                 "+250788123456", java.time.LocalDate.of(1990, 5, 17), "Female", "claudine@example.com", "Kacyiru"),
