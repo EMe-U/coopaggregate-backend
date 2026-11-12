@@ -26,14 +26,11 @@ class SmsMessageTypeMigrationTest {
     }
 
     @Test
-    void theAllowedTypesAreExactlyTheValuesOfTheEnum() throws IOException {
+    void theFirstTwoTypesWereTheDeliveryMessages() throws IOException {
         String sql = code();
 
         assertTrue(sql.contains("CHECK (message_type IN ('DELIVERY_CODE', 'RECEIPT'))"));
-        assertEquals(2, SmsMessageType.values().length);
-        for (SmsMessageType type : SmsMessageType.values()) {
-            assertTrue(type.name().length() <= 20, "the column is VARCHAR(20)");
-        }
+        // V41 added the payment messages; PaymentSmsMigrationTest checks every value of the enum against it.
     }
 
     @Test

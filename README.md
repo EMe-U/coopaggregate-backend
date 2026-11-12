@@ -238,6 +238,9 @@ ERD: see `docs/erd.png`.
   `gender_verified`, `email_verified` and `address_verified` (default `false`) to `member`. The member's
   existing `address` column is reused and made longer (255 to 500 characters), which keeps every value.
   No row is changed. Run it before the new build starts: the new build reads and writes the columns.
+- **V41** lets `sms_log` hold payment messages: a `payment_id` column, the types `PAYMENT` and
+  `PAYMENT_REVERSED` (a payment message must name its payment), and one message per payment and type.
+  No row is changed. Run it before the new build starts: the new build reads and writes the column.
 - Applied migrations are never edited; a change is a new migration.
 
 ## API endpoints
@@ -295,7 +298,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/payments/balances?search=&status=` | JWT | Earned (sale credits and shares), deductions, paid and balance per member, plus `totalOwedRwf` and `paidThisWeekRwf` |
 | POST | `/api/payments` | JWT | Pays a member. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page). Reversed payments are listed with `reversed: true` |
-| POST | `/api/payments/{id}/reverse` | JWT | Body `{"reason"}`. Cancels a payment; the member is owed the amount again |
+| POST | `/api/payments/{id}/reverse` | JWT | Body `{"reason"}` (required, at most 100 characters: the member reads it in an SMS). Cancels a payment; the member is owed the amount again |
 | GET | `/api/members/{id}/statement` | JWT | A member's sale credits, shares, deductions, payments and amount owed |
 | POST | `/api/deliveries` | JWT | Records a delivery. `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/deliveries?memberId=&lotId=&from=&to=&includeReversed=false&page=0&size=20` | JWT | Deliveries, newest first (max 100 per page), each with its `lots`. All filters are optional; `lotId` finds every delivery with kg in that lot. Reversed deliveries only with `includeReversed=true` |
@@ -472,6 +475,24 @@ later (for example after a dispute is resolved) sends no second receipt. An unse
 `CANCELLED` if the delivery is disputed or reversed first. Deliveries recorded before confirmation
 existed get none unless they are confirmed later. No receipt is sent while SMS are turned off.
 
+**Payments.** When a payment to a member is recorded, and again if it is reversed, the member gets
+one SMS in their language with the payment code, the amount and what they are owed after it
+(computed once the change is committed), for example:
+
+"Koperative Intagamburuzwa: payment PAY-0007 of 25,000 RWF (MoMo) on 12/11. You are now owed 10,000
+RWF. If this is wrong, contact the cooperative manager."
+
+"Koperative Intagamburuzwa: payment PAY-0007 of 25,000 RWF was cancelled. Reason: Paid twice. You
+are now owed 35,000 RWF. If this is wrong, contact the cooperative manager."
+
+No name, phone, member number or transaction reference is in them; members cannot reply to them. A
+payment message fits one SMS and a reversal (with its reason of at most 100 characters) two parts; a
+long cooperative name is shortened. They are sent in the background after the commit and retried like
+any other SMS, saved in `sms_log` as `PAYMENT` or `PAYMENT_REVERSED` with the payment's id, at most
+once per payment and type. A payment sent again with the same `clientUuid` gets no second SMS, a
+payment already reversed by the time its SMS is queued gets only the reversal SMS, and none is sent
+while SMS are turned off.
+
 `SMS_PROVIDER=log` (default) sends nothing. The messages are in `sms_log`, but the codes
 are masked there. To test codes locally, set `SMS_LOG_SHOW_CODES=true`: the log provider
 then prints each SMS, real code included, in the console (`sms_log` stays masked). This is
@@ -538,7 +559,9 @@ anywhere: lot kilograms, stock, the dashboard, sharing, member statements and ba
   then goes into a lot. The two are linked by `correctsId` (on the new delivery) and
   `correctedById` (on the original). Same rules as a reversal. A correction to another grade
   locks both grades, in id order.
-- **Payment:** `POST /api/payments/{id}/reverse`. The member's balance goes back up.
+- **Payment:** `POST /api/payments/{id}/reverse`. The member's balance goes back up. The reason
+  is required and at most 100 characters (`400` otherwise), also through the ledger endpoint below:
+  the member gets it in an SMS with the amount and the new balance.
 - **Ledger:** `POST /api/ledger/{id}/reverse` does the same as the endpoints above for
   `DELIVERY` and `PAYMENT` entries. `SHARE`, `SALE`, `SALE_CREDIT` and `LOSS` entries cannot
   be reversed (`409`): a share has already divided the money, and sales, their credits and losses

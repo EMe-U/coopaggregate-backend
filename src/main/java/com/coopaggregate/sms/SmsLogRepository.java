@@ -13,6 +13,8 @@ public interface SmsLogRepository extends JpaRepository<SmsLog, Long> {
     boolean existsByDeliveryIdAndMessageTypeAndSendNumberGreaterThan(Long deliveryId, SmsMessageType messageType,
                                                                      int sendNumber);
 
+    boolean existsByPaymentIdAndMessageType(Long paymentId, SmsMessageType messageType);
+
     List<SmsLog> findTop50ByStatusAndAttemptsLessThanOrderByIdAsc(SmsStatus status, int attempts);
 
     List<SmsLog> findTop50ByStatusAndCreatedAtBeforeOrderByIdAsc(SmsStatus status, Instant before);
