@@ -296,7 +296,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/lots/{id}/share-preview` | JWT | Older lot sharing (see Sharing): `409` for any lot that has sales, and while deliveries are pending or disputed |
 | POST | `/api/lots/{id}/share` | JWT | Older lot sharing: saves the shares and marks the lot `SHARED`. `409` for any lot that has sales |
 | GET | `/api/payments/balances?search=&status=` | JWT | Earned (sale credits and shares), deductions, paid and balance per member, plus `totalOwedRwf` and `paidThisWeekRwf` |
-| POST | `/api/payments` | JWT | Pays a member. `201` when new, `200` when the same `clientUuid` was already recorded |
+| POST | `/api/payments` | JWT | Pays a member their whole balance (any other amount is a `400`). `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page). Reversed payments are listed with `reversed: true` |
 | POST | `/api/payments/{id}/reverse` | JWT | Body `{"reason"}` (required, at most 100 characters: the member reads it in an SMS). Cancels a payment; the member is owed the amount again |
 | GET | `/api/members/{id}/statement` | JWT | A member's sale credits, shares, deductions, payments and amount owed |
@@ -1219,9 +1219,9 @@ saves it and sets the lot to `SHARED`.
 
 ### Payments
 
-Payments are made to a member for everything they are owed, not to one lot. What a member
-is owed (their balance) = their sale credits and shares - their deductions - what they were
-already paid.
+A payment disburses to a member everything they are owed, never part of it, and not for one lot.
+What a member is owed (their balance) = their sale credits and shares - their deductions - what
+they were already paid.
 
 Request body for `POST /api/payments`:
 
@@ -1240,7 +1240,11 @@ Request body for `POST /api/payments`:
   MoMo or bank transaction number (otherwise `400`).
 - Each payment gets its own code, `PAY-` and 4 digits (`PAY-0001`), the highest existing
   number plus one. It is separate from `reference`.
-- `amountRwf` must be more than 0 and at most what the member is owed (otherwise `400`).
+- `amountRwf` must be exactly the member's whole balance. Any other amount is a `400`, for example
+  "Member M-0012 is owed 48,500 RWF. Disburse the full amount.", and nothing is paid. The app sends
+  the balance it showed, so if a sale credited the member in the meantime the payment is refused
+  instead of paying an amount the manager did not see. A member owed nothing gets a `400` too.
+  Partial payments recorded before this rule stay valid; the next payment is the rest of the balance.
 - `paidAt` is an optional date and defaults to today (Kigali time).
 - Sending the same `clientUuid` again returns the existing payment with `200`.
 - Each payment adds a `PAYMENT` ledger entry with the amount and the payment code.

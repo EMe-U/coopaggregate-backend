@@ -57,7 +57,8 @@ public class PaymentController {
     }
 
     @PostMapping
-    @Operation(summary = "Pay a member. The amount cannot be more than they are owed; MOMO and BANK need a reference")
+    @Operation(summary = "Disburse to a member. The amount must be their whole balance (400 otherwise, or when "
+            + "nothing is owed); MOMO and BANK need a reference")
     @ApiResponse(responseCode = "201", description = "Payment recorded")
     @ApiResponse(responseCode = "200",
             description = "A payment with this clientUuid already exists; it is returned unchanged")

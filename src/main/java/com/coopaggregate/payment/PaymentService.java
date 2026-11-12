@@ -78,10 +78,16 @@ public class PaymentService {
         if (request.method() != PaymentMethod.CASH && reference == null) {
             throw new BadRequestException("A " + request.method() + " payment needs the transaction reference.");
         }
+        // A farmer is always paid their whole balance, never part of it. The frontend sends the balance it showed,
+        // so if a sale credited the farmer in the meantime the amounts differ and nothing is paid.
         long owed = owedTo(member.getId());
-        if (request.amountRwf() > owed) {
-            throw new BadRequestException("Member " + member.getMemberCode() + " is owed " + owed
-                    + " RWF. The payment cannot be more than that.");
+        if (owed <= 0) {
+            throw new BadRequestException("Member " + member.getMemberCode()
+                    + " is owed nothing: there is nothing to disburse.");
+        }
+        if (request.amountRwf() != owed) {
+            throw new BadRequestException("Member " + member.getMemberCode() + " is owed " + rwf(owed)
+                    + " RWF. Disburse the full amount.");
         }
 
         ProducePayment payment = new ProducePayment();
@@ -200,6 +206,10 @@ public class PaymentService {
                 : BalanceStatus.PART_PAID;
         return new BalancesResponse.MemberBalance(member.getId(), member.getFullName(), member.getMemberCode(),
                 member.getPhone(), shares.shareRwf(), shares.deductionRwf(), paid, balance, status);
+    }
+
+    private static String rwf(long amount) {
+        return String.format(Locale.US, "%,d", amount);
     }
 
     private static boolean matches(BalancesResponse.MemberBalance member, String search) {

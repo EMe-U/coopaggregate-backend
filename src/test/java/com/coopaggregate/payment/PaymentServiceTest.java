@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -92,7 +93,7 @@ class PaymentServiceTest {
     }
 
     @Test
-    void paymentUpToOwedIsRecorded() {
+    void theFullBalanceIsRecorded() {
         RecordedPayment result = pay(451_000L, PaymentMethod.CASH, null);
 
         assertTrue(result.created());
@@ -101,15 +102,36 @@ class PaymentServiceTest {
         assertEquals(KigaliTime.today(), result.payment().paidAt());
     }
 
-    @Test
-    void overpaymentIsRejected() {
+    @ParameterizedTest
+    @ValueSource(longs = {451_001L, 450_999L, 100_000L, 1L})
+    void anyAmountOtherThanTheFullBalanceIsRefused(long amount) {
         BadRequestException e = assertThrows(BadRequestException.class,
-                () -> pay(451_001L, PaymentMethod.CASH, null));
+                () -> pay(amount, PaymentMethod.CASH, null));
 
-        assertEquals("Member M-0001 is owed 451000 RWF. The payment cannot be more than that.", e.getMessage());
+        assertEquals("Member M-0001 is owed 451,000 RWF. Disburse the full amount.", e.getMessage());
         verify(paymentRepository, never()).save(any());
         verify(paymentRepository, never()).highestPaymentNumber();
         verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void theFullBalanceIncludesSaleCredits() {
+        when(saleAllocationRepository.netCreditsOf(1L)).thenReturn(29_500L);
+
+        assertThrows(BadRequestException.class, () -> pay(451_000L, PaymentMethod.CASH, null));
+        assertEquals(480_500L, pay(480_500L, PaymentMethod.CASH, null).payment().amountRwf());
+    }
+
+    @Test
+    void aSettledMemberCannotBePaid() {
+        when(paymentRepository.paidTo(1L)).thenReturn(1_451_000L);
+
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> pay(1_000L, PaymentMethod.CASH, null));
+
+        assertEquals("Member M-0001 is owed nothing: there is nothing to disburse.", e.getMessage());
+        verify(paymentRepository, never()).save(any());
     }
 
     @ParameterizedTest
@@ -123,24 +145,24 @@ class PaymentServiceTest {
 
     @Test
     void paymentGetsNextPayCode() {
-        assertEquals("PAY-0005", pay(100_000L, PaymentMethod.CASH, null).payment().paymentCode());
+        assertEquals("PAY-0005", pay(451_000L, PaymentMethod.CASH, null).payment().paymentCode());
     }
 
     @Test
     void firstPaymentGetsPayCodeOne() {
         when(paymentRepository.highestPaymentNumber()).thenReturn(0);
 
-        assertEquals("PAY-0001", pay(100_000L, PaymentMethod.CASH, null).payment().paymentCode());
+        assertEquals("PAY-0001", pay(451_000L, PaymentMethod.CASH, null).payment().paymentCode());
     }
 
     @Test
     void cashPaymentNeedsNoReference() {
-        assertTrue(pay(100_000L, PaymentMethod.CASH, null).created());
+        assertTrue(pay(451_000L, PaymentMethod.CASH, null).created());
     }
 
     @Test
     void bankPaymentWithReferenceIsRecorded() {
-        RecordedPayment result = pay(100_000L, PaymentMethod.BANK, "BK-778812");
+        RecordedPayment result = pay(451_000L, PaymentMethod.BANK, "BK-778812");
 
         assertEquals(PaymentMethod.BANK, result.payment().method());
         assertEquals("BK-778812", result.payment().reference());
@@ -173,9 +195,9 @@ class PaymentServiceTest {
 
     @Test
     void paymentIsRecordedInLedger() {
-        pay(100_000L, PaymentMethod.MOMO, " MP2610120001 ");
+        pay(451_000L, PaymentMethod.MOMO, " MP2610120001 ");
 
-        verify(ledgerService).record(LedgerEntryType.PAYMENT, "PAYMENT", 9L, null, 100_000L,
+        verify(ledgerService).record(LedgerEntryType.PAYMENT, "PAYMENT", 9L, null, 451_000L,
                 "Payment PAY-0005 by MOMO MP2610120001", manager);
     }
 
@@ -321,7 +343,7 @@ class PaymentServiceTest {
 
     @Test
     void aNewPaymentAnnouncesItselfForTheMembersSms() {
-        pay(100_000L, PaymentMethod.CASH, null);
+        pay(451_000L, PaymentMethod.CASH, null);
 
         verify(eventPublisher).publishEvent(new PaymentRecordedEvent(9L));
     }
