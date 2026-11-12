@@ -374,7 +374,7 @@ class LotFillingConcurrencyTest {
             // The deliveries list filtered by the lot finds every delivery with a portion in it.
             long withPortion = jdbc.queryForObject("SELECT COUNT(DISTINCT delivery_id) FROM lot_portion WHERE lot_id = ?",
                     Long.class, lotId);
-            List<DeliveryResponse> deliveries = deliveryService.list(null, lotId, null, null, true, 0, 100).content();
+            List<DeliveryResponse> deliveries = deliveryService.list(null, lotId, null, null, null, true, null, null, 0, 100).content();
             assertEquals(withPortion, deliveries.size(), "deliveries of " + lot.code());
             assertTrue(deliveries.stream().allMatch(d -> d.lots().stream().anyMatch(l -> l.lotId().equals(lotId))));
             // And the ledger and the sales filtered by it run.

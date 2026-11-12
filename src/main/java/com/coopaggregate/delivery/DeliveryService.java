@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -138,12 +139,13 @@ public class DeliveryService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<DeliveryResponse> list(Long memberId, Long lotId, LocalDate from, LocalDate to,
-                                               boolean includeReversed, int page, int size) {
+    public PageResponse<DeliveryResponse> list(Long memberId, Long lotId, Long gradeId, LocalDate from, LocalDate to,
+                                               boolean includeReversed, DeliveryListStatus status, String search,
+                                               int page, int size) {
         PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
                 Sort.by(Sort.Direction.DESC, "deliveredAt", "id"));
-        Page<Delivery> deliveries = deliveryRepository.findAll(matching(memberId, lotId, from, to, includeReversed),
-                pageRequest);
+        Page<Delivery> deliveries = deliveryRepository.findAll(
+                matching(memberId, lotId, gradeId, from, to, includeReversed, status, search), pageRequest);
         // The corrections and the lots of the whole page, in two queries.
         List<Long> ids = deliveries.getContent().stream().map(Delivery::getId).toList();
         Map<Long, Long> correctedBy = ids.isEmpty() ? Map.of() : deliveryRepository.findByCorrectsIdIn(ids).stream()
@@ -515,16 +517,32 @@ public class DeliveryService {
     }
 
 
-    // from and to are whole days in Kigali time; to is inclusive.
-    static Specification<Delivery> matching(Long memberId, Long lotId, LocalDate from, LocalDate to,
-                                            boolean includeReversed) {
+    // from and to are whole days in Kigali time; to is inclusive. A status overrides includeReversed: REVERSED lists
+    // only reversed deliveries, the other statuses only deliveries that are not reversed.
+    static Specification<Delivery> matching(Long memberId, Long lotId, Long gradeId, LocalDate from, LocalDate to,
+                                            boolean includeReversed, DeliveryListStatus status, String search) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
-            if (!includeReversed) {
+            if (status == DeliveryListStatus.REVERSED) {
+                predicates.add(cb.isNotNull(root.get("reversedAt")));
+            } else if (status != null) {
+                predicates.add(cb.equal(root.get("confirmationStatus"), status.confirmationStatus()));
+                predicates.add(cb.isNull(root.get("reversedAt")));
+            } else if (!includeReversed) {
                 predicates.add(cb.isNull(root.get("reversedAt")));
             }
             if (memberId != null) {
                 predicates.add(cb.equal(root.get("member").get("id"), memberId));
+            }
+            if (gradeId != null) {
+                predicates.add(cb.equal(root.get("grade").get("id"), gradeId));
+            }
+            if (search != null && !search.isBlank()) {
+                String like = "%" + search.trim().toLowerCase(Locale.ROOT) + "%";
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.get("member").get("fullName")), like),
+                        cb.like(cb.lower(root.get("member").get("memberCode")), like),
+                        cb.like(cb.lower(root.get("receiptCode")), like)));
             }
             if (lotId != null) {
                 // Its own lot (from before fixed-size lots), or a lot it has a portion in.

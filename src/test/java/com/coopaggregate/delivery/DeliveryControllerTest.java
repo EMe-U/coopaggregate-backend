@@ -3,8 +3,10 @@ package com.coopaggregate.delivery;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -252,6 +254,34 @@ class DeliveryControllerTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"note\": \" \"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("note: is required: say how the delivery was checked"));
+        verifyNoInteractions(deliveryService);
+    }
+
+    @Test
+    void theListPassesTheNewFiltersToTheService() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .param("memberId", "5").param("gradeId", "2").param("status", "disputed")
+                        .param("search", "Uwi").param("includeReversed", "true").param("size", "100"))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).list(5L, null, 2L, null, null, true, DeliveryListStatus.DISPUTED, "Uwi", 0, 100);
+    }
+
+    @Test
+    void withoutTheNewFiltersTheListWorksAsBefore() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).list(null, null, null, null, null, false, null, null, 0, 20);
+    }
+
+    @Test
+    void anUnknownStatusIsA400WithAClearMessage() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .param("status", "SOLD"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        "Unknown delivery status 'SOLD'. Use one of PENDING, CONFIRMED, DISPUTED, REVERSED."));
         verifyNoInteractions(deliveryService);
     }
 

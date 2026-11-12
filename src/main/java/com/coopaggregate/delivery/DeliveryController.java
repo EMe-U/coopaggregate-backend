@@ -46,15 +46,23 @@ public class DeliveryController {
     public PageResponse<DeliveryResponse> list(
             @RequestParam(required = false) Long memberId,
             @RequestParam(required = false) Long lotId,
+            @RequestParam(required = false) Long gradeId,
             @Parameter(description = "First day, inclusive (yyyy-MM-dd, Kigali time)")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @Parameter(description = "Last day, inclusive (yyyy-MM-dd, Kigali time)")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @Parameter(description = "Also list deliveries that were reversed (default false)")
             @RequestParam(defaultValue = "false") boolean includeReversed,
+            @Parameter(description = "PENDING, CONFIRMED or DISPUTED (not reversed), or REVERSED (any reversed "
+                    + "delivery, whatever includeReversed says). Any other value is a 400")
+            @RequestParam(required = false) String status,
+            @Parameter(description = "Part of the member's name, the member number or the receipt code "
+                    + "(not case-sensitive)")
+            @RequestParam(required = false) String search,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return deliveryService.list(memberId, lotId, from, to, includeReversed, page, size);
+        return deliveryService.list(memberId, lotId, gradeId, from, to, includeReversed,
+                DeliveryListStatus.parse(status), search, page, size);
     }
 
     @GetMapping("/{id}")
