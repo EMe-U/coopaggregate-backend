@@ -3,8 +3,10 @@ package com.coopaggregate.delivery;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -252,6 +254,76 @@ class DeliveryControllerTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"note\": \" \"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("note: is required: say how the delivery was checked"));
+        verifyNoInteractions(deliveryService);
+    }
+
+    @Test
+    void theListPassesTheNewFiltersToTheService() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .param("memberId", "5").param("gradeId", "2").param("status", "disputed")
+                        .param("search", "Uwi").param("includeReversed", "true").param("size", "100"))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).list(5L, null, 2L, null, null, true, DeliveryListStatus.DISPUTED, "Uwi", null, 0, 100);
+    }
+
+    @Test
+    void withoutTheNewFiltersTheListWorksAsBefore() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).list(null, null, null, null, null, false, null, null, null, 0, 20);
+    }
+
+    @Test
+    void createdBeforeIsReadAsAnInstant() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .param("createdBefore", "2026-11-10T09:00:00Z"))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).list(null, null, null, null, null, false, null, null,
+                Instant.parse("2026-11-10T09:00:00Z"), 0, 20);
+    }
+
+    @Test
+    void createdBeforeWithAnOffsetIsTheSameInstant() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .param("createdBefore", "2026-11-10T11:00:00+02:00"))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).list(null, null, null, null, null, false, null, null,
+                Instant.parse("2026-11-10T09:00:00Z"), 0, 20);
+    }
+
+    @Test
+    void createdBeforeCombinedWithPendingListsTheDeliveriesWaitingTooLong() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .param("status", "PENDING").param("createdBefore", "2026-11-10T09:00:00Z"))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).list(null, null, null, null, null, false, DeliveryListStatus.PENDING, null,
+                Instant.parse("2026-11-10T09:00:00Z"), 0, 20);
+    }
+
+    @Test
+    void anInvalidCreatedBeforeIsA400() throws Exception {
+        for (String value : new String[] {"yesterday", "2026-11-10", "2026-13-40T09:00:00Z"}) {
+            mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                            .param("createdBefore", value))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message")
+                            .value("The request is missing data or has a value in the wrong format."));
+        }
+        verifyNoInteractions(deliveryService);
+    }
+
+    @Test
+    void anUnknownStatusIsA400WithAClearMessage() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .param("status", "SOLD"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        "Unknown delivery status 'SOLD'. Use one of PENDING, CONFIRMED, DISPUTED, REVERSED."));
         verifyNoInteractions(deliveryService);
     }
 
