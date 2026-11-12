@@ -241,6 +241,14 @@ ERD: see `docs/erd.png`.
 - **V41** lets `sms_log` hold payment messages: a `payment_id` column, the types `PAYMENT` and
   `PAYMENT_REVERSED` (a payment message must name its payment), and one message per payment and type.
   No row is changed. Run it before the new build starts: the new build reads and writes the column.
+- **V42** records how a buyer paid: `payment_method` (`CASH`, `MOMO` or `BANK`) and
+  `payment_reference` (at most 50 characters) on `sale_order`, empty for existing orders ("not
+  recorded"). A buyer pays a whole order once, so every sale now belongs to an order: each sale
+  saved without one gets an order of its own, coded `ORD-S-` and the sale id (for example
+  `ORD-S-12`), with the sale's buyer, date and creation time. Then `sale.sale_order_id` becomes
+  required. **This migration adds rows** (one order per sale that had none) and sets that link; no
+  sale amount, kg or ledger entry changes. Run it before the new build starts: the new build saves
+  every sale with an order and reads the new columns.
 - Applied migrations are never edited; a change is a new migration.
 
 ## API endpoints
@@ -1122,10 +1130,18 @@ Request body for `POST /api/sales`:
   "buyerId": 2,
   "quantityKg": 150,
   "pricePerKg": 300,
-  "soldAt": "2026-10-09"
+  "soldAt": "2026-10-09",
+  "paymentMethod": "MOMO",
+  "paymentReference": "MP2610090001"
 }
 ```
 
+- The buyer pays in full. `paymentMethod` is required: `CASH`, `MOMO` or `BANK` (otherwise `400`
+  "paymentMethod: is required (CASH, MOMO or BANK)"). `MOMO` and `BANK` need `paymentReference`, the
+  MoMo or bank transaction number, at most 50 characters (otherwise `400` "A MOMO buyer payment
+  needs the transaction reference."). This is checked before anything is locked or saved.
+- A sale of one grade is saved as an order of its own (a new `ORD-` code, shown as `orderCode`),
+  which keeps how the buyer paid. Sending the same `clientUuid` again creates no second order.
 - The grade and the buyer must exist, `quantityKg` must be more than 0 (2 decimals) and
   `pricePerKg` more than 0 in whole RWF, and more than the deduction per kg (otherwise `400`).
   `soldAt` is an optional date and defaults to today (Kigali time).
@@ -1172,8 +1188,10 @@ Request body for `POST /api/sales`:
   deadlock with a sale.
 - Sale codes look like `SAL-7K2Q`.
 - `POST /api/sales/orders` takes `{"clientUuid", "buyerId", "soldAt", "items": [{"gradeId",
-  "quantityKg", "pricePerKg"}]}`, each grade at most once, and
+  "quantityKg", "pricePerKg"}], "paymentMethod", "paymentReference"}`, each grade at most once, and
   records one sale per item with an order code `ORD-7K2Q`. If any item fails, nothing is saved.
+  The buyer pays the whole order once: the method and reference are given once, for the order, with
+  the same rules as a sale, and the answer shows them as `paymentMethod` and `paymentReference`.
 - `GET /api/sales` filters: `search` matches part of the buyer name, a lot code (also those of a
   sale's batches) or sale code (ignoring case), and a number on its own also matches the sale id.
   `gradeId` keeps sales of that grade and `lotId` those that took kg from that lot.

@@ -39,6 +39,7 @@ import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.config.SecurityConfig;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.manager.Manager;
+import com.coopaggregate.payment.PaymentMethod;
 
 import jakarta.persistence.EntityNotFoundException;
 
@@ -139,7 +140,7 @@ class SaleControllerTest {
         ArgumentCaptor<SaleRequest> request = ArgumentCaptor.forClass(SaleRequest.class);
         verify(saleService).record(request.capture(), any());
         org.junit.jupiter.api.Assertions.assertEquals(new SaleRequest(UUID.fromString(UUID_1), 3L, 2L,
-                new BigDecimal("100.00"), 300L, null, List.of(12L, 15L), "Buyer wants fresher potatoes", null),
+                new BigDecimal("100.00"), 300L, null, List.of(12L, 15L), "Buyer wants fresher potatoes", null, PaymentMethod.CASH, null),
                 request.getValue());
     }
 
@@ -169,7 +170,7 @@ class SaleControllerTest {
         mockMvc.perform(post("/api/sales").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"clientUuid\": \"" + UUID_1 + "\", \"lotId\": 3, \"buyerId\": 2, "
-                                + "\"quantityKg\": 100, \"pricePerKg\": 300}"))
+                                + "\"quantityKg\": 100, \"pricePerKg\": 300, \"paymentMethod\": \"CASH\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("gradeId: is required"));
         verifyNoInteractions(saleService);
@@ -194,15 +195,19 @@ class SaleControllerTest {
     void anOrderListsItsGrades() throws Exception {
         when(saleService.recordOrder(any(), any())).thenReturn(new RecordedSaleOrder(
                 new SaleOrderResponse("ORD-7K2Q", new BuyerResponse(2L, "Kalisa Traders", "+250788123456", null, null),
-                        LocalDate.of(2026, 10, 29), new BigDecimal("100.00"), 30_000L, List.of(response())), true));
+                        LocalDate.of(2026, 10, 29), new BigDecimal("100.00"), 30_000L, PaymentMethod.MOMO,
+                        "MP2610290001", List.of(response())), true));
 
         mockMvc.perform(post("/api/sales/orders").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"clientUuid\": \"" + UUID_1 + "\", \"buyerId\": 2, \"items\": ["
                                 + "{\"gradeId\": 3, \"quantityKg\": 100, \"pricePerKg\": 300}, "
-                                + "{\"gradeId\": 4, \"quantityKg\": 50.5, \"pricePerKg\": 200}]}"))
+                                + "{\"gradeId\": 4, \"quantityKg\": 50.5, \"pricePerKg\": 200}], "
+                                + "\"paymentMethod\": \"MOMO\", \"paymentReference\": \"MP2610290001\"}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.orderCode").value("ORD-7K2Q"))
+                .andExpect(jsonPath("$.paymentMethod").value("MOMO"))
+                .andExpect(jsonPath("$.paymentReference").value("MP2610290001"))
                 .andExpect(jsonPath("$.sales[0].batches[0].netRwf").value(29500));
 
         ArgumentCaptor<SaleOrderRequest> request = ArgumentCaptor.forClass(SaleOrderRequest.class);
@@ -210,6 +215,54 @@ class SaleControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals(List.of(
                 new SaleOrderRequest.Item(3L, new BigDecimal("100"), 300L, null, null, null),
                 new SaleOrderRequest.Item(4L, new BigDecimal("50.5"), 200L, null, null, null)), request.getValue().items());
+        org.junit.jupiter.api.Assertions.assertEquals(PaymentMethod.MOMO, request.getValue().paymentMethod());
+        org.junit.jupiter.api.Assertions.assertEquals("MP2610290001", request.getValue().paymentReference());
+    }
+
+    @Test
+    void aSaleNeedsAKnownPaymentMethodAndAShortReference() throws Exception {
+        String noMethod = "{\"clientUuid\": \"" + UUID_1 + "\", \"gradeId\": 3, \"buyerId\": 2, "
+                + "\"quantityKg\": 100, \"pricePerKg\": 300}";
+        mockMvc.perform(post("/api/sales").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content(noMethod))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("paymentMethod: is required (CASH, MOMO or BANK)"));
+        mockMvc.perform(post("/api/sales").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(sale("").replace("\"CASH\"", "\"PAYPAL\"")))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/sales").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(sale(", \"paymentReference\": \"" + "x".repeat(51) + "\"")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("paymentReference: must be at most 50 characters"));
+        verifyNoInteractions(saleService);
+    }
+
+    @Test
+    void theMethodAndReferenceReachTheService() throws Exception {
+        when(saleService.record(any(), any())).thenReturn(new RecordedSale(response(), true));
+
+        mockMvc.perform(post("/api/sales").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(sale("").replace("\"CASH\"", "\"BANK\", \"paymentReference\": \"BK-778812\"")))
+                .andExpect(status().isCreated());
+
+        ArgumentCaptor<SaleRequest> request = ArgumentCaptor.forClass(SaleRequest.class);
+        verify(saleService).record(request.capture(), any());
+        org.junit.jupiter.api.Assertions.assertEquals(PaymentMethod.BANK, request.getValue().paymentMethod());
+        org.junit.jupiter.api.Assertions.assertEquals("BK-778812", request.getValue().paymentReference());
+    }
+
+    @Test
+    void anOrderNeedsAPaymentMethod() throws Exception {
+        mockMvc.perform(post("/api/sales/orders").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"clientUuid\": \"" + UUID_1 + "\", \"buyerId\": 2, \"items\": ["
+                                + "{\"gradeId\": 3, \"quantityKg\": 100, \"pricePerKg\": 300}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("paymentMethod: is required (CASH, MOMO or BANK)"));
+        verifyNoInteractions(saleService);
     }
 
     @Test
@@ -217,7 +270,8 @@ class SaleControllerTest {
         mockMvc.perform(post("/api/sales/orders").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"clientUuid\": \"" + UUID_1 + "\", \"buyerId\": 2, \"items\": ["
-                                + "{\"lotId\": 3, \"quantityKg\": 100, \"pricePerKg\": 300}]}"))
+                                + "{\"lotId\": 3, \"quantityKg\": 100, \"pricePerKg\": 300}], "
+                                + "\"paymentMethod\": \"CASH\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("items[0].gradeId: is required"));
         verifyNoInteractions(saleService);
@@ -225,7 +279,7 @@ class SaleControllerTest {
 
     private static String sale(String extra) {
         return "{\"clientUuid\": \"" + UUID_1 + "\", \"gradeId\": 3, \"buyerId\": 2, \"quantityKg\": 100.00, "
-                + "\"pricePerKg\": 300" + extra + "}";
+                + "\"pricePerKg\": 300, \"paymentMethod\": \"CASH\"" + extra + "}";
     }
 
     private static SaleResponse response() {

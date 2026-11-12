@@ -7,9 +7,12 @@ import java.util.UUID;
 import org.hibernate.annotations.CreationTimestamp;
 
 import com.coopaggregate.buyer.Buyer;
+import com.coopaggregate.payment.PaymentMethod;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -32,12 +35,34 @@ public class SaleOrder {
 
     private LocalDate saleDate;
 
+    // How the buyer paid the whole order. Empty for orders saved before it was recorded.
+    @Enumerated(EnumType.STRING)
+    private PaymentMethod paymentMethod;
+
+    private String paymentReference;
+
     @CreationTimestamp
     @Column(updatable = false)
     private Instant createdAt;
 
     public Long getId() {
         return id;
+    }
+
+    public PaymentMethod getPaymentMethod() {
+        return paymentMethod;
+    }
+
+    public void setPaymentMethod(PaymentMethod paymentMethod) {
+        this.paymentMethod = paymentMethod;
+    }
+
+    public String getPaymentReference() {
+        return paymentReference;
+    }
+
+    public void setPaymentReference(String paymentReference) {
+        this.paymentReference = paymentReference;
     }
 
     public String getOrderCode() {
