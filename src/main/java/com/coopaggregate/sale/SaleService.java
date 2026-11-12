@@ -52,6 +52,7 @@ import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.setting.SettingRepository;
 
+import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Join;
@@ -182,6 +183,13 @@ public class SaleService {
         Page<Sale> sales = saleRepository.findAll(matching(search, lotId, buyerId, gradeId), pageRequest);
         return new PageResponse<>(responsesOf(sales.getContent()), sales.getNumber(), sales.getSize(),
                 sales.getTotalElements(), sales.getTotalPages());
+    }
+
+    /** One sale, the same as its row in the list. 404 when it does not exist. */
+    @Transactional(readOnly = true)
+    public SaleResponse get(Long id) {
+        return saleRepository.findWithDetailsById(id).map(this::responseOf)
+                .orElseThrow(() -> new EntityNotFoundException("Sale " + id + " does not exist."));
     }
 
     @Transactional(readOnly = true)

@@ -45,6 +45,7 @@ import com.coopaggregate.loss.Loss;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotStatus;
 
+import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Path;
@@ -544,6 +545,30 @@ class SaleServiceTest {
         assertEquals(2, sale.batches().size());
         assertEquals(35_400L, sale.totalNetRwf());
         assertEquals(600L, sale.totalDeductionRwf());
+    }
+
+    @Test
+    void oneSaleIsTheSameAsItsRowInTheList() {
+        sell("120.00", 300L);
+        Sale saved = f.savedSales.get(0);
+        when(f.saleRepository.findWithDetailsById(saved.getId())).thenReturn(Optional.of(saved));
+        when(f.saleRepository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(saved)));
+
+        SaleResponse one = service.get(saved.getId());
+
+        assertEquals(service.list(null, null, null, null, 0, 20).content().get(0), one);
+        assertEquals(2, one.batches().size());
+        assertEquals(35_400L, one.totalNetRwf());
+    }
+
+    @Test
+    void anUnknownSaleIsNotFound() {
+        when(f.saleRepository.findWithDetailsById(404L)).thenReturn(Optional.empty());
+
+        EntityNotFoundException e = assertThrows(EntityNotFoundException.class, () -> service.get(404L));
+
+        assertEquals("Sale 404 does not exist.", e.getMessage());
     }
 
     @Test

@@ -292,6 +292,7 @@ ERD: see `docs/erd.png`.
 | GET | `/api/grades/{id}/batches?page=0&size=20` | JWT | The grade's batches that still have kg, oldest delivery first, each with its lots |
 | GET | `/api/members/{id}/batches?status=all&page=0&size=20` | JWT | A member's batches, newest first, with kg and money earned per batch. `status=unsold` keeps batches with kg left |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
+| GET | `/api/sales/{id}` | JWT | One sale, the same shape as a row of the list, with each batch's member, kg, gross, deduction and net. `404` when it does not exist |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
 | GET | `/api/lots/{id}/share-preview` | JWT | Older lot sharing (see Sharing): `409` for any lot that has sales, and while deliveries are pending or disputed |
 | POST | `/api/lots/{id}/share` | JWT | Older lot sharing: saves the shares and marks the lot `SHARED`. `409` for any lot that has sales |
@@ -1176,6 +1177,8 @@ Request body for `POST /api/sales`:
 - `GET /api/sales` filters: `search` matches part of the buyer name, a lot code (also those of a
   sale's batches) or sale code (ignoring case), and a number on its own also matches the sale id.
   `gradeId` keeps sales of that grade and `lotId` those that took kg from that lot.
+- `GET /api/sales/{id}` returns one sale exactly as it appears in the list, so a sale detail
+  page can be opened or refreshed on its own. An unknown id is a `404`.
 - `GET /api/sales/summary` covers the current month in Kigali time:
   `salesAmountThisMonth` (RWF), `soldKgThisMonth`, `buyersThisMonth` (different buyers) and
   `averagePricePerKg` (amount / kg, 2 decimals, `0` when nothing was sold).

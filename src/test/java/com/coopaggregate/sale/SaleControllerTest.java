@@ -4,6 +4,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -38,6 +39,8 @@ import com.coopaggregate.config.JwtConfig;
 import com.coopaggregate.config.SecurityConfig;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.manager.Manager;
+
+import jakarta.persistence.EntityNotFoundException;
 
 @WebMvcTest(SaleController.class)
 @Import({SecurityConfig.class, JwtConfig.class})
@@ -76,6 +79,31 @@ class SaleControllerTest {
         mockMvc.perform(post("/api/sales/orders").contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isUnauthorized());
         verifyNoInteractions(saleService);
+    }
+
+    @Test
+    void oneSaleIsReturnedWithItsBatches() throws Exception {
+        when(saleService.get(11L)).thenReturn(response());
+
+        mockMvc.perform(get("/api/sales/11").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.saleCode").value("SAL-7K2Q"))
+                .andExpect(jsonPath("$.buyerName").value("Kalisa Traders"))
+                .andExpect(jsonPath("$.totalAmountRwf").value(30000))
+                .andExpect(jsonPath("$.batches[0].memberName").value("Uwimana Claudine"))
+                .andExpect(jsonPath("$.batches[0].netRwf").value(29500));
+    }
+
+    @Test
+    void anUnknownSaleIs404AndANonNumericIdIs400() throws Exception {
+        when(saleService.get(404L)).thenThrow(new EntityNotFoundException("Sale 404 does not exist."));
+
+        mockMvc.perform(get("/api/sales/404").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value("Sale 404 does not exist."));
+        mockMvc.perform(get("/api/sales/abc").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/sales/11")).andExpect(status().isUnauthorized());
     }
 
     @Test
