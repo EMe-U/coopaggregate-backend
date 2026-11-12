@@ -111,32 +111,44 @@ class BatchControllerTest {
     }
 
     @Test
-    void salePreviewPassesTheQuantityPriceAndSkippedLots() throws Exception {
-        when(salePreviewService.preview(1L, new BigDecimal("180.50"), 300L, List.of(12L, 15L)))
+    void salePreviewPassesTheQuantityAndPrice() throws Exception {
+        when(salePreviewService.preview(1L, new BigDecimal("180.50"), 300L))
                 .thenReturn(new SalePreviewResponse(1L, "Big", new BigDecimal("180.50"), 300L, false, 5L,
                         new BigDecimal("400.00"), BigDecimal.ZERO, BigDecimal.ZERO, true, null, 54_150L, 903L,
-                        53_247L, List.of(), List.of()));
+                        53_247L, List.of()));
 
         mockMvc.perform(get("/api/grades/1/sale-preview").param("quantityKg", "180.50").param("pricePerKg", "300")
-                        .param("skipLots", "12,15").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.enough").value(true))
-                .andExpect(jsonPath("$.totalNetRwf").value(53247));
+                .andExpect(jsonPath("$.totalNetRwf").value(53247))
+                .andExpect(jsonPath("$.skipped").doesNotExist());
     }
 
     @Test
-    void skippingSingleBatchesInThePreviewIsRefused() throws Exception {
-        mockMvc.perform(get("/api/grades/1/sale-preview").param("quantityKg", "180.50").param("pricePerKg", "300")
-                        .param("skip", "12,15").header(HttpHeaders.AUTHORIZATION, bearerToken))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value(
-                        "Single batches can no longer be skipped. Skip whole lots with skipLots."));
+    void askingThePreviewToSkipLotsOrBatchesIsRefused() throws Exception {
+        for (String[] skip : new String[][] {{"skipLots", "12,15"}, {"skipLots", "12"}, {"skipLots", "A-2026-01"},
+                {"skip", "12,15"}}) {
+            mockMvc.perform(get("/api/grades/1/sale-preview").param("quantityKg", "180.50").param("pricePerKg", "300")
+                            .param(skip[0], skip[1]).header(HttpHeaders.AUTHORIZATION, bearerToken))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("Lots cannot be skipped: sales always use the oldest lot first."));
+        }
         verifyNoInteractions(salePreviewService);
     }
 
     @Test
+    void anEmptySkipLotsAsksForNothing() throws Exception {
+        mockMvc.perform(get("/api/grades/1/sale-preview").param("quantityKg", "10").param("pricePerKg", "300")
+                        .param("skipLots", "").header(HttpHeaders.AUTHORIZATION, bearerToken))
+                .andExpect(status().isOk());
+
+        org.mockito.Mockito.verify(salePreviewService).preview(1L, BigDecimal.TEN, 300L);
+    }
+
+    @Test
     void salePreviewWithoutAQuantityIsABadRequest() throws Exception {
-        when(salePreviewService.preview(1L, null, 300L, null))
+        when(salePreviewService.preview(1L, null, 300L))
                 .thenThrow(new com.coopaggregate.error.BadRequestException(
                         "quantityKg is required and must be more than 0."));
 

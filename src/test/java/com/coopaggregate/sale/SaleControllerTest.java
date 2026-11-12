@@ -98,14 +98,16 @@ class SaleControllerTest {
     }
 
     @Test
-    void theRequestCarriesTheGradeAndTheSkippedBatches() throws Exception {
-        when(saleService.record(any(), any())).thenReturn(new RecordedSale(response(), true));
+    void theRequestCarriesTheGradeAndTheSkipFieldsReachTheServiceToBeRefused() throws Exception {
+        when(saleService.record(any(), any())).thenThrow(new BadRequestException("Lots cannot be skipped: sales always use the oldest lot first."));
 
         mockMvc.perform(post("/api/sales").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(sale(", \"skipLotIds\": [12, 15], \"skipReason\": \"Buyer wants fresher potatoes\"")))
-                .andExpect(status().isCreated());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Lots cannot be skipped: sales always use the oldest lot first."));
 
+        // The fields are still read, so a request that asks to skip is refused instead of being sold another way.
         ArgumentCaptor<SaleRequest> request = ArgumentCaptor.forClass(SaleRequest.class);
         verify(saleService).record(request.capture(), any());
         org.junit.jupiter.api.Assertions.assertEquals(new SaleRequest(UUID.fromString(UUID_1), 3L, 2L,
@@ -146,16 +148,6 @@ class SaleControllerTest {
     }
 
     @Test
-    void aReasonLongerThan500CharactersIsRefused() throws Exception {
-        mockMvc.perform(post("/api/sales").header(HttpHeaders.AUTHORIZATION, bearerToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(sale(", \"skipLotIds\": [12], \"skipReason\": \"" + "x".repeat(501) + "\"")))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("skipReason: must be at most 500 characters"));
-        verifyNoInteractions(saleService);
-    }
-
-    @Test
     void quantityAndPriceAreChecked() throws Exception {
         mockMvc.perform(post("/api/sales").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -179,8 +171,7 @@ class SaleControllerTest {
         mockMvc.perform(post("/api/sales/orders").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"clientUuid\": \"" + UUID_1 + "\", \"buyerId\": 2, \"items\": ["
-                                + "{\"gradeId\": 3, \"quantityKg\": 100, \"pricePerKg\": 300, "
-                                + "\"skipLotIds\": [12], \"skipReason\": \"Buyer wants fresher potatoes\"}, "
+                                + "{\"gradeId\": 3, \"quantityKg\": 100, \"pricePerKg\": 300}, "
                                 + "{\"gradeId\": 4, \"quantityKg\": 50.5, \"pricePerKg\": 200}]}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.orderCode").value("ORD-7K2Q"))
@@ -189,8 +180,7 @@ class SaleControllerTest {
         ArgumentCaptor<SaleOrderRequest> request = ArgumentCaptor.forClass(SaleOrderRequest.class);
         verify(saleService).recordOrder(request.capture(), any());
         org.junit.jupiter.api.Assertions.assertEquals(List.of(
-                new SaleOrderRequest.Item(3L, new BigDecimal("100"), 300L, List.of(12L), "Buyer wants fresher potatoes",
-                        null),
+                new SaleOrderRequest.Item(3L, new BigDecimal("100"), 300L, null, null, null),
                 new SaleOrderRequest.Item(4L, new BigDecimal("50.5"), 200L, null, null, null)), request.getValue().items());
     }
 

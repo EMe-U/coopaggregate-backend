@@ -9,13 +9,12 @@ import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PastOrPresent;
 import jakarta.validation.constraints.Positive;
-import jakarta.validation.constraints.Size;
 
 /**
  * A sale of one grade. The kg are taken from the lots of the grade first in, first out: lots from before fixed-size
- * lots first, then the fixed-size lots in the order they were filled. To pass over whole lots, list their ids in
- * skipLotIds and give a reason of 10 to 500 characters. skipDeliveryIds is no longer accepted: single batches cannot be
- * skipped any more.
+ * lots first, then the fixed-size lots in the order they were filled. Nothing can be skipped: skipLotIds, skipReason
+ * and skipDeliveryIds are kept only so that a request still asking to skip (a non-empty list or reason) is refused
+ * with a 400 instead of being sold in an order it did not expect. Empty or null, they ask for nothing.
  */
 public record SaleRequest(
         @NotNull(message = "is required")
@@ -39,10 +38,10 @@ public record SaleRequest(
         @PastOrPresent(message = "cannot be in the future")
         LocalDate soldAt,
 
-        @Size(max = 50, message = "can have at most 50 lots")
-        List<@NotNull(message = "must not be empty") Long> skipLotIds,
+        // Refused when not empty; see the class comment.
+        List<Long> skipLotIds,
 
-        @Size(max = 500, message = "must be at most 500 characters")
+        // Refused when not empty; see the class comment.
         String skipReason,
 
         // Refused when not empty; see the class comment.

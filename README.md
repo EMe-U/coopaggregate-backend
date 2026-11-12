@@ -288,7 +288,7 @@ ERD: see `docs/erd.png`.
 | POST | `/api/buyer-requests/{id}/buyer` | JWT | Turns the request into a buyer record, or links it to the buyer with the same phone |
 | POST | `/api/sales` | JWT | Records a sale of a grade, first in first out by lot, and credits each portion's member (see Sales). `201` when new, `200` when the same `clientUuid` was already recorded |
 | POST | `/api/sales/orders` | JWT | One buyer order for several grades (each once), one sale per grade. Same rules and status codes |
-| GET | `/api/grades/{id}/sale-preview?quantityKg=&pricePerKg=&skipLots=` | JWT | The portions a sale would use and what each member would be credited. Saves nothing |
+| GET | `/api/grades/{id}/sale-preview?quantityKg=&pricePerKg=` | JWT | The portions a sale would use, oldest lot first, and what each member would be credited. Saves nothing. Lots cannot be skipped: `skipLots` is a `400` |
 | GET | `/api/grades/{id}/batches?page=0&size=20` | JWT | The grade's batches that still have kg, oldest delivery first, each with its lots |
 | GET | `/api/members/{id}/batches?status=all&page=0&size=20` | JWT | A member's batches, newest first, with kg and money earned per batch. `status=unsold` keeps batches with kg left |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
@@ -1121,9 +1121,7 @@ Request body for `POST /api/sales`:
   "buyerId": 2,
   "quantityKg": 150,
   "pricePerKg": 300,
-  "soldAt": "2026-10-09",
-  "skipLotIds": [12, 15],
-  "skipReason": "The buyer wants the newer potatoes"
+  "soldAt": "2026-10-09"
 }
 ```
 
@@ -1133,16 +1131,18 @@ Request body for `POST /api/sales`:
 - With fewer sellable kg than asked, the answer is `400` "Only 250.00 kg of Big can be sold now, but
   300.00 kg were asked for. 40.00 kg are waiting for their members to confirm them." and nothing is
   saved.
-- **Preview:** `GET /api/grades/{id}/sale-preview?quantityKg=150&pricePerKg=300&skipLots=12,15`
+- **Preview:** `GET /api/grades/{id}/sale-preview?quantityKg=150&pricePerKg=300`
   shows the portions the sale would use (`batches`, one line per portion, with `lotPortionId`: a
   delivery split across two lots can appear twice) and what each member would be credited, and
-  saves nothing. `skipped` lists the skipped lots `{lotId, lotCode, sellableKg}`. The sale works it
-  out again under locks when it is recorded, so it can differ if stock changed in between.
-- **Skipping whole lots** is allowed with `skipLotIds` and a `skipReason` of 10 to 500 characters
-  (otherwise `400`). Only a lot of the grade with sellable kg that the sale would otherwise reach can
-  be skipped. Every skip is written to the audit log as `SALE_FIFO_SKIPPED` ("Sale SAL-7K2Q: skipped
-  lots A-2026-03. Reason: ..."). Single batches can no longer be skipped: `skipDeliveryIds` in a sale
-  and `skip` in the preview are refused with `400`.
+  saves nothing. The sale works it out again under locks when it is recorded, so it can differ if
+  stock changed in between.
+- **No lot can be skipped:** a sale always takes the oldest kg first. A request that asks to skip
+  is refused with `400` "Lots cannot be skipped: sales always use the oldest lot first." and nothing
+  is locked or saved. That is a non-empty `skipLotIds` or `skipDeliveryIds`, or a non-blank
+  `skipReason`, in a sale or in any item of an order, and any `skipLots` or `skip` value in the
+  preview. Empty or `null` skip fields ask for nothing and are accepted, so an older client that
+  always sends `"skipLotIds": []` keeps working. The preview no longer has a `skipped` list.
+  `SALE_FIFO_SKIPPED` is no longer written; it stays only for audit entries saved before.
 - **Credits:** each portion used credits its member. `grossRwf` is the portion's part of the sale
   amount and `deductionRwf` its part of the deduction (5 RWF per **sold** kg, the rate from
   Settings, rounded once for the whole sale), both split by kg, so the lines add up to exactly the
@@ -1171,7 +1171,7 @@ Request body for `POST /api/sales`:
   deadlock with a sale.
 - Sale codes look like `SAL-7K2Q`.
 - `POST /api/sales/orders` takes `{"clientUuid", "buyerId", "soldAt", "items": [{"gradeId",
-  "quantityKg", "pricePerKg", "skipLotIds", "skipReason"}]}`, each grade at most once, and
+  "quantityKg", "pricePerKg"}]}`, each grade at most once, and
   records one sale per item with an order code `ORD-7K2Q`. If any item fails, nothing is saved.
 - `GET /api/sales` filters: `search` matches part of the buyer name, a lot code (also those of a
   sale's batches) or sale code (ignoring case), and a number on its own also matches the sale id.
@@ -1369,7 +1369,7 @@ deliveries (deduction, no lot until confirmed, idempotency, ledger entry), fixed
 in confirmation order, splitting a delivery across lots, changing the lot size, lots of two sizes in one grade, shortfall and
 space left, stock per grade), losses (shared in proportion, exact rounding, sold kg carry none),
 batches, buyers and sales by grade (older lots first, then lots in fill order shared in proportion,
-awkward numbers that must add up exactly to the ledger entries, skipping whole lots with a reason,
+awkward numbers that must add up exactly to the ledger entries, requests to skip a lot refused,
 lock order, `SOLD` at 0, floor price warning, idempotency), reversals of deliveries in lots, sharing (the 10,000 kg
 example, rounding remainder, refused for lots with sales), payments (owed math,
 overpayment, MoMo reference, idempotency), member statements and identity verification (the key file

@@ -18,7 +18,6 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import com.coopaggregate.audit.AuditAction;
 import com.coopaggregate.batch.SaleAllocation;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.lot.LotStatus;
@@ -161,33 +160,15 @@ class SaleOrderServiceTest {
     }
 
     @Test
-    void aSkipInOneItemIsRecordedWithTheSaleCode() {
-        f.batch(9L, f.fixedLot(20L, "B-2026-02", f.small, LotStatus.FULL), f.bosco, "2026-10-04T08:00:00Z", "100.00");
-        f.batch(10L, f.lots.get(20L), f.alice, "2026-10-04T09:00:00Z", "100.00");
+    void askingToSkipALotInOneItemRefusesTheWholeOrderBeforeAnythingIsLocked() {
         SaleOrderRequest request = new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(
                 item(1L, "100.00", 300L),
                 new SaleOrderRequest.Item(2L, new BigDecimal("150.00"), 200L, List.of(5L),
                         "The buyer wants the second lot", null)));
 
-        SaleOrderResponse order = service.recordOrder(request, f.manager).order();
+        BadRequestException e = assertThrows(BadRequestException.class, () -> service.recordOrder(request, f.manager));
 
-        // Lot B-2026-01 is passed over; the fixed-size lot is shared: 75 kg from each of its two batches.
-        assertEquals(List.of(9L, 10L), order.sales().get(1).batches().stream()
-                .map(SaleResponse.BatchLine::deliveryId).toList());
-        assertEquals(1, f.audits.size());
-        assertEquals(AuditAction.SALE_FIFO_SKIPPED, f.audits.get(0).getAction());
-        assertEquals("Sale " + order.sales().get(1).saleCode() + ": skipped lots B-2026-01. Reason: The buyer wants the "
-                + "second lot", f.audits.get(0).getDetails());
-    }
-
-    @Test
-    void aSkipWithoutAReasonSavesNothingAndLocksNothing() {
-        SaleOrderRequest request = new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(
-                item(1L, "100.00", 300L),
-                new SaleOrderRequest.Item(2L, new BigDecimal("150.00"), 200L, List.of(5L), "short", null)));
-
-        assertThrows(BadRequestException.class, () -> service.recordOrder(request, f.manager));
-
+        assertEquals("Lots cannot be skipped: sales always use the oldest lot first.", e.getMessage());
         assertTrue(f.calls.isEmpty());
         assertNothingSaved();
     }
@@ -218,7 +199,6 @@ class SaleOrderServiceTest {
         verify(f.saleRepository, never()).save(any());
         assertTrue(f.savedAllocations.isEmpty());
         assertTrue(f.ledger.isEmpty());
-        assertTrue(f.audits.isEmpty());
     }
 
     private static SaleOrderRequest order(SaleOrderRequest.Item... items) {

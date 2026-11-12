@@ -67,7 +67,7 @@ class SalePreviewServiceTest {
 
     @Test
     void previewShowsTheBatchesUsedOldestFirstAndEachMembersCredit() {
-        SalePreviewResponse preview = service.preview(1L, new BigDecimal("150.00"), 300L, null);
+        SalePreviewResponse preview = service.preview(1L, new BigDecimal("150.00"), 300L);
 
         assertTrue(preview.enough());
         assertNull(preview.message());
@@ -89,7 +89,7 @@ class SalePreviewServiceTest {
 
     @Test
     void notEnoughKgIsShownNotRefused() {
-        SalePreviewResponse preview = service.preview(1L, new BigDecimal("400.00"), 300L, List.of());
+        SalePreviewResponse preview = service.preview(1L, new BigDecimal("400.00"), 300L);
 
         assertFalse(preview.enough());
         assertEquals("Only 300.00 kg of Big can be sold now, but 400.00 kg were asked for. 80.00 kg are waiting for "
@@ -98,51 +98,42 @@ class SalePreviewServiceTest {
     }
 
     @Test
-    void skippedLotsAreListedWithTheirSellableKg() {
-        SalePreviewResponse preview = service.preview(1L, new BigDecimal("150.00"), 300L, List.of(3L));
-
-        assertEquals(List.of(43L), preview.batches().stream().map(SalePreviewResponse.Line::deliveryId).toList());
-        assertEquals(List.of(new SalePreviewResponse.Skipped(3L, "A-2026-01", new BigDecimal("100.00"))),
-                preview.skipped());
-    }
-
-    @Test
     void aPriceBelowTheGradesFloorIsFlagged() {
         grade.setFloorPricePerKg(320L);
 
-        assertTrue(service.preview(1L, new BigDecimal("10.00"), 300L, null).belowFloorPrice());
-        assertFalse(service.preview(1L, new BigDecimal("10.00"), 320L, null).belowFloorPrice());
+        assertTrue(service.preview(1L, new BigDecimal("10.00"), 300L).belowFloorPrice());
+        assertFalse(service.preview(1L, new BigDecimal("10.00"), 320L).belowFloorPrice());
     }
 
     @Test
     void quantityAndPriceAreChecked() {
         assertEquals("quantityKg is required and must be more than 0.", assertThrows(BadRequestException.class,
-                () -> service.preview(1L, null, 300L, null)).getMessage());
+                () -> service.preview(1L, null, 300L)).getMessage());
         assertEquals("quantityKg is required and must be more than 0.", assertThrows(BadRequestException.class,
-                () -> service.preview(1L, new BigDecimal("0"), 300L, null)).getMessage());
+                () -> service.preview(1L, new BigDecimal("0"), 300L)).getMessage());
         assertEquals("quantityKg must have at most 2 decimals and 10 digits before the point.",
                 assertThrows(BadRequestException.class,
-                        () -> service.preview(1L, new BigDecimal("1.005"), 300L, null)).getMessage());
+                        () -> service.preview(1L, new BigDecimal("1.005"), 300L)).getMessage());
         assertEquals("pricePerKg is required and must be more than 0.", assertThrows(BadRequestException.class,
-                () -> service.preview(1L, BigDecimal.TEN, null, null)).getMessage());
+                () -> service.preview(1L, BigDecimal.TEN, null)).getMessage());
         assertEquals("pricePerKg is required and must be more than 0.", assertThrows(BadRequestException.class,
-                () -> service.preview(1L, BigDecimal.TEN, 0L, null)).getMessage());
+                () -> service.preview(1L, BigDecimal.TEN, 0L)).getMessage());
         verify(lotPortionRepository, never()).findSellable(anyLong());
     }
 
     @Test
     void trailingZerosAreNotDecimals() {
-        assertTrue(service.preview(1L, new BigDecimal("10.000"), 300L, null).enough());
+        assertTrue(service.preview(1L, new BigDecimal("10.000"), 300L).enough());
     }
 
     @Test
     void unknownGradeIsNotFound() {
-        assertThrows(EntityNotFoundException.class, () -> service.preview(99L, BigDecimal.TEN, 300L, null));
+        assertThrows(EntityNotFoundException.class, () -> service.preview(99L, BigDecimal.TEN, 300L));
     }
 
     @Test
     void previewOnlyReads() throws Exception {
-        service.preview(1L, new BigDecimal("150.00"), 300L, null);
+        service.preview(1L, new BigDecimal("150.00"), 300L);
 
         verify(lotPortionRepository).findSellable(1L);
         verifyNoMoreInteractions(lotPortionRepository);
@@ -150,7 +141,7 @@ class SalePreviewServiceTest {
         verify(batchRepository).gradeRemainingKgWithStatus(1L, ConfirmationStatus.DISPUTED);
         verifyNoMoreInteractions(batchRepository);
         assertTrue(SalePreviewService.class
-                .getMethod("preview", Long.class, BigDecimal.class, Long.class, List.class)
+                .getMethod("preview", Long.class, BigDecimal.class, Long.class)
                 .getAnnotation(Transactional.class).readOnly());
     }
 

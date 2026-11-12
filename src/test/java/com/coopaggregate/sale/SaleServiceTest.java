@@ -32,7 +32,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import com.coopaggregate.audit.AuditAction;
 import com.coopaggregate.batch.BatchAllocator;
 import com.coopaggregate.batch.LossAllocation;
 import com.coopaggregate.batch.LossAllocationRepository;
@@ -138,9 +137,9 @@ class SaleServiceTest {
     @Test
     void aSaleOfAnUnknownGradeOrBuyerIs400AndSavesNothing() {
         assertEquals("Grade 99 does not exist.", assertThrows(BadRequestException.class,
-                () -> service.record(request(99L, 2L, "10.00", 300L, null, null), f.manager)).getMessage());
+                () -> service.record(request(99L, 2L, "10.00", 300L), f.manager)).getMessage());
         assertEquals("Buyer 99 does not exist.", assertThrows(BadRequestException.class,
-                () -> service.record(request(1L, 99L, "10.00", 300L, null, null), f.manager)).getMessage());
+                () -> service.record(request(1L, 99L, "10.00", 300L), f.manager)).getMessage());
         assertNothingSaved();
     }
 
@@ -287,71 +286,43 @@ class SaleServiceTest {
         assertEquals(List.of("grade:1"), f.calls);
     }
 
-    // --- Skipping whole lots ---
+    // --- No lot is ever passed over ---
 
     @Test
-    void aSkippedLotIsPassedOverAndTheSkipIsRecordedInTheAuditLog() {
-        SaleResponse sale = service.record(request(1L, 2L, "120.00", 300L, List.of(4L),
-                "  Customer wants potatoes from lot A-1 only  "), f.manager).sale();
-
-        assertEquals(List.of(1L, 3L), sale.batches().stream().map(SaleResponse.BatchLine::deliveryId).toList());
-        assertEquals(BigDecimal.ZERO, f.deliveries.get(1).getSoldKg());
-        assertEquals(1, f.audits.size());
-        assertEquals(AuditAction.SALE_FIFO_SKIPPED, f.audits.get(0).getAction());
-        assertEquals("Sale " + sale.saleCode() + ": skipped lots A-2026-02. Reason: Customer wants potatoes from lot "
-                + "A-1 only", f.audits.get(0).getDetails());
-        assertNull(f.audits.get(0).getMember());
-    }
-
-    @Test
-    void singleBatchesCanNoLongerBeSkipped() {
+    void askingToSkipALotIsRefusedBeforeAnythingIsLockedOrSaved() {
         BadRequestException e = assertThrows(BadRequestException.class, () -> service.record(new SaleRequest(
-                CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, null, "Customer wants Alice's potatoes",
-                List.of(2L)), f.manager));
+                CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, List.of(4L),
+                "Customer wants potatoes from lot A-1 only", null), f.manager));
 
-        assertEquals("Single batches can no longer be skipped. Skip whole lots with skipLotIds.", e.getMessage());
-        assertTrue(f.calls.isEmpty());
-        assertNothingSaved();
-    }
-
-    @Test
-    void aSaleWithoutSkipsWritesNoAuditEntry() {
-        sell("120.00", 300L);
-
-        assertTrue(f.audits.isEmpty());
-    }
-
-    @Test
-    void skippingNeedsAReasonOf10To500Characters() {
-        String message = "A reason of 10 to 500 characters is needed to skip a lot.";
-        for (String reason : new String[] {null, "", "         ", "too short", "x".repeat(501)}) {
-            assertEquals(message, assertThrows(BadRequestException.class, () -> service.record(
-                    request(1L, 2L, "120.00", 300L, List.of(4L), reason), f.manager)).getMessage(),
-                    String.valueOf(reason));
-        }
-
-        // Refused before anything is locked or saved.
+        assertEquals("Lots cannot be skipped: sales always use the oldest lot first.", e.getMessage());
         assertTrue(f.calls.isEmpty());
         assertNothingSaved();
         assertEquals(BigDecimal.ZERO, f.deliveries.get(1).getSoldKg());
     }
 
     @Test
-    void aReasonWithoutSkipsIsIgnored() {
-        service.record(request(1L, 2L, "120.00", 300L, List.of(), "not needed"), f.manager);
-
-        assertTrue(f.audits.isEmpty());
+    void eachSkipFieldOnItsOwnIsRefused() {
+        SaleRequest[] requests = {
+                new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, List.of(4L), null, null),
+                new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, null, "Fresher ones", null),
+                new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, null, null, List.of(2L))};
+        for (SaleRequest request : requests) {
+            assertEquals("Lots cannot be skipped: sales always use the oldest lot first.",
+                    assertThrows(BadRequestException.class, () -> service.record(request, f.manager)).getMessage(),
+                    request.toString());
+        }
+        assertTrue(f.calls.isEmpty());
+        assertNothingSaved();
     }
 
     @Test
-    void aSkippedLotTheSaleWouldNotReachIsRefusedAndSavesNothing() {
-        BadRequestException e = assertThrows(BadRequestException.class, () -> service.record(
-                request(1L, 2L, "40.00", 300L, List.of(3L), "Wants the older potatoes"), f.manager));
+    void emptySkipFieldsAskForNothingAndTheSaleTakesTheOldestKgFirst() {
+        SaleResponse sale = service.record(new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null,
+                List.of(), "   ", List.of()), f.manager).sale();
 
-        assertEquals("Lot A-2026-01 would not be used by this sale, so it does not need to be skipped.",
-                e.getMessage());
-        assertNothingSaved();
-        assertTrue(f.audits.isEmpty());
+        // The same batches as a sale that sends no skip fields at all: lot A-2026-02 is not passed over.
+        assertEquals(List.of(2L, 1L), sale.batches().stream().map(SaleResponse.BatchLine::deliveryId).toList());
+        assertEquals(new BigDecimal("50.00"), f.deliveries.get(1).getSoldKg());
     }
 
     // --- Fixed-size lots ---
@@ -375,7 +346,7 @@ class SaleServiceTest {
         f.batch(34L, second, f.bosco, "2026-10-07T08:00:00Z", "60.00");
         f.batch(35L, third, f.alice, "2026-10-08T08:00:00Z", "20.00");
 
-        SaleResponse sale = service.record(request(2L, 2L, "150.00", 300L, null, null), f.manager).sale();
+        SaleResponse sale = service.record(request(2L, 2L, "150.00", 300L), f.manager).sale();
 
         // Lot B-2026-02 (100 kg) whole, then 50 of the 100 kg of B-2026-03 in proportion: 10, 30 and 60 kg left give
         // 5, 15 and 30 kg. B-2026-04 is not reached.
@@ -396,7 +367,7 @@ class SaleServiceTest {
         fixedLotsOfSmall();
         Lot second = f.lots.get(21L);
 
-        service.record(request(2L, 2L, "140.00", 300L, null, null), f.manager);
+        service.record(request(2L, 2L, "140.00", 300L), f.manager);
 
         assertEquals(LotStatus.SOLD, f.lots.get(20L).getStatus());
         assertEquals(LotStatus.FILLING, second.getStatus(), "a lot being filled is never marked sold");
@@ -422,25 +393,13 @@ class SaleServiceTest {
         disputed.dispute(com.coopaggregate.delivery.DisputeReason.WRONG_KG, null, java.time.Instant.now());
 
         // Delivery 31 (60 kg) is disputed: of the 140 kg in the two lots, 80 can be sold.
-        assertThrows(BadRequestException.class, () -> service.record(request(2L, 2L, "80.01", 300L, null, null),
+        assertThrows(BadRequestException.class, () -> service.record(request(2L, 2L, "80.01", 300L),
                 f.manager));
-        SaleResponse sale = service.record(request(2L, 2L, "80.00", 300L, null, null), f.manager).sale();
+        SaleResponse sale = service.record(request(2L, 2L, "80.00", 300L), f.manager).sale();
 
         assertTrue(sale.batches().stream().noneMatch(line -> line.deliveryId().equals(disputed.getId())));
         assertEquals(BigDecimal.ZERO, disputed.getSoldKg());
         assertEquals(new BigDecimal("60.00"), f.lotPortionRepository.remainingKg(20L), "its 60 kg are still in B-2026-02");
-    }
-
-    @Test
-    void skippingAFixedSizeLotPassesOverAllOfItsPortions() {
-        fixedLotsOfSmall();
-
-        SaleResponse sale = service.record(request(2L, 2L, "30.00", 300L, List.of(20L), "Buyer wants the newer lot"),
-                f.manager).sale();
-
-        assertTrue(sale.batches().stream().allMatch(line -> "B-2026-03".equals(line.lotCode())));
-        assertEquals("Sale " + sale.saleCode() + ": skipped lots B-2026-02. Reason: Buyer wants the newer lot",
-                f.audits.get(0).getDetails());
     }
 
     @Test
@@ -451,7 +410,7 @@ class SaleServiceTest {
             f.batch(50L + i, lot, i % 2 == 0 ? f.alice : f.bosco, "2026-10-0" + (1 + i) + "T08:00:00Z", kilos[i]);
         }
 
-        SaleResponse sale = service.record(request(2L, 2L, "61.37", 293L, null, null), f.manager).sale();
+        SaleResponse sale = service.record(request(2L, 2L, "61.37", 293L), f.manager).sale();
 
         assertEquals(0, new BigDecimal("61.37").compareTo(sale.batches().stream().map(SaleResponse.BatchLine::kg)
                 .reduce(BigDecimal.ZERO, BigDecimal::add)));
@@ -661,16 +620,14 @@ class SaleServiceTest {
         verify(f.saleRepository, never()).save(any());
         assertTrue(f.savedAllocations.isEmpty());
         assertTrue(f.ledger.isEmpty());
-        assertTrue(f.audits.isEmpty());
     }
 
     private RecordedSale sell(String quantityKg, long pricePerKg) {
-        return service.record(request(1L, 2L, quantityKg, pricePerKg, null, null), f.manager);
+        return service.record(request(1L, 2L, quantityKg, pricePerKg), f.manager);
     }
 
-    private static SaleRequest request(Long gradeId, Long buyerId, String quantityKg, long pricePerKg,
-                                       List<Long> skipLotIds, String skipReason) {
+    private static SaleRequest request(Long gradeId, Long buyerId, String quantityKg, long pricePerKg) {
         return new SaleRequest(CLIENT_UUID, gradeId, buyerId, new BigDecimal(quantityKg), pricePerKg, null,
-                skipLotIds, skipReason, null);
+                null, null, null);
     }
 }
