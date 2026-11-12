@@ -397,12 +397,12 @@ class DeliveryServiceTest {
         Path<Object> reversedAt = root.get("reversedAt");
 
         CriteriaBuilder defaultList = mock(CriteriaBuilder.class);
-        DeliveryService.matching(null, null, null, null, null, false, null, null)
+        DeliveryService.matching(null, null, null, null, null, false, null, null, null)
                 .toPredicate(root, mock(CriteriaQuery.class), defaultList);
         verify(defaultList).isNull(reversedAt);
 
         CriteriaBuilder withReversed = mock(CriteriaBuilder.class);
-        DeliveryService.matching(null, null, null, null, null, true, null, null)
+        DeliveryService.matching(null, null, null, null, null, true, null, null, null)
                 .toPredicate(root, mock(CriteriaQuery.class), withReversed);
         verify(withReversed, never()).isNull(reversedAt);
     }
@@ -413,7 +413,7 @@ class DeliveryServiceTest {
     void theGradeFilterKeepsOnlyDeliveriesOfThatGrade() {
         Criteria criteria = new Criteria();
 
-        DeliveryService.matching(null, null, 2L, null, null, true, null, null)
+        DeliveryService.matching(null, null, 2L, null, null, true, null, null, null)
                 .toPredicate(criteria.root, criteria.query, criteria.cb);
 
         verify(criteria.root).get("grade");
@@ -428,7 +428,7 @@ class DeliveryServiceTest {
         for (boolean includeReversed : new boolean[] {false, true}) {
             Criteria criteria = new Criteria();
 
-            DeliveryService.matching(null, null, null, null, null, includeReversed, status, null)
+            DeliveryService.matching(null, null, null, null, null, includeReversed, status, null, null)
                     .toPredicate(criteria.root, criteria.query, criteria.cb);
 
             verify(criteria.root).get("confirmationStatus");
@@ -443,7 +443,7 @@ class DeliveryServiceTest {
         for (boolean includeReversed : new boolean[] {false, true}) {
             Criteria criteria = new Criteria();
 
-            DeliveryService.matching(null, null, null, null, null, includeReversed, DeliveryListStatus.REVERSED, null)
+            DeliveryService.matching(null, null, null, null, null, includeReversed, DeliveryListStatus.REVERSED, null, null)
                     .toPredicate(criteria.root, criteria.query, criteria.cb);
 
             verify(criteria.root).get("reversedAt");
@@ -457,7 +457,7 @@ class DeliveryServiceTest {
     void searchLooksAtTheMembersNameAndNumberAndTheReceiptCodeIgnoringCase() {
         Criteria criteria = new Criteria();
 
-        DeliveryService.matching(null, null, null, null, null, false, null, "  Uwi M-00 ")
+        DeliveryService.matching(null, null, null, null, null, false, null, "  Uwi M-00 ", null)
                 .toPredicate(criteria.root, criteria.query, criteria.cb);
 
         verify(criteria.root, times(2)).get("member");
@@ -474,7 +474,7 @@ class DeliveryServiceTest {
     void aBlankSearchIsIgnored(String search) {
         Criteria criteria = new Criteria();
 
-        DeliveryService.matching(null, null, null, null, null, false, null, search)
+        DeliveryService.matching(null, null, null, null, null, false, null, search, null)
                 .toPredicate(criteria.root, criteria.query, criteria.cb);
 
         verify(criteria.cb, never()).like(any(Expression.class), anyString());
@@ -487,7 +487,7 @@ class DeliveryServiceTest {
         ArgumentCaptor<Predicate[]> combined = ArgumentCaptor.forClass(Predicate[].class);
 
         DeliveryService.matching(5L, null, 2L, java.time.LocalDate.of(2026, 11, 1), java.time.LocalDate.of(2026, 11, 12),
-                false, DeliveryListStatus.CONFIRMED, "rct").toPredicate(criteria.root, criteria.query, criteria.cb);
+                false, DeliveryListStatus.CONFIRMED, "rct", null).toPredicate(criteria.root, criteria.query, criteria.cb);
 
         // status (2) + member + grade + search + from + to
         verify(criteria.cb).and(combined.capture());
@@ -495,6 +495,41 @@ class DeliveryServiceTest {
         verify(criteria.cb).equal(criteria.path, 5L);
         verify(criteria.cb).equal(criteria.path, 2L);
         verify(criteria.cb).equal(criteria.path, ConfirmationStatus.CONFIRMED);
+    }
+
+    @Test
+    void createdBeforeKeepsOnlyDeliveriesSavedStrictlyBeforeThatInstant() {
+        Criteria criteria = new Criteria();
+        Instant cutoff = Instant.parse("2026-11-10T09:00:00Z");
+
+        DeliveryService.matching(null, null, null, null, null, true, null, null, cutoff)
+                .toPredicate(criteria.root, criteria.query, criteria.cb);
+
+        verify(criteria.root).get("createdAt");
+        verify(criteria.cb).lessThan(criteria.instantPath(), cutoff);
+        verify(criteria.cb, never()).lessThanOrEqualTo(any(Expression.class), any(Instant.class));
+        verify(criteria.root, never()).get("deliveredAt");
+        verify(criteria.cb, never()).isNull(any());
+    }
+
+    @Test
+    void pendingCreatedBeforeIsTheSameRuleAsTheDashboardCountOfDeliveriesPendingOver48Hours() {
+        Criteria criteria = new Criteria();
+        ArgumentCaptor<Predicate[]> combined = ArgumentCaptor.forClass(Predicate[].class);
+        Instant cutoff = Instant.now().minus(Delivery.PENDING_TOO_LONG);
+
+        DeliveryService.matching(null, null, null, null, null, false, DeliveryListStatus.PENDING, null, cutoff)
+                .toPredicate(criteria.root, criteria.query, criteria.cb);
+
+        // countByConfirmationStatusAndReversedAtIsNullAndCreatedAtBefore(PENDING, now - 48h), and nothing else.
+        verify(criteria.cb).and(combined.capture());
+        assertEquals(3, combined.getValue().length);
+        verify(criteria.cb).equal(criteria.path, ConfirmationStatus.PENDING);
+        verify(criteria.cb).isNull(criteria.path);
+        verify(criteria.cb).lessThan(criteria.instantPath(), cutoff);
+        verify(criteria.root).get("confirmationStatus");
+        verify(criteria.root).get("reversedAt");
+        verify(criteria.root).get("createdAt");
     }
 
     @Test
@@ -541,7 +576,7 @@ class DeliveryServiceTest {
         ArgumentCaptor<org.springframework.data.domain.Pageable> pageable =
                 ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
 
-        service.list(5L, null, 2L, null, null, false, DeliveryListStatus.DISPUTED, "rct", 0, 500);
+        service.list(5L, null, 2L, null, null, false, DeliveryListStatus.DISPUTED, "rct", null, 0, 500);
 
         verify(deliveryRepository).findAll(any(org.springframework.data.jpa.domain.Specification.class),
                 pageable.capture());
@@ -567,6 +602,12 @@ class DeliveryServiceTest {
             when(cb.isNotNull(any())).thenReturn(mock(Predicate.class));
             when(cb.greaterThanOrEqualTo(any(Expression.class), any(Instant.class))).thenReturn(mock(Predicate.class));
             when(cb.lessThan(any(Expression.class), any(Instant.class))).thenReturn(mock(Predicate.class));
+        }
+
+        // The same path mock, typed for comparing with an Instant.
+        @SuppressWarnings("rawtypes")
+        Expression<Instant> instantPath() {
+            return (Expression) path;
         }
     }
 

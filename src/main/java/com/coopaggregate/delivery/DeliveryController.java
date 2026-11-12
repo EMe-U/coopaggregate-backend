@@ -1,5 +1,6 @@
 package com.coopaggregate.delivery;
 
+import java.time.Instant;
 import java.time.LocalDate;
 
 import org.springframework.format.annotation.DateTimeFormat;
@@ -59,10 +60,14 @@ public class DeliveryController {
             @Parameter(description = "Part of the member's name, the member number or the receipt code "
                     + "(not case-sensitive)")
             @RequestParam(required = false) String search,
+            @Parameter(description = "Only deliveries saved on the server before this instant (ISO date-time, "
+                    + "e.g. 2026-11-10T09:00:00Z). With status=PENDING and now minus 48 hours it lists the "
+                    + "deliveries the dashboard counts as pending over 48 hours")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant createdBefore,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         return deliveryService.list(memberId, lotId, gradeId, from, to, includeReversed,
-                DeliveryListStatus.parse(status), search, page, size);
+                DeliveryListStatus.parse(status), search, createdBefore, page, size);
     }
 
     @GetMapping("/{id}")

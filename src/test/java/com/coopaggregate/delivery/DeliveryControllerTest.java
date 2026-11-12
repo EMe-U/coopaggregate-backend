@@ -264,7 +264,7 @@ class DeliveryControllerTest {
                         .param("search", "Uwi").param("includeReversed", "true").param("size", "100"))
                 .andExpect(status().isOk());
 
-        verify(deliveryService).list(5L, null, 2L, null, null, true, DeliveryListStatus.DISPUTED, "Uwi", 0, 100);
+        verify(deliveryService).list(5L, null, 2L, null, null, true, DeliveryListStatus.DISPUTED, "Uwi", null, 0, 100);
     }
 
     @Test
@@ -272,7 +272,49 @@ class DeliveryControllerTest {
         mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken))
                 .andExpect(status().isOk());
 
-        verify(deliveryService).list(null, null, null, null, null, false, null, null, 0, 20);
+        verify(deliveryService).list(null, null, null, null, null, false, null, null, null, 0, 20);
+    }
+
+    @Test
+    void createdBeforeIsReadAsAnInstant() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .param("createdBefore", "2026-11-10T09:00:00Z"))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).list(null, null, null, null, null, false, null, null,
+                Instant.parse("2026-11-10T09:00:00Z"), 0, 20);
+    }
+
+    @Test
+    void createdBeforeWithAnOffsetIsTheSameInstant() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .param("createdBefore", "2026-11-10T11:00:00+02:00"))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).list(null, null, null, null, null, false, null, null,
+                Instant.parse("2026-11-10T09:00:00Z"), 0, 20);
+    }
+
+    @Test
+    void createdBeforeCombinedWithPendingListsTheDeliveriesWaitingTooLong() throws Exception {
+        mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .param("status", "PENDING").param("createdBefore", "2026-11-10T09:00:00Z"))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).list(null, null, null, null, null, false, DeliveryListStatus.PENDING, null,
+                Instant.parse("2026-11-10T09:00:00Z"), 0, 20);
+    }
+
+    @Test
+    void anInvalidCreatedBeforeIsA400() throws Exception {
+        for (String value : new String[] {"yesterday", "2026-11-10", "2026-13-40T09:00:00Z"}) {
+            mockMvc.perform(get("/api/deliveries").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                            .param("createdBefore", value))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message")
+                            .value("The request is missing data or has a value in the wrong format."));
+        }
+        verifyNoInteractions(deliveryService);
     }
 
     @Test

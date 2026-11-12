@@ -141,11 +141,12 @@ public class DeliveryService {
     @Transactional(readOnly = true)
     public PageResponse<DeliveryResponse> list(Long memberId, Long lotId, Long gradeId, LocalDate from, LocalDate to,
                                                boolean includeReversed, DeliveryListStatus status, String search,
-                                               int page, int size) {
+                                               Instant createdBefore, int page, int size) {
         PageRequest pageRequest = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE),
                 Sort.by(Sort.Direction.DESC, "deliveredAt", "id"));
         Page<Delivery> deliveries = deliveryRepository.findAll(
-                matching(memberId, lotId, gradeId, from, to, includeReversed, status, search), pageRequest);
+                matching(memberId, lotId, gradeId, from, to, includeReversed, status, search, createdBefore),
+                pageRequest);
         // The corrections and the lots of the whole page, in two queries.
         List<Long> ids = deliveries.getContent().stream().map(Delivery::getId).toList();
         Map<Long, Long> correctedBy = ids.isEmpty() ? Map.of() : deliveryRepository.findByCorrectsIdIn(ids).stream()
@@ -520,7 +521,8 @@ public class DeliveryService {
     // from and to are whole days in Kigali time; to is inclusive. A status overrides includeReversed: REVERSED lists
     // only reversed deliveries, the other statuses only deliveries that are not reversed.
     static Specification<Delivery> matching(Long memberId, Long lotId, Long gradeId, LocalDate from, LocalDate to,
-                                            boolean includeReversed, DeliveryListStatus status, String search) {
+                                            boolean includeReversed, DeliveryListStatus status, String search,
+                                            Instant createdBefore) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (status == DeliveryListStatus.REVERSED) {
@@ -556,6 +558,10 @@ public class DeliveryService {
             if (from != null) {
                 Instant start = from.atStartOfDay(KigaliTime.ZONE).toInstant();
                 predicates.add(cb.greaterThanOrEqualTo(root.get("deliveredAt"), start));
+            }
+            if (createdBefore != null) {
+                // Strictly before, like the dashboard's count of deliveries pending over 48 hours.
+                predicates.add(cb.lessThan(root.get("createdAt"), createdBefore));
             }
             if (to != null) {
                 Instant end = to.plusDays(1).atStartOfDay(KigaliTime.ZONE).toInstant();
