@@ -3,6 +3,7 @@ package com.coopaggregate.payment;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -17,6 +18,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.batch.SaleAllocation;
 import com.coopaggregate.batch.SaleAllocationRepository;
+import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotQuantities;
@@ -112,10 +114,37 @@ class StatementServiceTest {
         StatementResponse statement = service.statement(1L);
 
         assertEquals(List.of(new StatementResponse.SaleCreditLine("SAL-7K2Q", LocalDate.of(2026, 10, 28), "RCT-AB12",
-                "A-2026-03", new BigDecimal("100.00"), 300L, 30_000L, 500L, 29_500L)), statement.saleCredits());
+                "A-2026-03", new BigDecimal("100.00"), 300L, 30_000L, 500L, 29_500L, null)), statement.saleCredits());
         assertEquals(1_506_000L, statement.grossShareRwf());
         assertEquals(25_500L, statement.deductionsRwf());
         assertEquals(480_500L, statement.owedRwf());
+    }
+
+    @Test
+    void eachSaleCreditNamesTheBuyerOfItsSaleAndNullWhenThereIsNone() {
+        SaleAllocation withBuyer = credit("SAL-7K2Q", "RCT-AB12", "A-2026-03", "100.00", 300L, 30_000L, 500L);
+        Buyer buyer = new Buyer();
+        buyer.setName("Musanze Fresh Ltd");
+        withBuyer.getSale().setBuyer(buyer);
+        SaleAllocation withoutBuyer = credit("SAL-9MNP", "RCT-CD34", "A-2026-04", "50.00", 300L, 15_000L, 250L);
+        when(lotShareRepository.findByMemberId(1L)).thenReturn(List.of());
+        when(lotShareRepository.findLotsOfMember(1L)).thenReturn(List.of());
+        when(saleAllocationRepository.findCreditsOfMember(1L)).thenReturn(List.of(withBuyer, withoutBuyer));
+        when(paymentRepository.findByMemberIdAndReversedAtIsNullOrderByPaymentDateDescIdDesc(1L)).thenReturn(List.of());
+
+        StatementResponse statement = service.statement(1L);
+
+        assertEquals("Musanze Fresh Ltd", statement.saleCredits().get(0).buyerName());
+        assertEquals(null, statement.saleCredits().get(1).buyerName());
+    }
+
+    @Test
+    void theBuyerIsFetchedWithTheCreditsSoTheStatementNeedsNoExtraQuery() throws NoSuchMethodException {
+        org.springframework.data.jpa.repository.EntityGraph graph = SaleAllocationRepository.class
+                .getMethod("findCreditsOfMember", Long.class)
+                .getAnnotation(org.springframework.data.jpa.repository.EntityGraph.class);
+
+        assertTrue(List.of(graph.attributePaths()).contains("sale.buyer"));
     }
 
     @Test

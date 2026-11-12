@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -38,21 +39,26 @@ import jakarta.persistence.criteria.Predicate;
 public class PaymentService {
 
     private static final int MAX_PAGE_SIZE = 100;
+    // The member reads the reason in the reversal SMS, which must stay short.
+    static final int MAX_REVERSAL_REASON = 100;
 
     private final ProducePaymentRepository paymentRepository;
     private final MemberRepository memberRepository;
     private final LedgerService ledgerService;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final SaleAllocationRepository saleAllocationRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     public PaymentService(ProducePaymentRepository paymentRepository, MemberRepository memberRepository,
                           LedgerService ledgerService, LedgerEntryRepository ledgerEntryRepository,
-                          SaleAllocationRepository saleAllocationRepository) {
+                          SaleAllocationRepository saleAllocationRepository,
+                          ApplicationEventPublisher eventPublisher) {
         this.paymentRepository = paymentRepository;
         this.memberRepository = memberRepository;
         this.ledgerService = ledgerService;
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.saleAllocationRepository = saleAllocationRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -93,6 +99,8 @@ public class PaymentService {
         ledgerService.record(LedgerEntryType.PAYMENT, "PAYMENT", saved.getId(), null, saved.getAmount(),
                 "Payment " + saved.getPaymentCode() + " by " + saved.getMethod()
                         + (reference != null ? " " + reference : ""), manager);
+        // The member's SMS is sent after the commit; a payment sent again with the same client UUID gets none.
+        eventPublisher.publishEvent(new PaymentRecordedEvent(saved.getId()));
         return new RecordedPayment(PaymentResponse.from(saved), true);
     }
 
@@ -104,9 +112,20 @@ public class PaymentService {
                 .map(PaymentResponse::from));
     }
 
-    /** Cancels a payment: it gets a REVERSAL ledger entry and the member is owed that amount again. */
+    /**
+     * Cancels a payment: it gets a REVERSAL ledger entry and the member is owed that amount again. The reason is
+     * required and at most 100 characters: the member gets it in an SMS, with the amount and the new balance.
+     */
     @Transactional
     public ProducePayment reverse(Long paymentId, String reason, Manager manager) {
+        String trimmedReason = reason == null ? "" : reason.trim();
+        if (trimmedReason.isEmpty()) {
+            throw new BadRequestException("A reason is required to reverse a payment.");
+        }
+        if (trimmedReason.length() > MAX_REVERSAL_REASON) {
+            throw new BadRequestException("The reason can be at most " + MAX_REVERSAL_REASON
+                    + " characters: the member reads it in an SMS.");
+        }
         // The same member lock as recording a payment, so a reversal and a new payment cannot overlap.
         Long memberId = paymentRepository.findMemberIdById(paymentId)
                 .orElseThrow(() -> new EntityNotFoundException("Payment " + paymentId + " does not exist."));
@@ -121,7 +140,8 @@ public class PaymentService {
                         LedgerEntryType.PAYMENT, "PAYMENT", payment.getId())
                 .orElseThrow(() -> new IllegalStateException(
                         "Payment " + payment.getPaymentCode() + " has no ledger entry to reverse."));
-        payment.markReversed(ledgerService.reverse(entry.getId(), reason, manager));
+        payment.markReversed(ledgerService.reverse(entry.getId(), trimmedReason, manager));
+        eventPublisher.publishEvent(new PaymentReversedEvent(payment.getId()));
         return payment;
     }
 

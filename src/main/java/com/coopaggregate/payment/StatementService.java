@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coopaggregate.batch.SaleAllocation;
+import com.coopaggregate.buyer.Buyer;
 import com.coopaggregate.batch.SaleAllocationRepository;
 import com.coopaggregate.lot.LotQuantities;
 import com.coopaggregate.lot.LotRepository;
@@ -77,10 +78,11 @@ public class StatementService {
     }
 
     private static StatementResponse.SaleCreditLine creditLine(SaleAllocation credit) {
+        Buyer buyer = credit.getSale().getBuyer();
         return new StatementResponse.SaleCreditLine(credit.getSale().getSaleCode(), credit.getSale().getSaleDate(),
                 credit.getDelivery().getReceiptCode(), credit.lot() == null ? null : credit.lot().getLotCode(),
                 credit.getQuantityKg(), credit.getSale().getPricePerKg(), credit.getGrossRwf(),
-                credit.getDeductionRwf(), credit.netRwf());
+                credit.getDeductionRwf(), credit.netRwf(), buyer == null ? null : buyer.getName());
     }
 
     // A shared lot shows the saved share; any other lot shows the current kilograms and no amount yet.

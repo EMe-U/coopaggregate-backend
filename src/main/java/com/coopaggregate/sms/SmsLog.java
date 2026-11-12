@@ -6,6 +6,7 @@ import org.hibernate.annotations.CreationTimestamp;
 
 import com.coopaggregate.delivery.Delivery;
 import com.coopaggregate.member.Member;
+import com.coopaggregate.payment.ProducePayment;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -29,6 +30,10 @@ public class SmsLog {
 
     @ManyToOne(fetch = FetchType.LAZY)
     private Delivery delivery;
+
+    // Set for PAYMENT and PAYMENT_REVERSED messages only.
+    @ManyToOne(fetch = FetchType.LAZY)
+    private ProducePayment payment;
 
     private String phone;
 
@@ -66,6 +71,14 @@ public class SmsLog {
 
     public void setMember(Member member) {
         this.member = member;
+    }
+
+    public ProducePayment getPayment() {
+        return payment;
+    }
+
+    public void setPayment(ProducePayment payment) {
+        this.payment = payment;
     }
 
     public Delivery getDelivery() {

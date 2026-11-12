@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.common.KigaliTime;
@@ -46,6 +47,7 @@ class PaymentServiceTest {
     private LedgerService ledgerService;
     private LedgerEntryRepository ledgerEntryRepository;
     private SaleAllocationRepository saleAllocationRepository;
+    private ApplicationEventPublisher eventPublisher;
     private Member alice;
     private Manager manager;
     private PaymentService service;
@@ -72,8 +74,9 @@ class PaymentServiceTest {
         manager = new Manager();
         ledgerEntryRepository = mock(LedgerEntryRepository.class);
         saleAllocationRepository = mock(SaleAllocationRepository.class);
+        eventPublisher = mock(ApplicationEventPublisher.class);
         service = new PaymentService(paymentRepository, memberRepository, ledgerService, ledgerEntryRepository,
-                saleAllocationRepository);
+                saleAllocationRepository, eventPublisher);
     }
 
     @Test
@@ -312,6 +315,76 @@ class PaymentServiceTest {
         when(paymentRepository.findMemberIdById(99L)).thenReturn(Optional.empty());
 
         assertThrows(EntityNotFoundException.class, () -> service.reverse(99L, "Unknown", manager));
+    }
+
+    // --- The member's SMS (sent after the commit by PaymentSmsListener) and the reversal reason
+
+    @Test
+    void aNewPaymentAnnouncesItselfForTheMembersSms() {
+        pay(100_000L, PaymentMethod.CASH, null);
+
+        verify(eventPublisher).publishEvent(new PaymentRecordedEvent(9L));
+    }
+
+    @Test
+    void aPaymentSentAgainWithTheSameClientUuidGetsNoSecondSms() {
+        ProducePayment existing = new ProducePayment();
+        existing.setMember(alice);
+        existing.setPaymentCode("PAY-0003");
+        existing.setAmount(100_000L);
+        existing.setMethod(PaymentMethod.CASH);
+        when(paymentRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(existing));
+
+        assertFalse(pay(100_000L, PaymentMethod.CASH, null).created());
+
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void aRefusedPaymentGetsNoSms() {
+        assertThrows(BadRequestException.class, () -> pay(451_001L, PaymentMethod.CASH, null));
+
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void aReversalAnnouncesItselfForTheMembersSmsWithTheTrimmedReason() {
+        givenStoredPayment(200_000L);
+        when(ledgerService.reverse(55L, "Paid twice", manager)).thenReturn(reversalEntry("Paid twice"));
+
+        service.reverse(9L, "  Paid twice  ", manager);
+
+        verify(ledgerService).reverse(55L, "Paid twice", manager);
+        verify(eventPublisher).publishEvent(new PaymentReversedEvent(9L));
+    }
+
+    @Test
+    void aReversalNeedsAReason() {
+        givenStoredPayment(200_000L);
+
+        for (String reason : new String[] {null, "", "   "}) {
+            BadRequestException e = assertThrows(BadRequestException.class,
+                    () -> service.reverse(9L, reason, manager));
+            assertEquals("A reason is required to reverse a payment.", e.getMessage());
+        }
+        verify(ledgerService, never()).reverse(any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void theReasonIsAtMost100CharactersBecauseTheMemberReadsItInAnSms() {
+        givenStoredPayment(200_000L);
+
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> service.reverse(9L, "x".repeat(101), manager));
+
+        assertEquals("The reason can be at most 100 characters: the member reads it in an SMS.", e.getMessage());
+        verify(ledgerService, never()).reverse(any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+
+        String longest = "x".repeat(100);
+        when(ledgerService.reverse(55L, longest, manager)).thenReturn(reversalEntry(longest));
+        assertTrue(service.reverse(9L, longest, manager).isReversed());
     }
 
     private ProducePayment givenStoredPayment(long amount) {
