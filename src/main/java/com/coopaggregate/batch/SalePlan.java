@@ -14,16 +14,11 @@ public record SalePlan(
         BigDecimal sellableKg,
         boolean enough,
         long totalAmountRwf,
-        List<Line> lines,
-        List<SkippedLot> skipped) {
+        List<Line> lines) {
 
     /** kg taken from one portion: gross is its part of the sale amount, the deduction its part of the deduction. */
     public record Line(SellableBatch batch, BigDecimal kg, BigDecimal remainingAfterKg, long grossRwf,
                        long deductionRwf, long netRwf) {
-    }
-
-    /** A lot the manager chose not to sell from, with the sellable kg it has. */
-    public record SkippedLot(Long lotId, String lotCode, BigDecimal sellableKg) {
     }
 
     public long totalDeductionRwf() {
@@ -38,9 +33,6 @@ public record SalePlan(
     public String shortageMessage(String gradeName, BigDecimal waitingKg) {
         String message = "Only " + sellableKg.toPlainString() + " kg of " + gradeName + " can be sold now, but "
                 + quantityKg.toPlainString() + " kg were asked for.";
-        if (!skipped.isEmpty()) {
-            message += " Skipped lots are not counted.";
-        }
         if (waitingKg.signum() > 0) {
             message += " " + waitingKg.toPlainString() + " kg are waiting for their members to confirm them.";
         }

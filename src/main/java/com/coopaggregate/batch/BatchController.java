@@ -37,14 +37,19 @@ public class BatchController {
             @PathVariable Long gradeId,
             @RequestParam(required = false) BigDecimal quantityKg,
             @RequestParam(required = false) Long pricePerKg,
-            @Parameter(description = "Ids of whole lots to pass over, for example skipLots=12,15")
-            @RequestParam(required = false) List<Long> skipLots,
-            @Parameter(description = "No longer accepted: single batches cannot be skipped")
-            @RequestParam(required = false) List<Long> skip) {
-        if (skip != null && !skip.isEmpty()) {
-            throw new BadRequestException("Single batches can no longer be skipped. Skip whole lots with skipLots.");
+            @Parameter(description = "No longer accepted: lots cannot be skipped. Any id is a 400")
+            @RequestParam(required = false) List<String> skipLots,
+            @Parameter(description = "No longer accepted: batches cannot be skipped. Any id is a 400")
+            @RequestParam(required = false) List<String> skip) {
+        if (asksToSkip(skipLots) || asksToSkip(skip)) {
+            throw new BadRequestException(SalePlanner.NO_SKIPPING);
         }
-        return salePreviewService.preview(gradeId, quantityKg, pricePerKg, skipLots);
+        return salePreviewService.preview(gradeId, quantityKg, pricePerKg);
+    }
+
+    // An empty value (skipLots=) asks for nothing; any id, even one that is not a number, asks to skip.
+    private static boolean asksToSkip(List<String> ids) {
+        return ids != null && ids.stream().anyMatch(id -> id != null && !id.isBlank());
     }
 
     @GetMapping("/api/members/{memberId}/batches")

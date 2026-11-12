@@ -34,9 +34,8 @@ public class SalePreviewService {
         this.settingRepository = settingRepository;
     }
 
-    /** skipLotIds are whole lots to pass over. */
     @Transactional(readOnly = true)
-    public SalePreviewResponse preview(Long gradeId, BigDecimal quantityKg, Long pricePerKg, List<Long> skipLotIds) {
+    public SalePreviewResponse preview(Long gradeId, BigDecimal quantityKg, Long pricePerKg) {
         checkQuantity(quantityKg);
         if (pricePerKg == null || pricePerKg <= 0) {
             throw new BadRequestException("pricePerKg is required and must be more than 0.");
@@ -50,8 +49,7 @@ public class SalePreviewService {
         List<SellableBatch> sellable = lotPortionRepository.findSellable(gradeId).stream()
                 .map(SellableBatch::from)
                 .toList();
-        SalePlan plan = SalePlanner.plan(sellable, quantityKg, pricePerKg, deductionPerKg,
-                skipLotIds == null ? List.of() : skipLotIds);
+        SalePlan plan = SalePlanner.plan(sellable, quantityKg, pricePerKg, deductionPerKg);
         BigDecimal waitingKg = batchRepository.gradeRemainingKgWithStatus(gradeId, ConfirmationStatus.PENDING);
         BigDecimal disputedKg = batchRepository.gradeRemainingKgWithStatus(gradeId, ConfirmationStatus.DISPUTED);
 
@@ -61,8 +59,7 @@ public class SalePreviewService {
                 waitingKg, disputedKg, plan.enough(),
                 plan.enough() ? null : plan.shortageMessage(grade.getName(), waitingKg),
                 plan.totalAmountRwf(), plan.totalDeductionRwf(), plan.totalNetRwf(),
-                plan.lines().stream().map(SalePreviewService::line).toList(),
-                plan.skipped().stream().map(SalePreviewService::skipped).toList());
+                plan.lines().stream().map(SalePreviewService::line).toList());
     }
 
     // The same limits as a sale's quantity: more than 0, at most 2 decimals and 10 digits before the point.
@@ -80,9 +77,5 @@ public class SalePreviewService {
         return new SalePreviewResponse.Line(batch.deliveryId(), batch.portionId(), batch.receiptCode(), batch.lotId(),
                 batch.lotCode(), batch.memberId(), batch.memberNumber(), batch.memberName(), batch.deliveredAt(),
                 line.kg(), line.remainingAfterKg(), line.grossRwf(), line.deductionRwf(), line.netRwf());
-    }
-
-    private static SalePreviewResponse.Skipped skipped(SalePlan.SkippedLot lot) {
-        return new SalePreviewResponse.Skipped(lot.lotId(), lot.lotCode(), lot.sellableKg());
     }
 }

@@ -19,8 +19,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.test.util.ReflectionTestUtils;
 
-import com.coopaggregate.audit.AuditLog;
-import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.batch.BatchRepository;
 import com.coopaggregate.batch.SaleAllocation;
 import com.coopaggregate.batch.SaleAllocationRepository;
@@ -68,7 +66,6 @@ class SaleTestFixture {
     final BatchRepository batchRepository = mock(BatchRepository.class);
     final SaleAllocationRepository saleAllocationRepository = mock(SaleAllocationRepository.class);
     final SettingRepository settingRepository = mock(SettingRepository.class);
-    final AuditLogRepository auditLogRepository = mock(AuditLogRepository.class);
 
     final Grade big = grade(1L, "Big");
     final Grade small = grade(2L, "Small");
@@ -87,7 +84,6 @@ class SaleTestFixture {
     final List<SaleAllocation> savedAllocations = new ArrayList<>();
     final List<SaleOrder> savedOrders = new ArrayList<>();
     final List<Ledgered> ledger = new ArrayList<>();
-    final List<AuditLog> audits = new ArrayList<>();
     /** What was locked and written, in order: grade:1, lot:3, portions, deliveries, ledger:SALE ... */
     final List<String> calls = new ArrayList<>();
 
@@ -179,14 +175,10 @@ class SaleTestFixture {
             calls.add("ledger:" + invocation.getArgument(0));
             return null;
         }).when(ledgerService).record(any(), any(), any(), any(), any(), any(), any());
-        when(auditLogRepository.save(any(AuditLog.class))).thenAnswer(invocation -> {
-            audits.add(invocation.getArgument(0));
-            return invocation.getArgument(0);
-        });
 
         service = new SaleService(saleRepository, saleOrderRepository, gradeRepository, lotRepository,
                 buyerRepository, ledgerService, batchRepository, saleAllocationRepository, settingRepository,
-                auditLogRepository, lotPortionRepository, deliveryRepository);
+                lotPortionRepository, deliveryRepository);
     }
 
     /**

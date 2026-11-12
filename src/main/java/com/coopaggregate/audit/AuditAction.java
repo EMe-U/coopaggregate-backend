@@ -21,7 +21,7 @@ public enum AuditAction {
     // Changes the manager makes to buyers' purchase requests. The details hold the request code, not personal data.
     BUYER_REQUEST_STATUS_CHANGED,
     BUYER_REQUEST_CONVERTED,
-    // A sale passed over the oldest batches. The details hold the sale code, the receipt codes and the reason.
+    // A sale passed over the oldest lots. No longer written (lots cannot be skipped); kept for the rows already saved.
     SALE_FIFO_SKIPPED,
     // The lot size setting changed. The details hold the old and new size and the reason.
     LOT_SIZE_CHANGED,

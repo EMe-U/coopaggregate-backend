@@ -25,9 +25,6 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.coopaggregate.audit.AuditAction;
-import com.coopaggregate.audit.AuditLog;
-import com.coopaggregate.audit.AuditLogRepository;
 import com.coopaggregate.batch.BatchRepository;
 import com.coopaggregate.batch.SaleAllocation;
 import com.coopaggregate.batch.SaleAllocationRepository;
@@ -74,8 +71,6 @@ import jakarta.persistence.criteria.Subquery;
 public class SaleService {
 
     private static final int MAX_PAGE_SIZE = 100;
-    private static final int MIN_SKIP_REASON = 10;
-    private static final int MAX_SKIP_REASON = 500;
 
     private final SaleRepository saleRepository;
     private final SaleOrderRepository saleOrderRepository;
@@ -86,7 +81,6 @@ public class SaleService {
     private final BatchRepository batchRepository;
     private final SaleAllocationRepository saleAllocationRepository;
     private final SettingRepository settingRepository;
-    private final AuditLogRepository auditLogRepository;
     private final LotPortionRepository lotPortionRepository;
     private final DeliveryRepository deliveryRepository;
 
@@ -94,8 +88,7 @@ public class SaleService {
                        GradeRepository gradeRepository, LotRepository lotRepository, BuyerRepository buyerRepository,
                        LedgerService ledgerService, BatchRepository batchRepository,
                        SaleAllocationRepository saleAllocationRepository, SettingRepository settingRepository,
-                       AuditLogRepository auditLogRepository, LotPortionRepository lotPortionRepository,
-                       DeliveryRepository deliveryRepository) {
+                       LotPortionRepository lotPortionRepository, DeliveryRepository deliveryRepository) {
         this.saleRepository = saleRepository;
         this.saleOrderRepository = saleOrderRepository;
         this.gradeRepository = gradeRepository;
@@ -105,14 +98,12 @@ public class SaleService {
         this.batchRepository = batchRepository;
         this.saleAllocationRepository = saleAllocationRepository;
         this.settingRepository = settingRepository;
-        this.auditLogRepository = auditLogRepository;
         this.lotPortionRepository = lotPortionRepository;
         this.deliveryRepository = deliveryRepository;
     }
 
     /** What one sale of one grade asks for. */
-    private record Wanted(Grade grade, BigDecimal quantityKg, long pricePerKg, List<Long> skipIds,
-                          String skipReason) {
+    private record Wanted(Grade grade, BigDecimal quantityKg, long pricePerKg) {
     }
 
     /** A sale worked out under the locks, with the locked portions it will take kg from. */
@@ -238,23 +229,18 @@ public class SaleService {
     }
 
     // Checks what can be checked without the database, before any lock is taken. The grade is added once locked.
+    // A sale always takes the oldest kg first, so asking to skip is refused. Empty skip fields ask for nothing.
     private static Wanted checkedWanted(BigDecimal quantityKg, Long pricePerKg, List<Long> skipLotIds,
                                         String skipReason, List<Long> skipDeliveryIds) {
-        if (skipDeliveryIds != null && !skipDeliveryIds.isEmpty()) {
-            throw new BadRequestException("Single batches can no longer be skipped. Skip whole lots with skipLotIds.");
+        if (skipLotIds != null && !skipLotIds.isEmpty() || skipReason != null && !skipReason.isBlank()
+                || skipDeliveryIds != null && !skipDeliveryIds.isEmpty()) {
+            throw new BadRequestException(SalePlanner.NO_SKIPPING);
         }
-        List<Long> skipIds = skipLotIds == null ? List.of() : skipLotIds;
-        String reason = skipReason == null ? null : skipReason.trim();
-        if (!skipIds.isEmpty() && (reason == null || reason.length() < MIN_SKIP_REASON
-                || reason.length() > MAX_SKIP_REASON)) {
-            throw new BadRequestException("A reason of " + MIN_SKIP_REASON + " to " + MAX_SKIP_REASON
-                    + " characters is needed to skip a lot.");
-        }
-        return new Wanted(null, quantityKg, pricePerKg, skipIds, skipIds.isEmpty() ? null : reason);
+        return new Wanted(null, quantityKg, pricePerKg);
     }
 
     private static Wanted withGrade(Wanted wanted, Grade grade) {
-        return new Wanted(grade, wanted.quantityKg(), wanted.pricePerKg(), wanted.skipIds(), wanted.skipReason());
+        return new Wanted(grade, wanted.quantityKg(), wanted.pricePerKg());
     }
 
     private Map<Long, Grade> lockGrades(List<Long> gradeIds) {
@@ -296,7 +282,7 @@ public class SaleService {
                     : lotPortionRepository.findSellable(gradeId);
             lockPortionsAndDeliveries(portions);
             SalePlan plan = SalePlanner.plan(portions.stream().map(SellableBatch::from).toList(), item.quantityKg(),
-                    item.pricePerKg(), deductionPerKg, item.skipIds());
+                    item.pricePerKg(), deductionPerKg);
             if (!plan.enough()) {
                 BigDecimal waitingKg = batchRepository.gradeRemainingKgWithStatus(gradeId, ConfirmationStatus.PENDING);
                 throw new BadRequestException(plan.shortageMessage(item.grade().getName(), waitingKg));
@@ -360,13 +346,6 @@ public class SaleService {
                     allocation.getQuantityKg(), allocation.netRwf(),
                     "Credit for sale " + saved.getSaleCode() + " from " + allocation.getDelivery().getReceiptCode(),
                     manager);
-        }
-
-        if (!plan.skipped().isEmpty()) {
-            auditLogRepository.save(AuditLog.of(AuditAction.SALE_FIFO_SKIPPED, null, manager,
-                    "Sale " + saved.getSaleCode() + ": skipped lots "
-                            + String.join(", ", plan.skipped().stream().map(SalePlan.SkippedLot::lotCode).toList())
-                            + ". Reason: " + wanted.skipReason()));
         }
         return saved;
     }
