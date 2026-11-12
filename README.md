@@ -1257,7 +1257,8 @@ Request body for `POST /api/payments`:
 `GET /api/members/{id}/statement` returns `grossShareRwf`, `deductionsRwf`, `paidRwf` and
 `owedRwf` (the first two add up lot shares and sale credits), the member's `payments` (newest
 first), `saleCredits` (for each: `saleCode`, `soldAt`, `receiptCode`, `lotCode`, `kg`,
-`pricePerKg`, `grossRwf`, `deductionRwf`, `netRwf`; `lotCode` is the lot the kg came from) and
+`pricePerKg`, `grossRwf`, `deductionRwf`, `netRwf`, `buyerName`; `lotCode` is the lot the kg came from,
+`buyerName` the sale's buyer, `null` when the sale has none) and
 `lotShares`: every lot from before fixed-size lots the member
 delivered to, newest first. A shared lot shows the saved kg, percent and `shareRwf`. A lot
 that is not shared yet shows its status (`OPEN`, `CLOSED` or `SOLD`), the current kg and

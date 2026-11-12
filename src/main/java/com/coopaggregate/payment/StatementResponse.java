@@ -40,7 +40,9 @@ public record StatementResponse(
             long pricePerKg,
             long grossRwf,
             long deductionRwf,
-            long netRwf) {
+            long netRwf,
+            // The sale's buyer; null when the sale has none.
+            String buyerName) {
     }
 
     public record PaymentLine(String paymentCode, LocalDate paidAt, long amountRwf, PaymentMethod method,

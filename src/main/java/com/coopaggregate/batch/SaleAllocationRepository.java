@@ -58,8 +58,8 @@ public interface SaleAllocationRepository extends JpaRepository<SaleAllocation, 
             """)
     List<BatchCredit> findCreditsOfBatches(Collection<Long> deliveryIds);
 
-    // Newest sale first, for the member's statement.
-    @EntityGraph(attributePaths = {"sale", "delivery", "delivery.lot"})
+    // Newest sale first, for the member's statement. The sale's buyer is fetched in the same query.
+    @EntityGraph(attributePaths = {"sale", "sale.buyer", "delivery", "delivery.lot"})
     @Query("""
             SELECT a FROM SaleAllocation a
             WHERE a.grossRwf IS NOT NULL AND a.delivery.member.id = :memberId
