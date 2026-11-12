@@ -26,6 +26,9 @@ public interface SaleRepository extends JpaRepository<Sale, Long>, JpaSpecificat
 
     List<Sale> findBySaleOrderIdOrderByIdAsc(Long saleOrderId);
 
+    @EntityGraph(attributePaths = {"grade", "saleOrder"})
+    List<Sale> findBySaleOrderIdInOrderByIdAsc(Collection<Long> saleOrderIds);
+
     @Override
     @EntityGraph(attributePaths = {"grade", "lot", "buyer", "saleOrder"})
     Page<Sale> findAll(Specification<Sale> spec, Pageable pageable);

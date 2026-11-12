@@ -301,6 +301,8 @@ ERD: see `docs/erd.png`.
 | GET | `/api/members/{id}/batches?status=all&page=0&size=20` | JWT | A member's batches, newest first, with kg and money earned per batch. `status=unsold` keeps batches with kg left |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
 | GET | `/api/sales/{id}` | JWT | One sale, the same shape as a row of the list, with each batch's member, kg, gross, deduction and net. `404` when it does not exist |
+| GET | `/api/buyer-payments?buyerId=&page=0&size=20` | JWT | Money in: one buyer payment per order, newest first (max 100 per page), with buyer, method, reference, total, the sale of each grade and what each farmer was credited, summed per farmer (see Buyer payments) |
+| GET | `/api/buyer-payments/{orderId}` | JWT | One buyer payment, the same as its row in the list. `404` when it does not exist |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
 | GET | `/api/lots/{id}/share-preview` | JWT | Older lot sharing (see Sharing): `409` for any lot that has sales, and while deliveries are pending or disputed |
 | POST | `/api/lots/{id}/share` | JWT | Older lot sharing: saves the shares and marks the lot `SHARED`. `409` for any lot that has sales |
@@ -1238,6 +1240,26 @@ saves it and sets the lot to `SHARED`.
   get 1,476,000 / 885,600 / 590,400 RWF.
 - Each member's share adds a `SHARE` ledger entry with the kilograms and the gross share.
 
+### Buyer payments
+
+Money in. A buyer always pays in full, and pays a whole order once, so each order is one buyer
+payment; a sale of one grade is an order of its own. `GET /api/buyer-payments` lists them newest
+first (by date, then id; max 100 per page; `buyerId` optional), and `GET /api/buyer-payments/{orderId}`
+returns one. Each has:
+
+- `orderId`, `orderCode`, `buyerId`, `buyerName`, `paidAt` (the sale date) and `createdAt`;
+- `method` and `reference`: `null` for orders saved before V42, shown as "not recorded";
+- `totalKg`, `totalAmountRwf` (what the buyer paid), `totalDeductionRwf` and `totalNetRwf`, so that
+  `totalAmountRwf` = `totalDeductionRwf` + `totalNetRwf`;
+- `sales`: one line per grade (`saleId`, `saleCode`, `gradeName`, `kg`, `pricePerKg`, `amountRwf`);
+- `farmers`: what each member was credited from the order, **one line per member** (their batches in
+  every grade added up), by name: `memberId`, `memberNumber`, `memberName`, `kg`, `grossRwf`,
+  `deductionRwf` (5 RWF per kg by default) and `netRwf`.
+
+A sale from before sales by grade credited its members through the lot share instead: those members
+have `kg` but `null` money, and the order's `totalDeductionRwf` and `totalNetRwf` are `null`. The
+batches of a whole page are loaded in two queries, not two per order.
+
 ### Payments
 
 A payment disburses to a member everything they are owed, never part of it, and not for one lot.
@@ -1398,9 +1420,11 @@ in confirmation order, splitting a delivery across lots, changing the lot size, 
 space left, stock per grade), losses (shared in proportion, exact rounding, sold kg carry none),
 batches, buyers and sales by grade (older lots first, then lots in fill order shared in proportion,
 awkward numbers that must add up exactly to the ledger entries, requests to skip a lot refused,
-lock order, `SOLD` at 0, floor price warning, idempotency), reversals of deliveries in lots, sharing (the 10,000 kg
-example, rounding remainder, refused for lots with sales), payments (owed math,
-overpayment, MoMo reference, idempotency), member statements and identity verification (the key file
+lock order, `SOLD` at 0, floor price warning, idempotency, the buyer's payment method and reference on the
+order, a sale of one grade saved as its own order), buyer payments (one per order, newest first, farmers summed
+over all their batches, older sales without a method or money, the V42 backfill), reversals of deliveries in
+lots, sharing (the 10,000 kg example, rounding remainder, refused for lots with sales), payments (owed math, only
+the whole balance can be disbursed, `OWED` and `SETTLED`, MoMo reference, idempotency), member statements and identity verification (the key file
 and startup checks, PKCE, the signed assertion, the token and userinfo checks with a fake eSignet, the claims
 request, the verified name and phone and their 30 minutes, one manager and one use per verification, cancelling,
 the error codes, and that nothing personal is logged or kept longer). What only the real eSignet can show is listed in Identity verification.
