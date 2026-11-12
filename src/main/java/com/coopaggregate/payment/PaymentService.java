@@ -205,7 +205,8 @@ public class PaymentService {
                 : paid == 0 ? BalanceStatus.UNPAID
                 : BalanceStatus.PART_PAID;
         return new BalancesResponse.MemberBalance(member.getId(), member.getFullName(), member.getMemberCode(),
-                member.getPhone(), shares.shareRwf(), shares.deductionRwf(), paid, balance, status);
+                member.getPhone(), shares.shareRwf(), shares.deductionRwf(), paid, balance, status,
+                SettlementStatus.of(balance));
     }
 
     private static String rwf(long amount) {

@@ -209,11 +209,14 @@ class PaymentServiceTest {
 
         assertEquals(List.of(
                 new BalancesResponse.MemberBalance(2L, "Bosco Habimana", "M-0002", "+250788000002",
-                        885_600L, 15_000L, 0L, 870_600L, BalanceStatus.UNPAID),
+                        885_600L, 15_000L, 0L, 870_600L, BalanceStatus.UNPAID,
+                        SettlementStatus.OWED),
                 new BalancesResponse.MemberBalance(1L, "Alice Uwase", "M-0001", "+250788000001",
-                        1_476_000L, 25_000L, 1_000_000L, 451_000L, BalanceStatus.PART_PAID),
+                        1_476_000L, 25_000L, 1_000_000L, 451_000L, BalanceStatus.PART_PAID,
+                        SettlementStatus.OWED),
                 new BalancesResponse.MemberBalance(3L, "Carine Mukamana", "M-0003", "+250788000003",
-                        590_400L, 10_000L, 580_400L, 0L, BalanceStatus.PAID)), balances.members());
+                        590_400L, 10_000L, 580_400L, 0L, BalanceStatus.PAID,
+                        SettlementStatus.SETTLED)), balances.members());
         assertEquals(1_321_600L, balances.totalOwedRwf());
     }
 
@@ -240,9 +243,30 @@ class PaymentServiceTest {
         verify(memberRepository).findAllById(Set.of(1L, 2L, 3L, 4L));
         assertEquals(List.of(
                 new BalancesResponse.MemberBalance(1L, "Alice Uwase", "M-0001", "+250788000001",
-                        1_506_000L, 25_500L, 1_000_000L, 480_500L, BalanceStatus.PART_PAID),
+                        1_506_000L, 25_500L, 1_000_000L, 480_500L, BalanceStatus.PART_PAID,
+                        SettlementStatus.OWED),
                 new BalancesResponse.MemberBalance(4L, "Diane Ingabire", "M-0004", "+250788000004",
-                        12_000L, 200L, 0L, 11_800L, BalanceStatus.UNPAID)), balances.members());
+                        12_000L, 200L, 0L, 11_800L, BalanceStatus.UNPAID,
+                        SettlementStatus.OWED)), balances.members());
+    }
+
+    @Test
+    void aSettledMemberWhoEarnsAgainIsOwedNotPartPaid() {
+        givenAliceBoscoCarine();
+        // Carine was paid her whole balance, then a new sale credited her 9,800 net.
+        when(saleAllocationRepository.findCreditTotalsByMember()).thenReturn(List.of(new MemberCredit(3L, 10_000L, 200L)));
+
+        BalancesResponse.MemberBalance carine = service.balances("M-0003", null, LocalDate.of(2026, 10, 14))
+                .members().get(0);
+
+        assertEquals(9_800L, carine.balanceRwf());
+        assertEquals(SettlementStatus.OWED, carine.settlement());
+    }
+
+    @Test
+    void settlementIsOwedAboveZeroAndSettledAtZero() {
+        assertEquals(SettlementStatus.OWED, SettlementStatus.of(1L));
+        assertEquals(SettlementStatus.SETTLED, SettlementStatus.of(0L));
     }
 
     @Test

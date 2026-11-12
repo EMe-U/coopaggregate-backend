@@ -39,6 +39,7 @@ import com.coopaggregate.member.MemberSummaryResponse;
 import com.coopaggregate.payment.BalanceStatus;
 import com.coopaggregate.payment.BalancesResponse;
 import com.coopaggregate.payment.PaymentService;
+import com.coopaggregate.payment.SettlementStatus;
 
 class DashboardServiceTest {
 
@@ -290,7 +291,7 @@ class DashboardServiceTest {
 
     private static BalancesResponse.MemberBalance balance(Long memberId, long balanceRwf, BalanceStatus status) {
         return new BalancesResponse.MemberBalance(memberId, "Member " + memberId, "M-000" + memberId, "+250788000000",
-                0L, 0L, 0L, balanceRwf, status);
+                0L, 0L, 0L, balanceRwf, status, SettlementStatus.of(balanceRwf));
     }
 
     private static Grade grade(String code, String name) {

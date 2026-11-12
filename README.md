@@ -1252,6 +1252,9 @@ Request body for `POST /api/payments`:
   `shareRwf` (gross credits and shares), `deductionRwf`, `paidRwf`, `balanceRwf` and `status`,
   largest balance first.
   `status` is `UNPAID` (nothing paid yet), `PART_PAID` or `PAID` (balance 0).
+  `settlement` is `OWED` (balance more than 0) or `SETTLED` (balance 0), for the Disburse page:
+  a settled member who earns again from a new sale is `OWED` again, where `status` would say
+  `PART_PAID`.
   `search` (name, member number or phone) and `status` filter the list only:
   `totalOwedRwf` (all balances) and `paidThisWeekRwf` (payments dated Monday to Sunday of the
   current week, Kigali time) always cover all members.
