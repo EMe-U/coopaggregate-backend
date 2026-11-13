@@ -221,6 +221,20 @@ class SaleOrderServiceTest {
     }
 
     @Test
+    void anOrderWithAReferenceAlreadyUsedIsRefusedWith409AndNoGradeIsSold() {
+        when(f.saleOrderRepository.findCodesUsingReference(PaymentMethod.BANK, "BK-778812"))
+                .thenReturn(List.of("ORD-S-12"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.recordOrder(
+                new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(item(1L, "120.00", 300L), item(2L, "150.00", 200L)),
+                        PaymentMethod.BANK, "BK-778812"), f.manager));
+
+        assertEquals("Reference BK-778812 was already used for ORD-S-12.", e.getMessage());
+        verify(f.saleOrderRepository, never()).save(any());
+        verify(f.saleRepository, never()).save(any());
+    }
+
+    @Test
     void aMomoOrderWithoutAReferenceSavesNothing() {
         BadRequestException e = assertThrows(BadRequestException.class, () -> service.recordOrder(
                 new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(item(1L, "120.00", 300L)), PaymentMethod.MOMO,

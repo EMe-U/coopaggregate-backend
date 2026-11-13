@@ -255,6 +255,18 @@ class SaleControllerTest {
     }
 
     @Test
+    void aReferenceAlreadyUsedIsA409WithTheMessage() throws Exception {
+        when(saleService.record(any(), any()))
+                .thenThrow(new IllegalStateException("Reference MP2610290001 was already used for ORD-7K2Q."));
+
+        mockMvc.perform(post("/api/sales").header(HttpHeaders.AUTHORIZATION, bearerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(sale("").replace("\"CASH\"", "\"MOMO\", \"paymentReference\": \"MP2610290001\"")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("Reference MP2610290001 was already used for ORD-7K2Q."));
+    }
+
+    @Test
     void anOrderNeedsAPaymentMethod() throws Exception {
         mockMvc.perform(post("/api/sales/orders").header(HttpHeaders.AUTHORIZATION, bearerToken)
                         .contentType(MediaType.APPLICATION_JSON)

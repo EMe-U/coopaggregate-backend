@@ -51,6 +51,7 @@ import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.payment.PaymentMethod;
+import com.coopaggregate.payment.PaymentReferences;
 import com.coopaggregate.setting.SettingRepository;
 
 import jakarta.persistence.EntityNotFoundException;
@@ -125,6 +126,7 @@ public class SaleService {
         if (existing.isPresent()) {
             return new RecordedSale(responseOf(existing.get()), false);
         }
+        checkReferenceUnused(request.paymentMethod(), reference);
         Buyer buyer = findBuyer(request.buyerId());
         Wanted wanted = withGrade(asked, grades.get(request.gradeId()));
 
@@ -157,6 +159,7 @@ public class SaleService {
         if (existing.isPresent()) {
             return new RecordedSaleOrder(toResponse(existing.get()), false);
         }
+        checkReferenceUnused(request.paymentMethod(), reference);
         Buyer buyer = findBuyer(request.buyerId());
         List<Wanted> wanted = new ArrayList<>();
         for (int i = 0; i < asked.size(); i++) {
@@ -245,16 +248,27 @@ public class SaleService {
         return saleOrderRepository.save(order);
     }
 
-    // The buyer pays in full; MOMO and BANK need the transaction reference. Checked before any lock is taken.
+    // The buyer pays in full; MOMO and BANK need a well-formed transaction reference. Checked before any lock.
     private static String checkedReference(PaymentMethod method, String reference) {
         if (method == null) {
             throw new BadRequestException("paymentMethod: is required (CASH, MOMO or BANK)");
         }
-        String trimmed = reference == null || reference.isBlank() ? null : reference.trim();
-        if (method != PaymentMethod.CASH && trimmed == null) {
-            throw new BadRequestException("A " + method + " buyer payment needs the transaction reference.");
+        return PaymentReferences.checked(method, reference,
+                "A " + method + " buyer payment needs the transaction reference.");
+    }
+
+    // Locked first, so two sales with the same reference cannot both find it unused. Called after the client UUID
+    // check, so a repeated request gets its sale back instead of a 409. Orders are never reversed, so every order counts.
+    private void checkReferenceUnused(PaymentMethod method, String reference) {
+        if (!PaymentReferences.mustBeUnique(method)) {
+            return;
         }
-        return trimmed;
+        saleOrderRepository.lockReference(PaymentReferences.BUYER_PAYMENT_LOCK,
+                PaymentReferences.lockKey(method, reference));
+        Optional<String> usedBy = saleOrderRepository.findCodesUsingReference(method, reference).stream().findFirst();
+        if (usedBy.isPresent()) {
+            throw PaymentReferences.alreadyUsed(reference, usedBy.get());
+        }
     }
 
     private Buyer findBuyer(Long buyerId) {

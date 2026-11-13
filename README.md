@@ -1140,8 +1140,10 @@ Request body for `POST /api/sales`:
 
 - The buyer pays in full. `paymentMethod` is required: `CASH`, `MOMO` or `BANK` (otherwise `400`
   "paymentMethod: is required (CASH, MOMO or BANK)"). `MOMO` and `BANK` need `paymentReference`, the
-  MoMo or bank transaction number, at most 50 characters (otherwise `400` "A MOMO buyer payment
-  needs the transaction reference."). This is checked before anything is locked or saved.
+  MoMo or bank transaction number (otherwise `400` "A MOMO buyer payment needs the transaction
+  reference."), following the rules in [Payment references](#payment-references). Its form is checked
+  before anything is locked or saved; a reference already used by another order is a `409`
+  "Reference MP2610090001 was already used for ORD-7K2Q." and nothing is saved.
 - A sale of one grade is saved as an order of its own (a new `ORD-` code, shown as `orderCode`),
   which keeps how the buyer paid. Sending the same `clientUuid` again creates no second order.
 - The grade and the buyer must exist, `quantityKg` must be more than 0 (2 decimals) and
@@ -1280,7 +1282,10 @@ Request body for `POST /api/payments`:
 ```
 
 - `method` is `CASH`, `MOMO` or `BANK`. `MOMO` and `BANK` payments need `reference`, the
-  MoMo or bank transaction number (otherwise `400`).
+  MoMo or bank transaction number (otherwise `400`), following the rules in
+  [Payment references](#payment-references). A reference already used by a payment that is not
+  reversed is a `409` "Reference MP2610120001 was already used for PAY-0002."; a reversed
+  payment's reference can be used again.
 - Each payment gets its own code, `PAY-` and 4 digits (`PAY-0001`), the highest existing
   number plus one. It is separate from `reference`.
 - `amountRwf` must be exactly the member's whole balance. Any other amount is a `400`, for example
@@ -1301,6 +1306,27 @@ Request body for `POST /api/payments`:
   `search` (name, member number or phone) and `status` filter the list only:
   `totalOwedRwf` (all balances) and `paidThisWeekRwf` (payments dated Monday to Sunday of the
   current week, Kigali time) always cover all members.
+
+### Payment references
+
+The same rules hold for farmer payments (`POST /api/payments`, `reference`) and buyer payments
+(`POST /api/sales` and `POST /api/sales/orders`, `paymentReference`):
+
+- **MOMO and BANK:** the reference is required and trimmed, then must be 6 to 40 characters of
+  letters, digits, dot (`.`), dash (`-`) or slash (`/`) only. Otherwise `400` "The MOMO reference
+  must be 6 to 40 characters: letters, digits, dot (.), dash (-) or slash (/) only."
+- **Used once per method:** a MOMO reference cannot be used by two farmer payments that are not
+  reversed, nor by two orders; the same for BANK. The comparison ignores case (`mp2610120001` and
+  `MP2610120001` are the same reference). A duplicate is a `409` naming the record that used it, and
+  nothing is saved. Farmer payments and buyer payments are checked separately: a reference on a
+  sale does not block the same reference on a farmer payment. Orders are never reversed, so every
+  order counts.
+- **CASH:** the reference stays optional and is neither checked for its form nor for reuse.
+- Sending the same `clientUuid` again returns the saved record with `200`, never a `409`.
+- This is enforced by the service, not by a unique index: references saved before these rules may
+  already repeat, and an index would stop the migration. Before checking, the service takes a
+  Postgres transaction lock on the method and reference, so two requests with the same reference
+  wait for each other and only the first one is saved.
 
 ### Member statement
 
@@ -1424,7 +1450,8 @@ lock order, `SOLD` at 0, floor price warning, idempotency, the buyer's payment m
 order, a sale of one grade saved as its own order), buyer payments (one per order, newest first, farmers summed
 over all their batches, older sales without a method or money, the V42 backfill), reversals of deliveries in
 lots, sharing (the 10,000 kg example, rounding remainder, refused for lots with sales), payments (owed math, only
-the whole balance can be disbursed, `OWED` and `SETTLED`, MoMo reference, idempotency), member statements and identity verification (the key file
+the whole balance can be disbursed, `OWED` and `SETTLED`, the form of MoMo and bank references and their single use, a reversed payment's
+reference used again, idempotency), member statements and identity verification (the key file
 and startup checks, PKCE, the signed assertion, the token and userinfo checks with a fake eSignet, the claims
 request, the verified name and phone and their 30 minutes, one manager and one use per verification, cancelling,
 the error codes, and that nothing personal is logged or kept longer). What only the real eSignet can show is listed in Identity verification.

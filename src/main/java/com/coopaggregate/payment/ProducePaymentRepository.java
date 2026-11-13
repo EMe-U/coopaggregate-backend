@@ -21,6 +21,15 @@ public interface ProducePaymentRepository extends JpaRepository<ProducePayment, 
     @EntityGraph(attributePaths = "member")
     Page<ProducePayment> findAll(Specification<ProducePayment> spec, Pageable pageable);
 
+    // Held until the transaction ends. Selecting 1 avoids mapping Postgres's void return type.
+    @Query(value = "SELECT 1 FROM pg_advisory_xact_lock(:namespace, hashtext(:key))", nativeQuery = true)
+    Integer lockReference(int namespace, String key);
+
+    // A reversed payment's reference can be used again.
+    @Query("SELECT p.paymentCode FROM ProducePayment p WHERE p.method = :method "
+            + "AND LOWER(p.referenceNo) = LOWER(:reference) AND p.reversedAt IS NULL ORDER BY p.id")
+    List<String> findCodesUsingReference(PaymentMethod method, String reference);
+
     // Only shared lots have lot_share rows, so these are the members with at least one shared lot.
     @Query("""
             SELECT new com.coopaggregate.payment.MemberShareTotals(

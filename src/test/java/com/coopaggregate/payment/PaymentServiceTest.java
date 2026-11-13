@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -22,7 +24,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InOrder;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.common.KigaliTime;
@@ -199,6 +203,75 @@ class PaymentServiceTest {
 
         verify(ledgerService).record(LedgerEntryType.PAYMENT, "PAYMENT", 9L, null, 451_000L,
                 "Payment PAY-0005 by MOMO MP2610120001", manager);
+    }
+
+    // --- MOMO and BANK references are used once ---
+
+    @ParameterizedTest
+    @EnumSource(value = PaymentMethod.class, names = {"MOMO", "BANK"})
+    void aReferenceAlreadyUsedByAPaymentIsRefusedWith409(PaymentMethod method) {
+        when(paymentRepository.findCodesUsingReference(method, "MP2610120001")).thenReturn(List.of("PAY-0002"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> pay(451_000L, method, " MP2610120001 "));
+
+        assertEquals("Reference MP2610120001 was already used for PAY-0002.", e.getMessage());
+        verify(paymentRepository, never()).save(any());
+        verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void theReferenceIsLockedBeforeItIsLookedUp() {
+        pay(451_000L, PaymentMethod.MOMO, "MP2610120001");
+
+        InOrder order = inOrder(paymentRepository);
+        order.verify(paymentRepository).lockReference(PaymentReferences.FARMER_PAYMENT_LOCK, "MOMO:mp2610120001");
+        order.verify(paymentRepository).findCodesUsingReference(PaymentMethod.MOMO, "MP2610120001");
+        order.verify(paymentRepository).save(any());
+    }
+
+    @Test
+    void aReversedPaymentsReferenceCanBeUsedAgainAndCaseIsIgnored() throws NoSuchMethodException {
+        String query = ProducePaymentRepository.class
+                .getMethod("findCodesUsingReference", PaymentMethod.class, String.class)
+                .getAnnotation(Query.class).value();
+
+        assertTrue(query.contains("p.reversedAt IS NULL"), query);
+        assertTrue(query.contains("p.method = :method"), query);
+        assertTrue(query.contains("LOWER(p.referenceNo) = LOWER(:reference)"), query);
+    }
+
+    @Test
+    void aBadlyFormedReferenceIsRefusedBeforeItIsLookedUp() {
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> pay(451_000L, PaymentMethod.BANK, "BK 77"));
+
+        assertEquals("The BANK reference must be 6 to 40 characters: letters, digits, dot (.), dash (-) or slash (/) "
+                + "only.", e.getMessage());
+        verify(paymentRepository, never()).lockReference(anyInt(), any());
+        verify(paymentRepository, never()).save(any());
+    }
+
+    @Test
+    void aCashReferenceIsOptionalAndNeverCheckedForReuse() {
+        assertEquals("receipt #12", pay(451_000L, PaymentMethod.CASH, " receipt #12 ").payment().reference());
+
+        verify(paymentRepository, never()).lockReference(anyInt(), any());
+        verify(paymentRepository, never()).findCodesUsingReference(any(), any());
+    }
+
+    @Test
+    void aRepeatedRequestGetsItsPaymentBackInsteadOfA409() {
+        ProducePayment existing = new ProducePayment();
+        existing.setMember(alice);
+        existing.setAmount(451_000L);
+        existing.setMethod(PaymentMethod.MOMO);
+        existing.setReferenceNo("MP2610120001");
+        when(paymentRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(existing));
+        when(paymentRepository.findCodesUsingReference(any(), any())).thenReturn(List.of("PAY-0004"));
+
+        assertFalse(pay(451_000L, PaymentMethod.MOMO, "MP2610120001").created());
     }
 
     @Test

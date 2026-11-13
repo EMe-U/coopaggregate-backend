@@ -73,10 +73,18 @@ public class PaymentService {
             return new RecordedPayment(PaymentResponse.from(existing.get()), false);
         }
 
-        String reference = request.reference() == null || request.reference().isBlank()
-                ? null : request.reference().trim();
-        if (request.method() != PaymentMethod.CASH && reference == null) {
-            throw new BadRequestException("A " + request.method() + " payment needs the transaction reference.");
+        String reference = PaymentReferences.checked(request.method(), request.reference(),
+                "A " + request.method() + " payment needs the transaction reference.");
+        if (PaymentReferences.mustBeUnique(request.method())) {
+            // Locked first, so two payments with the same reference cannot both find it unused. Checked after the
+            // client UUID, so a repeated request gets its payment back instead of a 409.
+            paymentRepository.lockReference(PaymentReferences.FARMER_PAYMENT_LOCK,
+                    PaymentReferences.lockKey(request.method(), reference));
+            Optional<String> usedBy = paymentRepository.findCodesUsingReference(request.method(), reference)
+                    .stream().findFirst();
+            if (usedBy.isPresent()) {
+                throw PaymentReferences.alreadyUsed(reference, usedBy.get());
+            }
         }
         // A farmer is always paid their whole balance, never part of it. The frontend sends the balance it showed,
         // so if a sale credited the farmer in the meantime the amounts differ and nothing is paid.

@@ -6,8 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -27,9 +29,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.batch.BatchAllocator;
@@ -45,6 +49,7 @@ import com.coopaggregate.loss.Loss;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.payment.PaymentMethod;
+import com.coopaggregate.payment.PaymentReferences;
 
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.CriteriaBuilder;
@@ -677,6 +682,71 @@ class SaleServiceTest {
         assertTrue(f.calls.isEmpty(), f.calls.toString());
         verify(f.saleOrderRepository, never()).save(any());
         assertNothingSaved();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"MOMO", "BANK"})
+    void aReferenceAlreadyUsedByAnOrderIsRefusedWith409AndNothingIsSaved(PaymentMethod method) {
+        when(f.saleOrderRepository.findCodesUsingReference(method, "MP2610290001")).thenReturn(List.of("ORD-7K2Q"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.record(paidBy(method, " MP2610290001 "), f.manager));
+
+        assertEquals("Reference MP2610290001 was already used for ORD-7K2Q.", e.getMessage());
+        verify(f.saleOrderRepository, never()).save(any());
+        assertNothingSaved();
+    }
+
+    @Test
+    void theReferenceIsLockedAndLookedUpOnlyAfterTheGradeAndTheRepeatCheck() {
+        service.record(paidBy(PaymentMethod.MOMO, "MP2610290001"), f.manager);
+
+        InOrder order = inOrder(f.gradeRepository, f.saleRepository, f.saleOrderRepository);
+        order.verify(f.gradeRepository).findForUpdateById(1L);
+        order.verify(f.saleRepository).findByClientUuid(CLIENT_UUID);
+        order.verify(f.saleOrderRepository).lockReference(PaymentReferences.BUYER_PAYMENT_LOCK, "MOMO:mp2610290001");
+        order.verify(f.saleOrderRepository).findCodesUsingReference(PaymentMethod.MOMO, "MP2610290001");
+        order.verify(f.saleOrderRepository).save(any());
+    }
+
+    @Test
+    void aBadlyFormedBuyerReferenceIsRefusedBeforeAnythingIsLocked() {
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> service.record(paidBy(PaymentMethod.BANK, "BK_77"), f.manager));
+
+        assertEquals("The BANK reference must be 6 to 40 characters: letters, digits, dot (.), dash (-) or slash (/) "
+                + "only.", e.getMessage());
+        assertTrue(f.calls.isEmpty(), f.calls.toString());
+        assertNothingSaved();
+    }
+
+    @Test
+    void aCashSaleKeepsAnyReferenceAndIsNeverCheckedForReuse() {
+        service.record(paidBy(PaymentMethod.CASH, " receipt #12 "), f.manager);
+
+        assertEquals("receipt #12", f.savedOrders.get(0).getPaymentReference());
+        verify(f.saleOrderRepository, never()).lockReference(anyInt(), any());
+        verify(f.saleOrderRepository, never()).findCodesUsingReference(any(), any());
+    }
+
+    @Test
+    void aRepeatedSaleWithItsOwnReferenceGetsItsSaleBackInsteadOfA409() {
+        service.record(paidBy(PaymentMethod.MOMO, "MP2610290001"), f.manager);
+        when(f.saleRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(f.savedSales.get(0)));
+        when(f.saleOrderRepository.findCodesUsingReference(any(), any()))
+                .thenReturn(List.of(f.savedOrders.get(0).getOrderCode()));
+
+        assertFalse(service.record(paidBy(PaymentMethod.MOMO, "MP2610290001"), f.manager).created());
+    }
+
+    @Test
+    void anOrdersReferenceIsComparedIgnoringCaseWithinItsMethod() throws NoSuchMethodException {
+        String query = SaleOrderRepository.class
+                .getMethod("findCodesUsingReference", PaymentMethod.class, String.class)
+                .getAnnotation(Query.class).value();
+
+        assertTrue(query.contains("o.paymentMethod = :method"), query);
+        assertTrue(query.contains("LOWER(o.paymentReference) = LOWER(:reference)"), query);
     }
 
     @Test
