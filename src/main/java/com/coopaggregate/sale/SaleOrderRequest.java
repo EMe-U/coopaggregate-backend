@@ -5,13 +5,17 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+import com.coopaggregate.payment.PaymentMethod;
+
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PastOrPresent;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 
+/** One buyer order for several grades. The buyer pays the whole order once, in full: paymentMethod says how. */
 public record SaleOrderRequest(
         @NotNull(message = "is required")
         UUID clientUuid,
@@ -23,7 +27,14 @@ public record SaleOrderRequest(
         LocalDate soldAt,
 
         @NotEmpty(message = "must have at least one item")
-        List<@Valid Item> items) {
+        List<@Valid Item> items,
+
+        @NotNull(message = "is required (CASH, MOMO or BANK)")
+        PaymentMethod paymentMethod,
+
+        // Required for MOMO and BANK; checked in the service because it depends on the method.
+        @Size(max = 50, message = "must be at most 50 characters")
+        String paymentReference) {
 
     /** One grade of the order. Each grade can appear once; the skip fields are refused as in a sale. */
     public record Item(

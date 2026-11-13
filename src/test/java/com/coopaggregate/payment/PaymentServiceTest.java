@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -21,7 +23,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InOrder;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.common.KigaliTime;
@@ -92,7 +97,7 @@ class PaymentServiceTest {
     }
 
     @Test
-    void paymentUpToOwedIsRecorded() {
+    void theFullBalanceIsRecorded() {
         RecordedPayment result = pay(451_000L, PaymentMethod.CASH, null);
 
         assertTrue(result.created());
@@ -101,15 +106,36 @@ class PaymentServiceTest {
         assertEquals(KigaliTime.today(), result.payment().paidAt());
     }
 
-    @Test
-    void overpaymentIsRejected() {
+    @ParameterizedTest
+    @ValueSource(longs = {451_001L, 450_999L, 100_000L, 1L})
+    void anyAmountOtherThanTheFullBalanceIsRefused(long amount) {
         BadRequestException e = assertThrows(BadRequestException.class,
-                () -> pay(451_001L, PaymentMethod.CASH, null));
+                () -> pay(amount, PaymentMethod.CASH, null));
 
-        assertEquals("Member M-0001 is owed 451000 RWF. The payment cannot be more than that.", e.getMessage());
+        assertEquals("Member M-0001 is owed 451,000 RWF. Disburse the full amount.", e.getMessage());
         verify(paymentRepository, never()).save(any());
         verify(paymentRepository, never()).highestPaymentNumber();
         verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void theFullBalanceIncludesSaleCredits() {
+        when(saleAllocationRepository.netCreditsOf(1L)).thenReturn(29_500L);
+
+        assertThrows(BadRequestException.class, () -> pay(451_000L, PaymentMethod.CASH, null));
+        assertEquals(480_500L, pay(480_500L, PaymentMethod.CASH, null).payment().amountRwf());
+    }
+
+    @Test
+    void aSettledMemberCannotBePaid() {
+        when(paymentRepository.paidTo(1L)).thenReturn(1_451_000L);
+
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> pay(1_000L, PaymentMethod.CASH, null));
+
+        assertEquals("Member M-0001 is owed nothing: there is nothing to disburse.", e.getMessage());
+        verify(paymentRepository, never()).save(any());
     }
 
     @ParameterizedTest
@@ -123,24 +149,24 @@ class PaymentServiceTest {
 
     @Test
     void paymentGetsNextPayCode() {
-        assertEquals("PAY-0005", pay(100_000L, PaymentMethod.CASH, null).payment().paymentCode());
+        assertEquals("PAY-0005", pay(451_000L, PaymentMethod.CASH, null).payment().paymentCode());
     }
 
     @Test
     void firstPaymentGetsPayCodeOne() {
         when(paymentRepository.highestPaymentNumber()).thenReturn(0);
 
-        assertEquals("PAY-0001", pay(100_000L, PaymentMethod.CASH, null).payment().paymentCode());
+        assertEquals("PAY-0001", pay(451_000L, PaymentMethod.CASH, null).payment().paymentCode());
     }
 
     @Test
     void cashPaymentNeedsNoReference() {
-        assertTrue(pay(100_000L, PaymentMethod.CASH, null).created());
+        assertTrue(pay(451_000L, PaymentMethod.CASH, null).created());
     }
 
     @Test
     void bankPaymentWithReferenceIsRecorded() {
-        RecordedPayment result = pay(100_000L, PaymentMethod.BANK, "BK-778812");
+        RecordedPayment result = pay(451_000L, PaymentMethod.BANK, "BK-778812");
 
         assertEquals(PaymentMethod.BANK, result.payment().method());
         assertEquals("BK-778812", result.payment().reference());
@@ -173,10 +199,79 @@ class PaymentServiceTest {
 
     @Test
     void paymentIsRecordedInLedger() {
-        pay(100_000L, PaymentMethod.MOMO, " MP2610120001 ");
+        pay(451_000L, PaymentMethod.MOMO, " MP2610120001 ");
 
-        verify(ledgerService).record(LedgerEntryType.PAYMENT, "PAYMENT", 9L, null, 100_000L,
+        verify(ledgerService).record(LedgerEntryType.PAYMENT, "PAYMENT", 9L, null, 451_000L,
                 "Payment PAY-0005 by MOMO MP2610120001", manager);
+    }
+
+    // --- MOMO and BANK references are used once ---
+
+    @ParameterizedTest
+    @EnumSource(value = PaymentMethod.class, names = {"MOMO", "BANK"})
+    void aReferenceAlreadyUsedByAPaymentIsRefusedWith409(PaymentMethod method) {
+        when(paymentRepository.findCodesUsingReference(method, "MP2610120001")).thenReturn(List.of("PAY-0002"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> pay(451_000L, method, " MP2610120001 "));
+
+        assertEquals("Reference MP2610120001 was already used for PAY-0002.", e.getMessage());
+        verify(paymentRepository, never()).save(any());
+        verify(ledgerService, never()).record(any(), any(), any(), any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void theReferenceIsLockedBeforeItIsLookedUp() {
+        pay(451_000L, PaymentMethod.MOMO, "MP2610120001");
+
+        InOrder order = inOrder(paymentRepository);
+        order.verify(paymentRepository).lockReference(PaymentReferences.FARMER_PAYMENT_LOCK, "MOMO:mp2610120001");
+        order.verify(paymentRepository).findCodesUsingReference(PaymentMethod.MOMO, "MP2610120001");
+        order.verify(paymentRepository).save(any());
+    }
+
+    @Test
+    void aReversedPaymentsReferenceCanBeUsedAgainAndCaseIsIgnored() throws NoSuchMethodException {
+        String query = ProducePaymentRepository.class
+                .getMethod("findCodesUsingReference", PaymentMethod.class, String.class)
+                .getAnnotation(Query.class).value();
+
+        assertTrue(query.contains("p.reversedAt IS NULL"), query);
+        assertTrue(query.contains("p.method = :method"), query);
+        assertTrue(query.contains("LOWER(p.referenceNo) = LOWER(:reference)"), query);
+    }
+
+    @Test
+    void aBadlyFormedReferenceIsRefusedBeforeItIsLookedUp() {
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> pay(451_000L, PaymentMethod.BANK, "BK 77"));
+
+        assertEquals("The BANK reference must be 6 to 40 characters: letters, digits, dot (.), dash (-) or slash (/) "
+                + "only.", e.getMessage());
+        verify(paymentRepository, never()).lockReference(anyInt(), any());
+        verify(paymentRepository, never()).save(any());
+    }
+
+    @Test
+    void aCashReferenceIsOptionalAndNeverCheckedForReuse() {
+        assertEquals("receipt #12", pay(451_000L, PaymentMethod.CASH, " receipt #12 ").payment().reference());
+
+        verify(paymentRepository, never()).lockReference(anyInt(), any());
+        verify(paymentRepository, never()).findCodesUsingReference(any(), any());
+    }
+
+    @Test
+    void aRepeatedRequestGetsItsPaymentBackInsteadOfA409() {
+        ProducePayment existing = new ProducePayment();
+        existing.setMember(alice);
+        existing.setAmount(451_000L);
+        existing.setMethod(PaymentMethod.MOMO);
+        existing.setReferenceNo("MP2610120001");
+        when(paymentRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(existing));
+        when(paymentRepository.findCodesUsingReference(any(), any())).thenReturn(List.of("PAY-0004"));
+
+        assertFalse(pay(451_000L, PaymentMethod.MOMO, "MP2610120001").created());
     }
 
     @Test
@@ -187,11 +282,14 @@ class PaymentServiceTest {
 
         assertEquals(List.of(
                 new BalancesResponse.MemberBalance(2L, "Bosco Habimana", "M-0002", "+250788000002",
-                        885_600L, 15_000L, 0L, 870_600L, BalanceStatus.UNPAID),
+                        885_600L, 15_000L, 0L, 870_600L, BalanceStatus.UNPAID,
+                        SettlementStatus.OWED),
                 new BalancesResponse.MemberBalance(1L, "Alice Uwase", "M-0001", "+250788000001",
-                        1_476_000L, 25_000L, 1_000_000L, 451_000L, BalanceStatus.PART_PAID),
+                        1_476_000L, 25_000L, 1_000_000L, 451_000L, BalanceStatus.PART_PAID,
+                        SettlementStatus.OWED),
                 new BalancesResponse.MemberBalance(3L, "Carine Mukamana", "M-0003", "+250788000003",
-                        590_400L, 10_000L, 580_400L, 0L, BalanceStatus.PAID)), balances.members());
+                        590_400L, 10_000L, 580_400L, 0L, BalanceStatus.PAID,
+                        SettlementStatus.SETTLED)), balances.members());
         assertEquals(1_321_600L, balances.totalOwedRwf());
     }
 
@@ -218,9 +316,30 @@ class PaymentServiceTest {
         verify(memberRepository).findAllById(Set.of(1L, 2L, 3L, 4L));
         assertEquals(List.of(
                 new BalancesResponse.MemberBalance(1L, "Alice Uwase", "M-0001", "+250788000001",
-                        1_506_000L, 25_500L, 1_000_000L, 480_500L, BalanceStatus.PART_PAID),
+                        1_506_000L, 25_500L, 1_000_000L, 480_500L, BalanceStatus.PART_PAID,
+                        SettlementStatus.OWED),
                 new BalancesResponse.MemberBalance(4L, "Diane Ingabire", "M-0004", "+250788000004",
-                        12_000L, 200L, 0L, 11_800L, BalanceStatus.UNPAID)), balances.members());
+                        12_000L, 200L, 0L, 11_800L, BalanceStatus.UNPAID,
+                        SettlementStatus.OWED)), balances.members());
+    }
+
+    @Test
+    void aSettledMemberWhoEarnsAgainIsOwedNotPartPaid() {
+        givenAliceBoscoCarine();
+        // Carine was paid her whole balance, then a new sale credited her 9,800 net.
+        when(saleAllocationRepository.findCreditTotalsByMember()).thenReturn(List.of(new MemberCredit(3L, 10_000L, 200L)));
+
+        BalancesResponse.MemberBalance carine = service.balances("M-0003", null, LocalDate.of(2026, 10, 14))
+                .members().get(0);
+
+        assertEquals(9_800L, carine.balanceRwf());
+        assertEquals(SettlementStatus.OWED, carine.settlement());
+    }
+
+    @Test
+    void settlementIsOwedAboveZeroAndSettledAtZero() {
+        assertEquals(SettlementStatus.OWED, SettlementStatus.of(1L));
+        assertEquals(SettlementStatus.SETTLED, SettlementStatus.of(0L));
     }
 
     @Test
@@ -321,7 +440,7 @@ class PaymentServiceTest {
 
     @Test
     void aNewPaymentAnnouncesItselfForTheMembersSms() {
-        pay(100_000L, PaymentMethod.CASH, null);
+        pay(451_000L, PaymentMethod.CASH, null);
 
         verify(eventPublisher).publishEvent(new PaymentRecordedEvent(9L));
     }

@@ -50,8 +50,11 @@ import com.coopaggregate.lot.LotPortionRepository;
 import com.coopaggregate.lot.LotRepository;
 import com.coopaggregate.lot.LotStatus;
 import com.coopaggregate.manager.Manager;
+import com.coopaggregate.payment.PaymentMethod;
+import com.coopaggregate.payment.PaymentReferences;
 import com.coopaggregate.setting.SettingRepository;
 
+import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Join;
@@ -114,6 +117,7 @@ public class SaleService {
     public RecordedSale record(SaleRequest request, Manager manager) {
         Wanted asked = checkedWanted(request.quantityKg(), request.pricePerKg(), request.skipLotIds(),
                 request.skipReason(), request.skipDeliveryIds());
+        String reference = checkedReference(request.paymentMethod(), request.paymentReference());
 
         // The row lock makes sales of the same grade wait for each other, so two sales cannot both pass the check
         // for the same kg. It also makes a repeated client UUID wait for the first request.
@@ -122,12 +126,16 @@ public class SaleService {
         if (existing.isPresent()) {
             return new RecordedSale(responseOf(existing.get()), false);
         }
+        checkReferenceUnused(request.paymentMethod(), reference);
         Buyer buyer = findBuyer(request.buyerId());
         Wanted wanted = withGrade(asked, grades.get(request.gradeId()));
 
         List<Planned> planned = planUnderLocks(List.of(wanted));
         LocalDate saleDate = request.soldAt() != null ? request.soldAt() : KigaliTime.today();
-        Sale saved = saveSale(planned.get(0), buyer, request.clientUuid(), null, saleDate, manager);
+        // A sale of one grade is an order of its own, which keeps how the buyer paid. The sale holds the client
+        // UUID, so the order gets a random one.
+        SaleOrder order = saveOrder(buyer, UUID.randomUUID(), saleDate, request.paymentMethod(), reference);
+        Sale saved = saveSale(planned.get(0), buyer, request.clientUuid(), order, saleDate, manager);
         updateLotStatuses(planned);
         return new RecordedSale(responseOf(saved), true);
     }
@@ -142,6 +150,7 @@ public class SaleService {
                 .map(item -> checkedWanted(item.quantityKg(), item.pricePerKg(), item.skipLotIds(),
                         item.skipReason(), item.skipDeliveryIds()))
                 .toList();
+        String reference = checkedReference(request.paymentMethod(), request.paymentReference());
 
         // Locked in id order, so two orders that share grades always lock them in the same order and cannot
         // deadlock. The locks also make a repeated client UUID wait for the first request.
@@ -150,6 +159,7 @@ public class SaleService {
         if (existing.isPresent()) {
             return new RecordedSaleOrder(toResponse(existing.get()), false);
         }
+        checkReferenceUnused(request.paymentMethod(), reference);
         Buyer buyer = findBuyer(request.buyerId());
         List<Wanted> wanted = new ArrayList<>();
         for (int i = 0; i < asked.size(); i++) {
@@ -159,12 +169,8 @@ public class SaleService {
         // Every item is planned before anything is saved, so a problem in any item saves nothing.
         List<Planned> planned = planUnderLocks(wanted);
 
-        SaleOrder order = new SaleOrder();
-        order.setOrderCode(ShortCodes.unique("ORD-", saleOrderRepository::existsByOrderCode));
-        order.setClientUuid(request.clientUuid());
-        order.setBuyer(buyer);
-        order.setSaleDate(request.soldAt() != null ? request.soldAt() : KigaliTime.today());
-        SaleOrder savedOrder = saleOrderRepository.save(order);
+        SaleOrder savedOrder = saveOrder(buyer, request.clientUuid(),
+                request.soldAt() != null ? request.soldAt() : KigaliTime.today(), request.paymentMethod(), reference);
 
         List<Sale> savedSales = new ArrayList<>();
         for (Planned item : planned) {
@@ -182,6 +188,13 @@ public class SaleService {
         Page<Sale> sales = saleRepository.findAll(matching(search, lotId, buyerId, gradeId), pageRequest);
         return new PageResponse<>(responsesOf(sales.getContent()), sales.getNumber(), sales.getSize(),
                 sales.getTotalElements(), sales.getTotalPages());
+    }
+
+    /** One sale, the same as its row in the list. 404 when it does not exist. */
+    @Transactional(readOnly = true)
+    public SaleResponse get(Long id) {
+        return saleRepository.findWithDetailsById(id).map(this::responseOf)
+                .orElseThrow(() -> new EntityNotFoundException("Sale " + id + " does not exist."));
     }
 
     @Transactional(readOnly = true)
@@ -221,6 +234,41 @@ public class SaleService {
         return sales.stream()
                 .map(sale -> SaleResponse.from(sale, batches.getOrDefault(sale.getId(), List.of())))
                 .toList();
+    }
+
+    private SaleOrder saveOrder(Buyer buyer, UUID clientUuid, LocalDate saleDate, PaymentMethod method,
+                                String reference) {
+        SaleOrder order = new SaleOrder();
+        order.setOrderCode(ShortCodes.unique("ORD-", saleOrderRepository::existsByOrderCode));
+        order.setClientUuid(clientUuid);
+        order.setBuyer(buyer);
+        order.setSaleDate(saleDate);
+        order.setPaymentMethod(method);
+        order.setPaymentReference(reference);
+        return saleOrderRepository.save(order);
+    }
+
+    // The buyer pays in full; MOMO and BANK need a well-formed transaction reference. Checked before any lock.
+    private static String checkedReference(PaymentMethod method, String reference) {
+        if (method == null) {
+            throw new BadRequestException("paymentMethod: is required (CASH, MOMO or BANK)");
+        }
+        return PaymentReferences.checked(method, reference,
+                "A " + method + " buyer payment needs the transaction reference.");
+    }
+
+    // Locked first, so two sales with the same reference cannot both find it unused. Called after the client UUID
+    // check, so a repeated request gets its sale back instead of a 409. Orders are never reversed, so every order counts.
+    private void checkReferenceUnused(PaymentMethod method, String reference) {
+        if (!PaymentReferences.mustBeUnique(method)) {
+            return;
+        }
+        saleOrderRepository.lockReference(PaymentReferences.BUYER_PAYMENT_LOCK,
+                PaymentReferences.lockKey(method, reference));
+        Optional<String> usedBy = saleOrderRepository.findCodesUsingReference(method, reference).stream().findFirst();
+        if (usedBy.isPresent()) {
+            throw PaymentReferences.alreadyUsed(reference, usedBy.get());
+        }
     }
 
     private Buyer findBuyer(Long buyerId) {

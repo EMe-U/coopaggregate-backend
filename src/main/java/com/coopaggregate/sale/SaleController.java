@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -46,6 +47,13 @@ public class SaleController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         return saleService.list(search, lotId, buyerId, gradeId, page, size);
+    }
+
+    @GetMapping("/{id}")
+    @Operation(summary = "One sale, the same as its row in the list: buyer, kg, amount and each batch with its "
+            + "member's gross, deduction and net. 404 when it does not exist")
+    public SaleResponse get(@PathVariable Long id) {
+        return saleService.get(id);
     }
 
     @GetMapping("/summary")

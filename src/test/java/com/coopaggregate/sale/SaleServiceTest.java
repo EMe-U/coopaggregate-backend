@@ -6,8 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -27,9 +29,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coopaggregate.batch.BatchAllocator;
@@ -44,7 +48,10 @@ import com.coopaggregate.ledger.LedgerEntryType;
 import com.coopaggregate.loss.Loss;
 import com.coopaggregate.lot.Lot;
 import com.coopaggregate.lot.LotStatus;
+import com.coopaggregate.payment.PaymentMethod;
+import com.coopaggregate.payment.PaymentReferences;
 
+import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Path;
@@ -178,7 +185,7 @@ class SaleServiceTest {
         // The batch of the first sale is used up before the second sale starts.
         sell("50.00", 300L);
         SaleResponse second = service.record(new SaleRequest(UUID.randomUUID(), 1L, 2L, new BigDecimal("60.00"), 320L,
-                null, null, null, null), f.manager).sale();
+                null, null, null, null, PaymentMethod.CASH, null), f.manager).sale();
 
         assertEquals(List.of(1L), second.batches().stream().map(SaleResponse.BatchLine::deliveryId).toList());
         assertEquals(new BigDecimal("60.00"), f.deliveries.get(0).getSoldKg());
@@ -292,7 +299,7 @@ class SaleServiceTest {
     void askingToSkipALotIsRefusedBeforeAnythingIsLockedOrSaved() {
         BadRequestException e = assertThrows(BadRequestException.class, () -> service.record(new SaleRequest(
                 CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, List.of(4L),
-                "Customer wants potatoes from lot A-1 only", null), f.manager));
+                "Customer wants potatoes from lot A-1 only", null, PaymentMethod.CASH, null), f.manager));
 
         assertEquals("Lots cannot be skipped: sales always use the oldest lot first.", e.getMessage());
         assertTrue(f.calls.isEmpty());
@@ -303,9 +310,9 @@ class SaleServiceTest {
     @Test
     void eachSkipFieldOnItsOwnIsRefused() {
         SaleRequest[] requests = {
-                new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, List.of(4L), null, null),
-                new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, null, "Fresher ones", null),
-                new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, null, null, List.of(2L))};
+                new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, List.of(4L), null, null, PaymentMethod.CASH, null),
+                new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, null, "Fresher ones", null, PaymentMethod.CASH, null),
+                new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, null, null, List.of(2L), PaymentMethod.CASH, null)};
         for (SaleRequest request : requests) {
             assertEquals("Lots cannot be skipped: sales always use the oldest lot first.",
                     assertThrows(BadRequestException.class, () -> service.record(request, f.manager)).getMessage(),
@@ -318,7 +325,7 @@ class SaleServiceTest {
     @Test
     void emptySkipFieldsAskForNothingAndTheSaleTakesTheOldestKgFirst() {
         SaleResponse sale = service.record(new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null,
-                List.of(), "   ", List.of()), f.manager).sale();
+                List.of(), "   ", List.of(), PaymentMethod.CASH, null), f.manager).sale();
 
         // The same batches as a sale that sends no skip fields at all: lot A-2026-02 is not passed over.
         assertEquals(List.of(2L, 1L), sale.batches().stream().map(SaleResponse.BatchLine::deliveryId).toList());
@@ -442,7 +449,7 @@ class SaleServiceTest {
             f.ledger.clear();
             String kg = BigDecimal.valueOf(1 + random.nextInt(4_900), 2).toPlainString();
             service.record(new SaleRequest(UUID.randomUUID(), 2L, 2L, new BigDecimal(kg), 6L + random.nextInt(997),
-                    null, null, null, null), f.manager);
+                    null, null, null, null, PaymentMethod.CASH, null), f.manager);
             assertLedgerAddsUp();
         }
         f.portions.forEach(portion -> assertTrue(portion.unallocatedKg().signum() >= 0, portion.toString()));
@@ -547,6 +554,30 @@ class SaleServiceTest {
     }
 
     @Test
+    void oneSaleIsTheSameAsItsRowInTheList() {
+        sell("120.00", 300L);
+        Sale saved = f.savedSales.get(0);
+        when(f.saleRepository.findWithDetailsById(saved.getId())).thenReturn(Optional.of(saved));
+        when(f.saleRepository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(saved)));
+
+        SaleResponse one = service.get(saved.getId());
+
+        assertEquals(service.list(null, null, null, null, 0, 20).content().get(0), one);
+        assertEquals(2, one.batches().size());
+        assertEquals(35_400L, one.totalNetRwf());
+    }
+
+    @Test
+    void anUnknownSaleIsNotFound() {
+        when(f.saleRepository.findWithDetailsById(404L)).thenReturn(Optional.empty());
+
+        EntityNotFoundException e = assertThrows(EntityNotFoundException.class, () -> service.get(404L));
+
+        assertEquals("Sale 404 does not exist.", e.getMessage());
+    }
+
+    @Test
     void listBuildsTheBatchesOfAWholePageInOneQuery() {
         sell("120.00", 300L);
         Sale other = new Sale();
@@ -614,6 +645,120 @@ class SaleServiceTest {
         return mock(Root.class, RETURNS_DEEP_STUBS);
     }
 
+    // --- How the buyer paid: a sale of one grade is an order of its own ---
+
+    @Test
+    void aSaleOfOneGradeIsSavedAsItsOwnOrderWithHowTheBuyerPaid() {
+        SaleResponse sale = service.record(paidBy(PaymentMethod.MOMO, "  MP2610290001 "), f.manager).sale();
+
+        assertEquals(1, f.savedOrders.size());
+        SaleOrder order = f.savedOrders.get(0);
+        assertEquals(PaymentMethod.MOMO, order.getPaymentMethod());
+        assertEquals("MP2610290001", order.getPaymentReference());
+        assertEquals(f.buyer, order.getBuyer());
+        assertEquals(KigaliTime.today(), order.getSaleDate());
+        assertTrue(order.getOrderCode().matches("ORD-[2-9A-HJKMNP-Z]{4}"), order.getOrderCode());
+        // The sale keeps the client UUID that makes a repeated request safe; the order gets its own.
+        assertFalse(CLIENT_UUID.equals(order.getClientUuid()));
+        assertEquals(order, f.savedSales.get(0).getSaleOrder());
+        assertEquals(order.getOrderCode(), sale.orderCode());
+    }
+
+    @Test
+    void aCashSaleNeedsNoReferenceAndABlankOneIsNotKept() {
+        service.record(paidBy(PaymentMethod.CASH, "   "), f.manager);
+
+        assertEquals(PaymentMethod.CASH, f.savedOrders.get(0).getPaymentMethod());
+        assertNull(f.savedOrders.get(0).getPaymentReference());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"MOMO,", "BANK,", "MOMO,'   '", "BANK,'   '"})
+    void momoAndBankBuyerPaymentsNeedAReferenceBeforeAnythingIsLocked(PaymentMethod method, String reference) {
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> service.record(paidBy(method, reference), f.manager));
+
+        assertEquals("A " + method + " buyer payment needs the transaction reference.", e.getMessage());
+        assertTrue(f.calls.isEmpty(), f.calls.toString());
+        verify(f.saleOrderRepository, never()).save(any());
+        assertNothingSaved();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"MOMO", "BANK"})
+    void aReferenceAlreadyUsedByAnOrderIsRefusedWith409AndNothingIsSaved(PaymentMethod method) {
+        when(f.saleOrderRepository.findCodesUsingReference(method, "MP2610290001")).thenReturn(List.of("ORD-7K2Q"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.record(paidBy(method, " MP2610290001 "), f.manager));
+
+        assertEquals("Reference MP2610290001 was already used for ORD-7K2Q.", e.getMessage());
+        verify(f.saleOrderRepository, never()).save(any());
+        assertNothingSaved();
+    }
+
+    @Test
+    void theReferenceIsLockedAndLookedUpOnlyAfterTheGradeAndTheRepeatCheck() {
+        service.record(paidBy(PaymentMethod.MOMO, "MP2610290001"), f.manager);
+
+        InOrder order = inOrder(f.gradeRepository, f.saleRepository, f.saleOrderRepository);
+        order.verify(f.gradeRepository).findForUpdateById(1L);
+        order.verify(f.saleRepository).findByClientUuid(CLIENT_UUID);
+        order.verify(f.saleOrderRepository).lockReference(PaymentReferences.BUYER_PAYMENT_LOCK, "MOMO:mp2610290001");
+        order.verify(f.saleOrderRepository).findCodesUsingReference(PaymentMethod.MOMO, "MP2610290001");
+        order.verify(f.saleOrderRepository).save(any());
+    }
+
+    @Test
+    void aBadlyFormedBuyerReferenceIsRefusedBeforeAnythingIsLocked() {
+        BadRequestException e = assertThrows(BadRequestException.class,
+                () -> service.record(paidBy(PaymentMethod.BANK, "BK_77"), f.manager));
+
+        assertEquals("The BANK reference must be 6 to 40 characters: letters, digits, dot (.), dash (-) or slash (/) "
+                + "only.", e.getMessage());
+        assertTrue(f.calls.isEmpty(), f.calls.toString());
+        assertNothingSaved();
+    }
+
+    @Test
+    void aCashSaleKeepsAnyReferenceAndIsNeverCheckedForReuse() {
+        service.record(paidBy(PaymentMethod.CASH, " receipt #12 "), f.manager);
+
+        assertEquals("receipt #12", f.savedOrders.get(0).getPaymentReference());
+        verify(f.saleOrderRepository, never()).lockReference(anyInt(), any());
+        verify(f.saleOrderRepository, never()).findCodesUsingReference(any(), any());
+    }
+
+    @Test
+    void aRepeatedSaleWithItsOwnReferenceGetsItsSaleBackInsteadOfA409() {
+        service.record(paidBy(PaymentMethod.MOMO, "MP2610290001"), f.manager);
+        when(f.saleRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(f.savedSales.get(0)));
+        when(f.saleOrderRepository.findCodesUsingReference(any(), any()))
+                .thenReturn(List.of(f.savedOrders.get(0).getOrderCode()));
+
+        assertFalse(service.record(paidBy(PaymentMethod.MOMO, "MP2610290001"), f.manager).created());
+    }
+
+    @Test
+    void anOrdersReferenceIsComparedIgnoringCaseWithinItsMethod() throws NoSuchMethodException {
+        String query = SaleOrderRepository.class
+                .getMethod("findCodesUsingReference", PaymentMethod.class, String.class)
+                .getAnnotation(Query.class).value();
+
+        assertTrue(query.contains("o.paymentMethod = :method"), query);
+        assertTrue(query.contains("LOWER(o.paymentReference) = LOWER(:reference)"), query);
+    }
+
+    @Test
+    void aRepeatedSaleSavesNoSecondOrder() {
+        sell("120.00", 300L);
+        when(f.saleRepository.findByClientUuid(CLIENT_UUID)).thenReturn(Optional.of(f.savedSales.get(0)));
+
+        assertFalse(sell("120.00", 300L).created());
+
+        assertEquals(1, f.savedOrders.size());
+    }
+
     // --- Helpers ---
 
     private void assertNothingSaved() {
@@ -626,8 +771,13 @@ class SaleServiceTest {
         return service.record(request(1L, 2L, quantityKg, pricePerKg), f.manager);
     }
 
+    private static SaleRequest paidBy(PaymentMethod method, String reference) {
+        return new SaleRequest(CLIENT_UUID, 1L, 2L, new BigDecimal("120.00"), 300L, null, null, null, null, method,
+                reference);
+    }
+
     private static SaleRequest request(Long gradeId, Long buyerId, String quantityKg, long pricePerKg) {
         return new SaleRequest(CLIENT_UUID, gradeId, buyerId, new BigDecimal(quantityKg), pricePerKg, null,
-                null, null, null);
+                null, null, null, PaymentMethod.CASH, null);
     }
 }

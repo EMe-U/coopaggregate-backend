@@ -48,7 +48,8 @@ public class PaymentController {
 
     @GetMapping("/balances")
     @Operation(summary = "Share, deductions, payments and balance of every member with a shared lot, largest "
-            + "balance first. totalOwedRwf and paidThisWeekRwf (Monday to Sunday, Kigali time) cover all members")
+            + "balance first; settlement is OWED or SETTLED (balance 0). totalOwedRwf and paidThisWeekRwf (Monday to "
+            + "Sunday, Kigali time) cover all members")
     public BalancesResponse balances(
             @Parameter(description = "Part of the name, member number or phone number (case-insensitive)")
             @RequestParam(required = false) String search,
@@ -57,7 +58,8 @@ public class PaymentController {
     }
 
     @PostMapping
-    @Operation(summary = "Pay a member. The amount cannot be more than they are owed; MOMO and BANK need a reference")
+    @Operation(summary = "Disburse to a member. The amount must be their whole balance (400 otherwise, or when "
+            + "nothing is owed); MOMO and BANK need a reference")
     @ApiResponse(responseCode = "201", description = "Payment recorded")
     @ApiResponse(responseCode = "200",
             description = "A payment with this clientUuid already exists; it is returned unchanged")

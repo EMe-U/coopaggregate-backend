@@ -241,6 +241,14 @@ ERD: see `docs/erd.png`.
 - **V41** lets `sms_log` hold payment messages: a `payment_id` column, the types `PAYMENT` and
   `PAYMENT_REVERSED` (a payment message must name its payment), and one message per payment and type.
   No row is changed. Run it before the new build starts: the new build reads and writes the column.
+- **V42** records how a buyer paid: `payment_method` (`CASH`, `MOMO` or `BANK`) and
+  `payment_reference` (at most 50 characters) on `sale_order`, empty for existing orders ("not
+  recorded"). A buyer pays a whole order once, so every sale now belongs to an order: each sale
+  saved without one gets an order of its own, coded `ORD-S-` and the sale id (for example
+  `ORD-S-12`), with the sale's buyer, date and creation time. Then `sale.sale_order_id` becomes
+  required. **This migration adds rows** (one order per sale that had none) and sets that link; no
+  sale amount, kg or ledger entry changes. Run it before the new build starts: the new build saves
+  every sale with an order and reads the new columns.
 - Applied migrations are never edited; a change is a new migration.
 
 ## API endpoints
@@ -292,11 +300,14 @@ ERD: see `docs/erd.png`.
 | GET | `/api/grades/{id}/batches?page=0&size=20` | JWT | The grade's batches that still have kg, oldest delivery first, each with its lots |
 | GET | `/api/members/{id}/batches?status=all&page=0&size=20` | JWT | A member's batches, newest first, with kg and money earned per batch. `status=unsold` keeps batches with kg left |
 | GET | `/api/sales?search=&lotId=&buyerId=&gradeId=&page=0&size=20` | JWT | Sales, newest first (max 100 per page). All filters are optional |
+| GET | `/api/sales/{id}` | JWT | One sale, the same shape as a row of the list, with each batch's member, kg, gross, deduction and net. `404` when it does not exist |
+| GET | `/api/buyer-payments?buyerId=&page=0&size=20` | JWT | Money in: one buyer payment per order, newest first (max 100 per page), with buyer, method, reference, total, the sale of each grade and what each farmer was credited, summed per farmer (see Buyer payments) |
+| GET | `/api/buyer-payments/{orderId}` | JWT | One buyer payment, the same as its row in the list. `404` when it does not exist |
 | GET | `/api/sales/summary` | JWT | `{salesAmountThisMonth, soldKgThisMonth, buyersThisMonth, averagePricePerKg}` |
 | GET | `/api/lots/{id}/share-preview` | JWT | Older lot sharing (see Sharing): `409` for any lot that has sales, and while deliveries are pending or disputed |
 | POST | `/api/lots/{id}/share` | JWT | Older lot sharing: saves the shares and marks the lot `SHARED`. `409` for any lot that has sales |
 | GET | `/api/payments/balances?search=&status=` | JWT | Earned (sale credits and shares), deductions, paid and balance per member, plus `totalOwedRwf` and `paidThisWeekRwf` |
-| POST | `/api/payments` | JWT | Pays a member. `201` when new, `200` when the same `clientUuid` was already recorded |
+| POST | `/api/payments` | JWT | Pays a member their whole balance (any other amount is a `400`). `201` when new, `200` when the same `clientUuid` was already recorded |
 | GET | `/api/payments?memberId=&method=&page=0&size=20` | JWT | Payments, newest first (max 100 per page). Reversed payments are listed with `reversed: true` |
 | POST | `/api/payments/{id}/reverse` | JWT | Body `{"reason"}` (required, at most 100 characters: the member reads it in an SMS). Cancels a payment; the member is owed the amount again |
 | GET | `/api/members/{id}/statement` | JWT | A member's sale credits, shares, deductions, payments and amount owed |
@@ -1121,10 +1132,20 @@ Request body for `POST /api/sales`:
   "buyerId": 2,
   "quantityKg": 150,
   "pricePerKg": 300,
-  "soldAt": "2026-10-09"
+  "soldAt": "2026-10-09",
+  "paymentMethod": "MOMO",
+  "paymentReference": "MP2610090001"
 }
 ```
 
+- The buyer pays in full. `paymentMethod` is required: `CASH`, `MOMO` or `BANK` (otherwise `400`
+  "paymentMethod: is required (CASH, MOMO or BANK)"). `MOMO` and `BANK` need `paymentReference`, the
+  MoMo or bank transaction number (otherwise `400` "A MOMO buyer payment needs the transaction
+  reference."), following the rules in [Payment references](#payment-references). Its form is checked
+  before anything is locked or saved; a reference already used by another order is a `409`
+  "Reference MP2610090001 was already used for ORD-7K2Q." and nothing is saved.
+- A sale of one grade is saved as an order of its own (a new `ORD-` code, shown as `orderCode`),
+  which keeps how the buyer paid. Sending the same `clientUuid` again creates no second order.
 - The grade and the buyer must exist, `quantityKg` must be more than 0 (2 decimals) and
   `pricePerKg` more than 0 in whole RWF, and more than the deduction per kg (otherwise `400`).
   `soldAt` is an optional date and defaults to today (Kigali time).
@@ -1171,11 +1192,15 @@ Request body for `POST /api/sales`:
   deadlock with a sale.
 - Sale codes look like `SAL-7K2Q`.
 - `POST /api/sales/orders` takes `{"clientUuid", "buyerId", "soldAt", "items": [{"gradeId",
-  "quantityKg", "pricePerKg"}]}`, each grade at most once, and
+  "quantityKg", "pricePerKg"}], "paymentMethod", "paymentReference"}`, each grade at most once, and
   records one sale per item with an order code `ORD-7K2Q`. If any item fails, nothing is saved.
+  The buyer pays the whole order once: the method and reference are given once, for the order, with
+  the same rules as a sale, and the answer shows them as `paymentMethod` and `paymentReference`.
 - `GET /api/sales` filters: `search` matches part of the buyer name, a lot code (also those of a
   sale's batches) or sale code (ignoring case), and a number on its own also matches the sale id.
   `gradeId` keeps sales of that grade and `lotId` those that took kg from that lot.
+- `GET /api/sales/{id}` returns one sale exactly as it appears in the list, so a sale detail
+  page can be opened or refreshed on its own. An unknown id is a `404`.
 - `GET /api/sales/summary` covers the current month in Kigali time:
   `salesAmountThisMonth` (RWF), `soldKgThisMonth`, `buyersThisMonth` (different buyers) and
   `averagePricePerKg` (amount / kg, 2 decimals, `0` when nothing was sold).
@@ -1217,11 +1242,31 @@ saves it and sets the lot to `SHARED`.
   get 1,476,000 / 885,600 / 590,400 RWF.
 - Each member's share adds a `SHARE` ledger entry with the kilograms and the gross share.
 
+### Buyer payments
+
+Money in. A buyer always pays in full, and pays a whole order once, so each order is one buyer
+payment; a sale of one grade is an order of its own. `GET /api/buyer-payments` lists them newest
+first (by date, then id; max 100 per page; `buyerId` optional), and `GET /api/buyer-payments/{orderId}`
+returns one. Each has:
+
+- `orderId`, `orderCode`, `buyerId`, `buyerName`, `paidAt` (the sale date) and `createdAt`;
+- `method` and `reference`: `null` for orders saved before V42, shown as "not recorded";
+- `totalKg`, `totalAmountRwf` (what the buyer paid), `totalDeductionRwf` and `totalNetRwf`, so that
+  `totalAmountRwf` = `totalDeductionRwf` + `totalNetRwf`;
+- `sales`: one line per grade (`saleId`, `saleCode`, `gradeName`, `kg`, `pricePerKg`, `amountRwf`);
+- `farmers`: what each member was credited from the order, **one line per member** (their batches in
+  every grade added up), by name: `memberId`, `memberNumber`, `memberName`, `kg`, `grossRwf`,
+  `deductionRwf` (5 RWF per kg by default) and `netRwf`.
+
+A sale from before sales by grade credited its members through the lot share instead: those members
+have `kg` but `null` money, and the order's `totalDeductionRwf` and `totalNetRwf` are `null`. The
+batches of a whole page are loaded in two queries, not two per order.
+
 ### Payments
 
-Payments are made to a member for everything they are owed, not to one lot. What a member
-is owed (their balance) = their sale credits and shares - their deductions - what they were
-already paid.
+A payment disburses to a member everything they are owed, never part of it, and not for one lot.
+What a member is owed (their balance) = their sale credits and shares - their deductions - what
+they were already paid.
 
 Request body for `POST /api/payments`:
 
@@ -1237,10 +1282,17 @@ Request body for `POST /api/payments`:
 ```
 
 - `method` is `CASH`, `MOMO` or `BANK`. `MOMO` and `BANK` payments need `reference`, the
-  MoMo or bank transaction number (otherwise `400`).
+  MoMo or bank transaction number (otherwise `400`), following the rules in
+  [Payment references](#payment-references). A reference already used by a payment that is not
+  reversed is a `409` "Reference MP2610120001 was already used for PAY-0002."; a reversed
+  payment's reference can be used again.
 - Each payment gets its own code, `PAY-` and 4 digits (`PAY-0001`), the highest existing
   number plus one. It is separate from `reference`.
-- `amountRwf` must be more than 0 and at most what the member is owed (otherwise `400`).
+- `amountRwf` must be exactly the member's whole balance. Any other amount is a `400`, for example
+  "Member M-0012 is owed 48,500 RWF. Disburse the full amount.", and nothing is paid. The app sends
+  the balance it showed, so if a sale credited the member in the meantime the payment is refused
+  instead of paying an amount the manager did not see. A member owed nothing gets a `400` too.
+  Partial payments recorded before this rule stay valid; the next payment is the rest of the balance.
 - `paidAt` is an optional date and defaults to today (Kigali time).
 - Sending the same `clientUuid` again returns the existing payment with `200`.
 - Each payment adds a `PAYMENT` ledger entry with the amount and the payment code.
@@ -1248,9 +1300,33 @@ Request body for `POST /api/payments`:
   `shareRwf` (gross credits and shares), `deductionRwf`, `paidRwf`, `balanceRwf` and `status`,
   largest balance first.
   `status` is `UNPAID` (nothing paid yet), `PART_PAID` or `PAID` (balance 0).
+  `settlement` is `OWED` (balance more than 0) or `SETTLED` (balance 0), for the Disburse page:
+  a settled member who earns again from a new sale is `OWED` again, where `status` would say
+  `PART_PAID`.
   `search` (name, member number or phone) and `status` filter the list only:
   `totalOwedRwf` (all balances) and `paidThisWeekRwf` (payments dated Monday to Sunday of the
   current week, Kigali time) always cover all members.
+
+### Payment references
+
+The same rules hold for farmer payments (`POST /api/payments`, `reference`) and buyer payments
+(`POST /api/sales` and `POST /api/sales/orders`, `paymentReference`):
+
+- **MOMO and BANK:** the reference is required and trimmed, then must be 6 to 40 characters of
+  letters, digits, dot (`.`), dash (`-`) or slash (`/`) only. Otherwise `400` "The MOMO reference
+  must be 6 to 40 characters: letters, digits, dot (.), dash (-) or slash (/) only."
+- **Used once per method:** a MOMO reference cannot be used by two farmer payments that are not
+  reversed, nor by two orders; the same for BANK. The comparison ignores case (`mp2610120001` and
+  `MP2610120001` are the same reference). A duplicate is a `409` naming the record that used it, and
+  nothing is saved. Farmer payments and buyer payments are checked separately: a reference on a
+  sale does not block the same reference on a farmer payment. Orders are never reversed, so every
+  order counts.
+- **CASH:** the reference stays optional and is neither checked for its form nor for reuse.
+- Sending the same `clientUuid` again returns the saved record with `200`, never a `409`.
+- This is enforced by the service, not by a unique index: references saved before these rules may
+  already repeat, and an index would stop the migration. Before checking, the service takes a
+  Postgres transaction lock on the method and reference, so two requests with the same reference
+  wait for each other and only the first one is saved.
 
 ### Member statement
 
@@ -1370,9 +1446,12 @@ in confirmation order, splitting a delivery across lots, changing the lot size, 
 space left, stock per grade), losses (shared in proportion, exact rounding, sold kg carry none),
 batches, buyers and sales by grade (older lots first, then lots in fill order shared in proportion,
 awkward numbers that must add up exactly to the ledger entries, requests to skip a lot refused,
-lock order, `SOLD` at 0, floor price warning, idempotency), reversals of deliveries in lots, sharing (the 10,000 kg
-example, rounding remainder, refused for lots with sales), payments (owed math,
-overpayment, MoMo reference, idempotency), member statements and identity verification (the key file
+lock order, `SOLD` at 0, floor price warning, idempotency, the buyer's payment method and reference on the
+order, a sale of one grade saved as its own order), buyer payments (one per order, newest first, farmers summed
+over all their batches, older sales without a method or money, the V42 backfill), reversals of deliveries in
+lots, sharing (the 10,000 kg example, rounding remainder, refused for lots with sales), payments (owed math, only
+the whole balance can be disbursed, `OWED` and `SETTLED`, the form of MoMo and bank references and their single use, a reversed payment's
+reference used again, idempotency), member statements and identity verification (the key file
 and startup checks, PKCE, the signed assertion, the token and userinfo checks with a fake eSignet, the claims
 request, the verified name and phone and their 30 minutes, one manager and one use per verification, cancelling,
 the error codes, and that nothing personal is logged or kept longer). What only the real eSignet can show is listed in Identity verification.

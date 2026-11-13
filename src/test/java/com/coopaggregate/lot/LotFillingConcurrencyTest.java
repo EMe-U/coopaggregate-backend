@@ -45,6 +45,7 @@ import com.coopaggregate.loss.LossService;
 import com.coopaggregate.manager.Manager;
 import com.coopaggregate.manager.ManagerInitializer;
 import com.coopaggregate.manager.ManagerRepository;
+import com.coopaggregate.payment.PaymentMethod;
 import com.coopaggregate.sale.SaleRequest;
 import com.coopaggregate.sale.SaleService;
 import com.coopaggregate.sms.InboundSmsService;
@@ -183,7 +184,7 @@ class LotFillingConcurrencyTest {
             work.add(() -> deliveryService.record(new DeliveryRequest(UUID.randomUUID(), member, grade, kg(), null),
                     manager));
             work.add(() -> saleService.record(new SaleRequest(UUID.randomUUID(), grade, 1L, new BigDecimal("5"),
-                    300L, null, List.of(), null, null), manager));
+                    300L, null, List.of(), null, null, PaymentMethod.CASH, null), manager));
             work.add(() -> recordLoss(grade));
             // The lot size changes while lots are being filled: each lot keeps the size it was opened with.
             String size = List.of("100", "75.5", "140").get(i % 3);
@@ -254,7 +255,7 @@ class LotFillingConcurrencyTest {
 
         // A sale of 120 kg: all of L1 (100 kg), then 20 kg of L2 shared 30 : 20.
         var sale = saleService.record(new SaleRequest(UUID.randomUUID(), grade, 1L, new BigDecimal("120"), 300L,
-                null, List.of(), null, null), manager).sale();
+                null, List.of(), null, null, PaymentMethod.CASH, null), manager).sale();
         assertEquals(List.of("L1:" + d1 + ":60", "L1:" + d2 + ":40", "L2:" + d2 + ":12", "L2:" + d3 + ":8"),
                 sale.batches().stream().map(b -> name(lots, b.lotId()) + ":" + b.deliveryId() + ":" + plain(b.kg()))
                         .toList());

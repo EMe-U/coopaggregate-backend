@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import com.coopaggregate.batch.SaleAllocation;
 import com.coopaggregate.error.BadRequestException;
 import com.coopaggregate.lot.LotStatus;
+import com.coopaggregate.payment.PaymentMethod;
 
 class SaleOrderServiceTest {
 
@@ -164,7 +165,7 @@ class SaleOrderServiceTest {
         SaleOrderRequest request = new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(
                 item(1L, "100.00", 300L),
                 new SaleOrderRequest.Item(2L, new BigDecimal("150.00"), 200L, List.of(5L),
-                        "The buyer wants the second lot", null)));
+                        "The buyer wants the second lot", null)), PaymentMethod.CASH, null);
 
         BadRequestException e = assertThrows(BadRequestException.class, () -> service.recordOrder(request, f.manager));
 
@@ -202,7 +203,47 @@ class SaleOrderServiceTest {
     }
 
     private static SaleOrderRequest order(SaleOrderRequest.Item... items) {
-        return new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(items));
+        return new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(items), PaymentMethod.CASH, null);
+    }
+
+    @Test
+    void anOrderKeepsHowTheBuyerPaidTheWholeOrderOnce() {
+        SaleOrderResponse order = service.recordOrder(new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(
+                item(1L, "120.00", 300L), item(2L, "150.00", 200L)), PaymentMethod.BANK, " BK-778812 "), f.manager)
+                .order();
+
+        assertEquals(1, f.savedOrders.size());
+        assertEquals(PaymentMethod.BANK, f.savedOrders.get(0).getPaymentMethod());
+        assertEquals("BK-778812", f.savedOrders.get(0).getPaymentReference());
+        assertEquals(CLIENT_UUID, f.savedOrders.get(0).getClientUuid());
+        assertEquals(PaymentMethod.BANK, order.paymentMethod());
+        assertEquals("BK-778812", order.paymentReference());
+    }
+
+    @Test
+    void anOrderWithAReferenceAlreadyUsedIsRefusedWith409AndNoGradeIsSold() {
+        when(f.saleOrderRepository.findCodesUsingReference(PaymentMethod.BANK, "BK-778812"))
+                .thenReturn(List.of("ORD-S-12"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> service.recordOrder(
+                new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(item(1L, "120.00", 300L), item(2L, "150.00", 200L)),
+                        PaymentMethod.BANK, "BK-778812"), f.manager));
+
+        assertEquals("Reference BK-778812 was already used for ORD-S-12.", e.getMessage());
+        verify(f.saleOrderRepository, never()).save(any());
+        verify(f.saleRepository, never()).save(any());
+    }
+
+    @Test
+    void aMomoOrderWithoutAReferenceSavesNothing() {
+        BadRequestException e = assertThrows(BadRequestException.class, () -> service.recordOrder(
+                new SaleOrderRequest(CLIENT_UUID, 2L, null, List.of(item(1L, "120.00", 300L)), PaymentMethod.MOMO,
+                        null), f.manager));
+
+        assertEquals("A MOMO buyer payment needs the transaction reference.", e.getMessage());
+        assertTrue(f.calls.isEmpty(), f.calls.toString());
+        verify(f.saleOrderRepository, never()).save(any());
+        verify(f.saleRepository, never()).save(any());
     }
 
     private static SaleOrderRequest.Item item(Long gradeId, String quantityKg, long pricePerKg) {

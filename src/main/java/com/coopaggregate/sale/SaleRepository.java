@@ -19,9 +19,15 @@ public interface SaleRepository extends JpaRepository<Sale, Long>, JpaSpecificat
 
     Optional<Sale> findByClientUuid(UUID clientUuid);
 
+    @EntityGraph(attributePaths = {"grade", "lot", "buyer", "saleOrder"})
+    Optional<Sale> findWithDetailsById(Long id);
+
     boolean existsBySaleCode(String saleCode);
 
     List<Sale> findBySaleOrderIdOrderByIdAsc(Long saleOrderId);
+
+    @EntityGraph(attributePaths = {"grade", "saleOrder"})
+    List<Sale> findBySaleOrderIdInOrderByIdAsc(Collection<Long> saleOrderIds);
 
     @Override
     @EntityGraph(attributePaths = {"grade", "lot", "buyer", "saleOrder"})
