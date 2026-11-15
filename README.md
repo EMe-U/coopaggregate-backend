@@ -1,257 +1,424 @@
 # CoopAggregate - Backend
 
-REST API for CoopAggregate, an offline-capable system for delivery records and fair
-payment sharing at Koperative Intagamburuzwa, an Irish-potato cooperative in Busogo,
-Musanze, Rwanda. The cooperative manager is the only user who logs in, members receive
-SMS notifications, and buyers use a public page without logging in. This repository
-contains the API only; the React frontend is in a separate repository.
+## 1. Overview
 
-## Links
+CoopAggregate is an offline-capable system for Koperative Intagamburuzwa, an Irish-potato
+cooperative in Busogo, Musanze, Rwanda. It records each member's potato deliveries, pools them
+into fixed-size lots by grade, sells them to buyers, and works out what each member is owed from
+the kilograms they contributed, with every movement of potatoes and money written to an
+append-only ledger. It addresses two problems: members had no way to confirm what was recorded
+for them or to check how sale money was split, and the manager needs records that keep working
+without a stable internet connection. Three groups use it. The **cooperative manager** is the only
+user who logs in, and uses the web app to record deliveries, sales and payments. **Members** do not
+log in: they receive SMS messages with a code to confirm each delivery, a receipt, and a message for
+each payment, and can dispute a delivery by replying. **Buyers** use a public page without an
+account to see the grades on offer and send purchase requests. This repository contains the REST
+API only; the React frontend is in a separate repository.
 
-| What | URL |
-|------|-----|
-| Frontend repository | https://github.com/EMe-U/coopaggregate-frontend |
-| Live API (health check) | https://coopaggregate-backend.onrender.com/api/health |
+## 2. Links
+
+| What | Link |
+|------|------|
 | Live app | https://coopaggregate-frontend.onrender.com |
+| Live API (health check) | https://coopaggregate-backend.onrender.com/api/health |
+| Frontend repository | https://github.com/EMe-U/coopaggregate-frontend |
+| Walkthrough video | VIDEO_LINK |
+| Technical report | REPORT_LINK |
 
-## Tech stack
+## 3. Main features
 
-- Java 21
-- Spring Boot 3.5
-- Spring Data JPA
-- Flyway
-- PostgreSQL (Neon)
-- Spring Security with JWT (OAuth2 Resource Server, HS256)
-- springdoc-openapi (Swagger UI)
-- JUnit 5, Mockito
-- Docker
-- Render
+- **Identity verification:** new members are verified with MOSIP eSignet (OpenID Connect with
+  PKCE and a signed client assertion) and registered with the verified name and phone; each member
+  also has a 16-digit national ID that must be unique.
+- **Deliveries with SMS confirmation:** each delivery gets a 6-digit one-time code by SMS (stored
+  only as a BCrypt hash, valid 10 minutes, 3 tries). The member gives the code to the manager to
+  confirm it, then receives a receipt SMS. The manager can review a delivery when no code can reach
+  the member.
+- **Offline sync support:** deliveries, sales and payments carry a `clientUuid` created on the
+  device, so a record sent again after a lost connection is saved only once. A delivery keeps the
+  time it was recorded on the device (`deliveredAt`, up to 7 days back).
+- **Fixed-size lots by grade:** confirmed kilograms fill one lot per grade up to the lot size, and a
+  delivery can be split across two lots. The lot size is a setting the manager can change (100 kg by
+  default); each lot keeps the size it was opened with.
+- **Sales, oldest lot first:** a sale is made by grade and always takes the oldest lot first. The sale
+  money is split between the farmers whose kilograms were sold, in proportion to their kilograms,
+  minus a deduction per kg (5 RWF by default).
+- **Buyer payments:** a buyer pays a whole order once, by cash, MoMo or bank. MoMo and bank references
+  are checked and can be used only once.
+- **Full-balance disbursement:** a payment to a member is always the member's whole balance, and the
+  member gets an SMS with the amount and the new balance.
+- **Reversals with a reason:** a delivery or payment recorded by mistake is reversed or corrected
+  with a required reason. The record stays for the history, and the ledger gets a REVERSAL entry.
+- **Disputes by SMS reply:** a member replies `2 <receipt code>` to dispute a delivery (with an SMS
+  provider that forwards replies, Africa's Talking). The manager resolves, corrects or reverses the
+  delivery, and the disputes page lists open and settled disputes.
+- **Hash-chained, append-only ledger:** a database trigger blocks every change and deletion, each
+  entry stores a SHA-256 hash that includes the previous entry's hash, and `GET /api/ledger/verify`
+  reports the first broken entry.
+- **Reports:** a weekly report (deliveries, stock, sales, money, confirmations), the dashboard,
+  member statements and member balances.
+- **Public page for buyers:** grades with an availability hint (no prices or kilograms), purchase
+  requests and request status lookup, with rate limits.
 
-## Project structure
+## 4. Technical requirements
 
-The code is organised by feature. Each feature package holds its own controller,
-service, repository, entity and DTO classes. Shared code lives in `config`, `error`
-and `common`.
+Versions are taken from `pom.xml`, the Spring Boot 3.5.16 dependency management, the Maven wrapper
+and the `Dockerfile`.
+
+| Component | Version | Where it comes from |
+|-----------|---------|---------------------|
+| Java (JDK) | 21 | `java.version` in `pom.xml`; Docker images `maven:3.9-eclipse-temurin-21` (build) and `eclipse-temurin:21-jre` (run) |
+| Spring Boot | 3.5.16 | Parent in `pom.xml` |
+| Spring Framework | 6.2.19 | Managed by Spring Boot |
+| Spring Security (OAuth2 Resource Server, JWT with HS256) | 6.5.11 | Managed by Spring Boot |
+| Spring Data JPA with Hibernate ORM | 6.6.53.Final | Managed by Spring Boot |
+| Embedded Tomcat | 10.1.55 | Managed by Spring Boot |
+| Maven | 3.9.16 | Maven wrapper 3.3.4 (`.mvn/wrapper/maven-wrapper.properties`); Maven does not need to be installed |
+| PostgreSQL | 13 or newer (Neon in production) | V42 uses `gen_random_uuid()`, built in since PostgreSQL 13 |
+| PostgreSQL JDBC driver | 42.7.11 | Managed by Spring Boot |
+| Flyway (`flyway-core`, `flyway-database-postgresql`) | 11.7.2 | Managed by Spring Boot |
+| springdoc-openapi (Swagger UI) | 2.8.17 | `springdoc.version` in `pom.xml` |
+| Docker | Any recent version | Only to build the deployment image |
+
+Test libraries, all from `spring-boot-starter-test`:
+
+| Library | Version |
+|---------|---------|
+| JUnit Jupiter | 5.12.2 |
+| Mockito | 5.17.0 |
+| AssertJ | 3.27.7 |
+| Spring Test (MockMvc, `@WebMvcTest`, `@SpringBootTest`) | 6.2.19 |
+
+## 5. Architecture
+
+The code is organised by feature, one package per feature, and each feature has three layers. A
+**controller** (`@RestController`, for example `SaleController`) handles HTTP: routes, request
+validation and status codes. A **service** (`@Service`, for example `SaleService`) holds the
+business rules, the transaction and the database locks. A **repository** (a Spring Data JPA
+interface, for example `SaleRepository`) reads and writes the database. Classes receive their
+dependencies through their constructors, and `GlobalExceptionHandler` turns exceptions into
+`{"message": ...}` responses with the right status code. The schema is created and changed only by
+**Flyway migrations** in `src/main/resources/db/migration`, which run when the app starts; Hibernate
+only validates the schema (`ddl-auto=validate`). The `ledger_entry` table is append-only: a
+**database trigger** (V3) refuses every `UPDATE` and `DELETE`, and each entry stores a SHA-256 hash
+of its own data and the previous entry's hash (`LedgerHasher`). SMS go through the **`SmsSender`
+interface**, with three implementations chosen by `SMS_PROVIDER`: `TraccarSmsSender` (an Android
+phone with a SIM running the Traccar SMS Gateway app), `AfricasTalkingSmsSender`, and
+`LogSmsSender` (the default, which sends nothing). Every message is first queued in the `sms_log`
+table, sent in the background after the database commit, and retried by `SmsRetryJob` when it fails.
+
+## 6. Repository structure
 
 ```
 coopaggregate-backend/
 ├── src/main/java/com/coopaggregate/
-│   ├── CoopAggregateApplication.java
-│   ├── config/            Security, JWT, CORS and Swagger configuration
-│   ├── error/             Error responses for the whole API
-│   ├── common/            Shared code (paging, Rwandan phone numbers)
-│   ├── auth/              Manager login and current manager
-│   ├── manager/           Manager account
-│   ├── ledger/            Append-only, hash-chained ledger
-│   ├── member/            Cooperative members
-│   ├── health/            Health check endpoint
-│   ├── batch/             Batches (kg sold and lost per delivery), sale planning and preview
-│   └── grade/, lot/, delivery/, loss/, buyer/, sale/,
-│       share/, payment/, dispute/, setting/, sms/   Entities and repositories
+│   ├── CoopAggregateApplication.java   Entry point
+│   ├── audit/       Change history for actions that are not money (settings, grades, reviews)
+│   ├── auth/        Manager login, JWT, password change, lockout after failed logins
+│   ├── batch/       Batches (each delivery's kg sold, lost and left), sale and loss allocations
+│   ├── buyer/       Buyers and buyers' purchase requests (manager side)
+│   ├── common/      Shared helpers: Kigali time, paging, Rwandan phone numbers, short codes
+│   ├── config/      Security, JWT, CORS, Swagger, background tasks and scheduling
+│   ├── dashboard/   Numbers for the home screen
+│   ├── delivery/    Deliveries, one-time SMS codes, confirmation, review, reversal, correction
+│   ├── dispute/     Disputes page
+│   ├── error/       Error responses for the whole API (ApiError, GlobalExceptionHandler)
+│   ├── grade/       Grades A, B and C
+│   ├── health/      Health check endpoint
+│   ├── identity/    MOSIP eSignet identity verification
+│   ├── ledger/      Hash-chained, append-only ledger, verification and reversals
+│   ├── loss/        Losses recorded on lots
+│   ├── lot/         Fixed-size lots, lot filling, stock
+│   ├── manager/     Manager account, created at first start
+│   ├── member/      Members and national IDs
+│   ├── payment/     Payments to members, balances, payment references
+│   ├── publicapi/   Public endpoints for buyers and their rate limits
+│   ├── report/      Weekly report
+│   ├── sale/        Sales by grade, orders and buyer payments
+│   ├── setting/     Settings and the change history endpoint
+│   ├── share/       Older lot sharing (before sales by grade)
+│   └── sms/         SMS senders, queue, retries, message texts and SMS replies
 ├── src/main/resources/
-│   ├── application.properties
-│   └── db/migration/      Flyway migrations
-├── Dockerfile
-├── .env.example
+│   ├── application.properties          Settings, read from environment variables
+│   └── db/migration/                   Flyway migrations V1 to V42
+├── src/test/java/com/coopaggregate/    Tests, in the same packages as the code
+├── docs/            fixed-lots-checks.sql (read-only checks after V36), fixed-lots-swagger-test.md
+├── scripts/         mark-lots-emptied.sql
+├── Dockerfile       Two-stage build: Maven build, then a Java 21 runtime image
+├── .env.example     Example environment variables, placeholders only
+├── mvnw, mvnw.cmd   Maven wrapper
 └── pom.xml
 ```
 
-## Getting started
+## 7. Installation and running locally
 
-### Prerequisites
+You need JDK 21, Git, and a PostgreSQL database: a local one or a free [Neon](https://neon.tech)
+project.
 
-- JDK 21 or newer
-- A PostgreSQL database (for example a free [Neon](https://neon.tech) project)
+1. Clone the repository:
 
-Maven does not need to be installed. The project includes the Maven wrapper
-(`mvnw` / `mvnw.cmd`).
+   ```bash
+   git clone https://github.com/EMe-U/coopaggregate-backend.git
+   cd coopaggregate-backend
+   ```
 
-### Clone
+2. Create your environment file from the example and fill in your own values (see
+   [Environment variables](#8-environment-variables)). `.env` is ignored by Git.
 
-```bash
-git clone https://github.com/EMe-U/coopaggregate-backend.git
-cd coopaggregate-backend
-```
+   ```bash
+   cp .env.example .env            # Windows PowerShell: Copy-Item .env.example .env
+   ```
 
-### Environment variables
+3. Load the variables into your terminal, and set the port to 8081. Spring Boot does not read
+   `.env` by itself. Without `PORT` the app uses 8080, which the local eSignet uses in the example
+   settings.
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | Yes | JDBC URL: `jdbc:postgresql://host/db?sslmode=require` |
-| `DB_USERNAME` | Yes | Database user |
-| `DB_PASSWORD` | Yes | Database password |
-| `JWT_SECRET` | Yes | Secret for signing tokens, at least 32 characters |
-| `FRONTEND_URL` | No | Allowed CORS origin. Default: `http://localhost:5173` |
-| `MANAGER_NAME` | First start | Name of the manager account |
-| `MANAGER_EMAIL` | First start | Login email of the manager account |
-| `MANAGER_PASSWORD` | First start | Login password of the manager account |
-| `SMS_PROVIDER` | No | `log` (default: SMS are only saved in `sms_log`), `africastalking` or `traccar` |
-| `AT_USERNAME` | With Africa's Talking | Africa's Talking username; `sandbox` for their sandbox |
-| `AT_API_KEY` | With Africa's Talking | Africa's Talking API key |
-| `AT_SENDER_ID` | No | Sender name shown on members' phones, if your account has one |
-| `SMS_TRACCAR_TOKEN` | With Traccar | Token of the Traccar SMS Gateway app. The app does not start without it |
-| `SMS_TRACCAR_URL` | No | Gateway URL with Traccar. Default `https://www.traccar.org/sms/`. Must be `https` (`http` only for localhost) |
-| `SMS_INBOUND_SECRET` | For SMS replies | Long random string that the SMS reply webhook must send (see SMS) |
-| `SMS_LOG_SHOW_CODES` | No | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log` (default `false`, see SMS) |
-| `SMS_DEMO_CODE` | No | **Temporary, for the demo only.** 6 digits also accepted as the code of any pending delivery. Not set by default (see Delivery confirmation) |
-| `MOSIP_ENABLED` | To register members | `true` switches member identity verification on. Registering a member needs it, so with the default `false` no member can be registered (see Identity verification), unless `MEMBER_REGISTER_UNVERIFIED=true` |
-| `MEMBER_REGISTER_UNVERIFIED` | No | **For demos and fallbacks only.** `true` lets the manager register a member with a typed name and phone, stored as **not verified**, but only while `MOSIP_ENABLED=false`. Ignored (with a startup warning) while `MOSIP_ENABLED=true`, even when eSignet cannot be reached. Default `false` (see Members) |
-| `MOSIP_BASE_URL` | With `MOSIP_ENABLED` | The eSignet issuer, for example `http://localhost:8080`. Plain `http` only for localhost. The token, userinfo and JWKS URLs follow from it, and the authorize URL unless the next one is set |
-| `MOSIP_PUBLIC_AUTHORIZE_URL` | No | The full authorize address the member's browser is sent to, when it differs from the address the backend uses, for example a backend on Render reaching a local eSignet through a tunnel (`MOSIP_BASE_URL=https://<tunnel-host>`) while the browser opens `http://localhost:8080/oauth2/authorize`. Default (and when empty): `MOSIP_BASE_URL` + `/oauth2/authorize`. Plain `http` only for localhost. The startup log names the authorize host and which setting it came from. With a tunnel, also set `MOSIP_ISSUER` and `MOSIP_ASSERTION_AUDIENCE` to eSignet's own address, since their default is `MOSIP_BASE_URL` |
-| `MOSIP_CLIENT_ID` | With `MOSIP_ENABLED` | The client id registered with eSignet |
-| `MOSIP_REDIRECT_URI` | With `MOSIP_ENABLED` | The frontend page eSignet sends the member back to, exactly as registered, for example `http://localhost:5173/identity/callback` |
-| `MOSIP_PRIVATE_KEY_PATH` | With `MOSIP_ENABLED` | Path to the cooperative's RSA private key file (PKCS#8 PEM or JWK, detected from the content). Keep it outside the repository |
-| `MOSIP_KEY_ID` | With `MOSIP_ENABLED` | The `kid` of the matching public JWK |
-| `MOSIP_SCOPE`, `MOSIP_ACR_VALUES`, `MOSIP_ASSERTION_AUDIENCE` | No | Defaults: `openid`, `mosip:idp:acr:password`, and `MOSIP_BASE_URL`. The details are asked for with the `claims` parameter, so leave `MOSIP_SCOPE` out (`profile` would also release the picture); the app warns at startup if it asks for more than `openid` and `phone`. `MOSIP_ACR_VALUES` may hold several login methods, space-separated; it is sent as `acr_values` exactly as set |
-| `MOSIP_OPTIONAL_CLAIMS` | No | The optional details asked for besides the name and phone, space-separated. Default (and when empty): `birthdate gender email address`. Only those four can be asked for; any other name, `picture` included, is left out and named in a startup warning |
-| `MOSIP_NATIONAL_ID_CLAIM` | No | The claim name of the national ID, asked for as optional (`"<name>":null`). Default: empty, not asked for, and the manager types the national ID. When it is set and the member allows it, the member is registered with that national ID and it cannot be typed (see Identity verification). Locally: `preferred_username`, which this test eSignet fills with the UIN. It stands in for the national ID because the test eSignet only allows a fixed list of claim names; in production the national ID service (NIDA) would release a proper national ID claim, and this setting would name that claim instead |
-| `MOSIP_PROMPT_CONSENT` | No | Demo setting. `true` adds `prompt=consent` so eSignet shows its Allow page on every login, not only the first. Default `false` |
-| `MOSIP_ALLOWED_ACRS` | No | The id_token `acr` values (login methods) that count as a verification, space-separated, compared exactly. Default: `mosip:idp:acr:generated-code` (the one-time code) |
-| `MOSIP_ISSUER` | No | The exact `iss` the ID token must carry (and the userinfo answer, unless the next one is set). Default: `MOSIP_BASE_URL` |
-| `MOSIP_USERINFO_ISSUER` | No | The exact `iss` the userinfo answer must carry, for an eSignet that signs it with another issuer than the ID token (the local one: ID token `http://localhost:8080`, userinfo `http://localhost:8088/v1/esignet`). Default: the ID token's issuer |
-| `PORT` | No | HTTP port. Default: `8080` |
+   Windows (PowerShell):
 
-The manager is the only user who logs in. On startup, if the `manager` table is empty,
-the app creates the manager account from `MANAGER_NAME`, `MANAGER_EMAIL` and
-`MANAGER_PASSWORD` (the password is stored as a BCrypt hash). If they are not set, the
-app logs a warning and starts without a manager. Once the account exists, these
-variables are no longer read, so changing them does not change the password.
+   ```powershell
+   Get-Content .env | Where-Object { $_ -match '^[^#].*=' } | ForEach-Object { $k, $v = $_ -split '=', 2; Set-Item "env:$k" $v }
+   $env:PORT = "8081"
+   ```
 
-Neon shows a connection string like `postgresql://user:password@host/db?sslmode=require`.
-Turn it into a JDBC URL by adding `jdbc:` at the start and removing `user:password@`,
-then put the user and password in `DB_USERNAME` and `DB_PASSWORD`.
+   macOS / Linux:
 
-You can set the variables in one of two ways.
+   ```bash
+   set -a; source .env; set +a
+   export PORT=8081
+   ```
 
-**IntelliJ run configuration**
+   In IntelliJ you can instead add the variables to the `CoopAggregateApplication` run
+   configuration (Run > Edit Configurations > Environment variables, separated by semicolons).
 
-Open Run > Edit Configurations, select the `CoopAggregateApplication` configuration,
-and add the variables to the Environment variables field, separated by semicolons:
+4. Run the app. Flyway creates or updates the schema on startup.
 
-```
-DATABASE_URL=jdbc:postgresql://host/db?sslmode=require;DB_USERNAME=...;DB_PASSWORD=...;JWT_SECRET=...;MANAGER_NAME=...;MANAGER_EMAIL=...;MANAGER_PASSWORD=...
-```
+   ```powershell
+   .\mvnw.cmd spring-boot:run      # Windows
+   ```
 
-**A .env file**
+   ```bash
+   ./mvnw spring-boot:run          # macOS / Linux
+   ```
 
-Copy `.env.example` to `.env` and fill in your values. `.env` is ignored by Git.
-Spring Boot does not read `.env` by itself, so load it into your terminal session
-before starting the app.
+5. Open http://localhost:8081/api/health. The answer is `{"status":"OK"}`. The API documentation is
+   at http://localhost:8081/swagger-ui.html (see [Interactive docs (Swagger)](#interactive-docs-swagger)).
+   On Windows PowerShell, use `curl.exe` instead of `curl`.
 
-Windows (PowerShell):
+**The manager account.** On startup, if the `manager` table is empty, the app creates the manager
+account from `MANAGER_NAME`, `MANAGER_EMAIL` and `MANAGER_PASSWORD` (the password is stored as a
+BCrypt hash). If they are not set, the app logs a warning and starts without a manager. Once the
+account exists these variables are no longer read, so changing them does not change the password.
+
+**A Neon database.** Neon shows a connection string like
+`postgresql://user:password@host/db?sslmode=require`. Turn it into a JDBC URL by adding `jdbc:` at
+the start and removing `user:password@`, then put the user and password in `DB_USERNAME` and
+`DB_PASSWORD`.
+
+## 8. Environment variables
+
+The values below are placeholders. Never commit real values; keep them in `.env` (ignored by Git) or
+in the hosting provider's settings. `application.properties` reads each one, and `.env.example` lists
+them with comments.
+
+| Variable | Placeholder | What it is for |
+|----------|-------------|----------------|
+| `DATABASE_URL` | `jdbc:postgresql://your-host/your-database?sslmode=require` | **Required.** JDBC URL of the PostgreSQL database |
+| `DB_USERNAME` | `your-db-username` | **Required.** Database user |
+| `DB_PASSWORD` | `your-db-password` | **Required.** Database password |
+| `JWT_SECRET` | `replace-with-a-long-random-secret` | **Required.** Secret for signing login tokens, at least 32 characters |
+| `PORT` | `8081` | HTTP port. Default `8080`. Do not set it on Render, which sets it |
+| `FRONTEND_URL` | `http://localhost:5173` | The only origin allowed by CORS. Default `http://localhost:5173` |
+| `MANAGER_NAME` | `Cooperative Manager` | First start only: name of the manager account |
+| `MANAGER_EMAIL` | `manager@example.com` | First start only: login email of the manager account |
+| `MANAGER_PASSWORD` | `replace-with-a-strong-password` | First start only: login password of the manager account |
+| `SMS_PROVIDER` | `log` | `log` (default: sends nothing, messages only saved in `sms_log`), `africastalking` or `traccar` |
+| `AT_USERNAME` | `sandbox` | With Africa's Talking: the username; `sandbox` for their sandbox |
+| `AT_API_KEY` | `your-africastalking-api-key` | With Africa's Talking: the API key |
+| `AT_SENDER_ID` | (empty) | Optional sender name shown on members' phones, if the account has one |
+| `SMS_TRACCAR_TOKEN` | `your-traccar-gateway-token` | With Traccar: token of the Traccar SMS Gateway app. The app does not start without it |
+| `SMS_TRACCAR_URL` | `https://www.traccar.org/sms/` | With Traccar: the gateway URL (this is the default). Must be `https` (`http` only for localhost) |
+| `SMS_INBOUND_SECRET` | `replace-with-a-long-random-secret` | Secret the SMS reply webhook must send. Empty: replies are refused |
+| `SMS_LOG_SHOW_CODES` | `false` | **Development only.** `true` prints the real one-time codes in the console with `SMS_PROVIDER=log`. The app refuses to start with `true` and any other provider |
+| `SMS_DEMO_CODE` | `<6 digits>` | **Temporary, for the demo only.** 6 digits also accepted as the code of any pending delivery. Not set by default (see Delivery confirmation) |
+| `MOSIP_ENABLED` | `false` | `true` switches eSignet identity verification on. Registering a member needs it, unless `MEMBER_REGISTER_UNVERIFIED=true` |
+| `MEMBER_REGISTER_UNVERIFIED` | `false` | **Demos and fallbacks only.** `true` lets the manager register a member with a typed name and phone, stored as not verified, only while `MOSIP_ENABLED=false`. Ignored (with a startup warning) while `MOSIP_ENABLED=true` (see Members) |
+| `MOSIP_BASE_URL` | `http://localhost:8080` | With `MOSIP_ENABLED`: the eSignet issuer. Plain `http` only for localhost. The token, userinfo and JWKS URLs follow from it, and the authorize URL unless the next one is set |
+| `MOSIP_PUBLIC_AUTHORIZE_URL` | `http://localhost:8080/oauth2/authorize` | Optional: the authorize address the member's browser opens, when it differs from the one the backend uses (for example a backend on Render reaching a local eSignet through a tunnel, `MOSIP_BASE_URL=https://<tunnel-host>`). Default: `MOSIP_BASE_URL` + `/oauth2/authorize`. With a tunnel, also set `MOSIP_ISSUER` and `MOSIP_ASSERTION_AUDIENCE` to eSignet's own address |
+| `MOSIP_CLIENT_ID` | `your-client-id` | With `MOSIP_ENABLED`: the client id registered with eSignet |
+| `MOSIP_REDIRECT_URI` | `http://localhost:5173/identity/callback` | With `MOSIP_ENABLED`: the frontend page eSignet sends the member back to, exactly as registered |
+| `MOSIP_PRIVATE_KEY_PATH` | `C:/path/to/your-private-key.pem` | With `MOSIP_ENABLED`: path to the cooperative's RSA private key file (PKCS#8 PEM or JWK). Keep it outside the repository |
+| `MOSIP_KEY_ID` | `your-key-id` | With `MOSIP_ENABLED`: the `kid` of the matching public JWK |
+| `MOSIP_SCOPE` | `openid` | Optional, default `openid`. The details are asked for with the `claims` parameter, so leave it out (`profile` would also release the picture) |
+| `MOSIP_ACR_VALUES` | `mosip:idp:acr:password` | Optional, this is the default: the login methods asked for, space-separated, sent as `acr_values` exactly as set |
+| `MOSIP_ASSERTION_AUDIENCE` | `<MOSIP_BASE_URL>` | Optional: audience of the client assertion. Default `MOSIP_BASE_URL` |
+| `MOSIP_OPTIONAL_CLAIMS` | `birthdate gender email address` | Optional, this is the default: the details asked for besides the name and phone. Only these four are possible; any other name, `picture` included, is left out with a startup warning |
+| `MOSIP_NATIONAL_ID_CLAIM` | `preferred_username` | Optional, empty by default (the manager types the national ID). When set, that claim is asked for and, when released, the member is registered with it. Locally `preferred_username`, which the test eSignet fills with the UIN; in production it would name the national ID claim |
+| `MOSIP_PROMPT_CONSENT` | `false` | Demo setting: `true` makes eSignet show its Allow page on every login |
+| `MOSIP_ALLOWED_ACRS` | `mosip:idp:acr:generated-code` | Optional, this is the default: the id_token `acr` values (login methods) that count as a verification, space-separated |
+| `MOSIP_ISSUER` | `<MOSIP_BASE_URL>` | Optional: the exact `iss` of the ID token (and of the userinfo answer unless the next one is set). Default `MOSIP_BASE_URL` |
+| `MOSIP_USERINFO_ISSUER` | `http://localhost:8088/v1/esignet` | Optional: the exact `iss` of the userinfo answer, when eSignet signs it with another issuer than the ID token. Default: the ID token's issuer |
+| `JAVA_TOOL_OPTIONS` | `-XX:MaxRAMPercentage=75 -XX:+UseSerialGC` | Render only: keeps the JVM within the 512 MB memory of the free plan |
+
+## 9. Running the tests
 
 ```powershell
-Copy-Item .env.example .env
-Get-Content .env | Where-Object { $_ -match '^[^#].*=' } | ForEach-Object { $k, $v = $_ -split '=', 2; Set-Item "env:$k" $v }
+.\mvnw.cmd test      # Windows
 ```
-
-macOS / Linux:
 
 ```bash
-cp .env.example .env
-set -a; source .env; set +a
+./mvnw test          # macOS / Linux
 ```
 
-### Run
+**Latest run (13 November 2026): 1,283 tests, 0 failures, 0 errors, 3 skipped**, in 95 test
+classes. The 3 skipped tests are `LotFillingConcurrencyTest`, which needs a local Postgres (below).
 
-Windows:
+The tests do not need a database. Service tests use Mockito mocks of the repositories, and
+controller tests use `@WebMvcTest` with MockMvc (validation errors, status codes, `401` without a
+token). They cover:
 
-```powershell
-.\mvnw.cmd spring-boot:run
-```
+- the ledger: hash chain, recording, reversal and verification;
+- login, including the lockout after 5 failures, and Rwandan phone number validation;
+- members: create, update, duplicates, national ID rules, activate and deactivate;
+- deliveries: deduction, no lot until confirmed, idempotency, ledger entry, one-time codes;
+- fixed-size lots: filling in confirmation order, a delivery split across lots, changing the lot
+  size, lots of two sizes in one grade, shortfall and space left, stock per grade;
+- losses: shared in proportion, exact rounding, sold kg carry none;
+- batches, buyers and sales by grade: older lots first, then lots in fill order shared in
+  proportion, awkward numbers that must add up exactly to the ledger entries, requests to skip a lot
+  refused, lock order, `SOLD` at 0, floor price warning, idempotency, the buyer's payment method and
+  reference on the order, a sale of one grade saved as its own order;
+- buyer payments: one per order, newest first, farmers summed over all their batches, older sales
+  without a method or money, the V42 backfill;
+- reversals of deliveries in lots;
+- sharing: the 10,000 kg example, the rounding remainder, refused for lots with sales;
+- payments: what a member is owed, only the whole balance can be disbursed, `OWED` and `SETTLED`,
+  the form of MoMo and bank references and their single use, a reversed payment's reference used
+  again, idempotency;
+- member statements and the weekly report;
+- identity verification: the key file and startup checks, PKCE, the signed assertion, the token and
+  userinfo checks with a fake eSignet, the claims request, the verified details and their 30
+  minutes, one manager and one use per verification, cancelling, the error codes, and that nothing
+  personal is logged or kept longer. What only the real eSignet can show is listed in Identity
+  verification.
 
-macOS / Linux:
+`LotFillingConcurrencyTest` runs on a real, **empty, local** Postgres and is skipped otherwise: many
+confirmations of one grade at once, and confirmations, sales, losses, reversals, corrections and
+disputes side by side while the lot size changes, with no lot over its size, no deadlock, every
+total matching, every read model agreeing with the tables, and the ledger still verifying; and lots
+of two sizes in one grade through filling, a sale, a loss, a reversal and the weekly report. It
+refuses any host but localhost:
 
 ```bash
-./mvnw spring-boot:run
+./mvnw test -Dtest=LotFillingConcurrencyTest -Dcoopaggregate.test.postgres-url=jdbc:postgresql://localhost:5432/<empty-db>
 ```
 
-The API starts on http://localhost:8080.
+`docs/fixed-lots-swagger-test.md` walks through the lot rules in Swagger with the numbers to expect.
 
-### Check that it works
+## 10. Deployment
 
-```bash
-curl http://localhost:8080/api/health
-```
+- **Backend: Render**, as a Web Service built from the `Dockerfile` (Maven build stage, then a Java 21
+  runtime image). Region Frankfurt, the same region as the database. Plan: Free (512 MB). It deploys
+  automatically on every push to the `main` branch.
+- **Database: Neon** (PostgreSQL). Flyway applies any new migration when the app starts.
+- **The free Render plan sleeps after 15 minutes without requests.** The first request after that
+  wakes the service, which takes a while to start; later requests are fast again.
 
-Expected response:
+Set these variables in Render (placeholders and meanings in
+[Environment variables](#8-environment-variables)):
 
-```json
-{"status":"OK"}
-```
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL`, `DB_USERNAME`, `DB_PASSWORD` | The Neon database: JDBC URL, user and password |
+| `JWT_SECRET` | At least 32 characters |
+| `FRONTEND_URL` | `https://coopaggregate-frontend.onrender.com` |
+| `MANAGER_NAME`, `MANAGER_EMAIL`, `MANAGER_PASSWORD` | The manager account, read on the first start only |
+| `JAVA_TOOL_OPTIONS` | `-XX:MaxRAMPercentage=75 -XX:+UseSerialGC` |
+| `SMS_PROVIDER` | `africastalking` or `traccar` to send real SMS; otherwise leave it unset |
+| `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
+| `SMS_TRACCAR_TOKEN`, `SMS_TRACCAR_URL` | Only with `SMS_PROVIDER=traccar`: the gateway token and, if different, its `https` URL |
+| `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
+| `MOSIP_*` | To register members, with a real eSignet over `https`: `MOSIP_ENABLED`, `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY_PATH` (a Render secret file, read at `/etc/secrets/<file name>`) and `MOSIP_KEY_ID`. With a local eSignet reached through a tunnel: `MOSIP_BASE_URL=https://<tunnel-host>`, `MOSIP_PUBLIC_AUTHORIZE_URL=http://localhost:8080/oauth2/authorize`, and `MOSIP_ISSUER`, `MOSIP_USERINFO_ISSUER` and `MOSIP_ASSERTION_AUDIENCE` set to eSignet's own addresses |
+| `MEMBER_REGISTER_UNVERIFIED` | Leave it unset. Only for a demo or fallback with `MOSIP_ENABLED=false`: members are then registered **unverified** (see Members) |
 
-On Windows PowerShell, use `curl.exe` instead of `curl`.
+Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app refuses to
+start if it is `true` with any provider but `log`. Do not set `PORT`; Render sets it.
 
-## Database
+## 11. Database migrations
 
-The schema is managed by Flyway. Migrations are in `src/main/resources/db/migration`
-and run automatically when the application starts. Hibernate only validates the
-schema (`ddl-auto=validate`); it never changes it.
+Flyway runs the migrations in `src/main/resources/db/migration` when the app starts. Hibernate only
+validates the schema; it never changes it. There is no V8: the numbering skips it.
 
-ERD: see `docs/erd.png`.
+| Version | What it does |
+|---------|--------------|
+| V1 | Empty starting point; the tables come in V2 |
+| V2 | Creates the first tables: `manager`, `member`, `grade`, `setting`, `lot`, `delivery`, `loss`, `buyer`, `buyer_request`, `sale`, `lot_share`, `produce_payment`, `ledger_entry`, `dispute`, `sms_log` |
+| V3 | Makes `ledger_entry` append-only: a trigger refuses every `UPDATE` and `DELETE` |
+| V4 | Reference data: grades A and B, and the settings row (deduction 5 RWF per kg, SMS on) |
+| V5 | Renames grades A and B to Big and Normal, adds grade C (Small), makes floor prices optional |
+| V6 | Makes the national ID optional (still unique), makes member phones unique, adds a sequence for member codes |
+| V7 | At most one open lot per grade |
+| V9 | Adds a buyer type (free text) and makes buyer phones unique |
+| V10 | Adds `sale.client_uuid`, so a sale sent twice is saved once |
+| V11 | Adds the lot status `SOLD` |
+| V12 | Adds the loss reason `DRYING` |
+| V13 | Renames member codes `MEM-0001` to `M-0001` and drops the V6 sequence |
+| V14 | A payment belongs to a member, not a lot; adds `client_uuid` to payments; methods `CASH` and `MOMO` |
+| V15 | Adds the payment method `BANK` |
+| V16 | Adds payment codes (`PAY-0001`) and numbers the existing payments |
+| V17 | Drops `produce_payment.lot_id` |
+| V18 | Adds `sale_order`, which groups the sales of one buyer order |
+| V19 | Adds reversal columns to `delivery` and `produce_payment`, and the link from a correction to the delivery it replaces |
+| V20 | Adds member PIN columns (removed in V26) and the `audit_log` table |
+| V21 | Adds the delivery confirmation status and method, and the dispute reason and note |
+| V22 | Turns `sms_log` into a queue: statuses `QUEUED`, `SENT`, `FAILED`, the delivery, provider, attempts and last error |
+| V23 | Adds the cooperative email, location and minimum order kg to the settings |
+| V24 | Adds a Kinyarwanda name, description and packaging to grades |
+| V25 | Adds the confirmation method `RECORDED_BEFORE_CONFIRMATION` for deliveries from before confirmations |
+| V26 | One-time confirmation codes (hash, expiry, wrong tries, resends) replace the member PIN, whose columns are dropped |
+| V27 | Identity verification: verification columns on `member`, one membership per `identity_token`, the `identity_verification` table |
+| V28 | Adds the cooperative name to the settings |
+| V29 | Public buyer requests: contact details on the request without a buyer record, and a public message |
+| V30 | Adds the cooperative phone to the settings |
+| V31 | Every delivery becomes a batch (sold, lost and remaining kg); adds `sale_allocation` and `loss_allocation`, fills them and rolls back if the totals differ |
+| V32 | Sales by grade: `sale.grade_id`, `sale.lot_id` optional, credit amounts on `sale_allocation`, the `SALE_CREDIT` ledger type |
+| V33 | Adds the buyer request contact method (`CALL` or `WHATSAPP`) and WhatsApp number |
+| V34 | Adds the PKCE verifier, salted hashes and an attempts counter to identity verification, and the method `PASSWORD` |
+| V35 | Adds `sms_log.message_type` (`DELIVERY_CODE` or `RECEIPT`) |
+| V36 | Fixed-size lots: the lot size setting, lot capacity, statuses `FILLING` and `FULL`, the grade on each delivery, and the `lot_portion` table |
+| V37 | Keeps the verified name and phone on the verification for at most 30 minutes; empties the old salted hashes |
+| V38 | Keeps every verified detail (birth date, gender, email, address) on the verification and the member, with a flag per detail |
+| V39 | Adds `verified_national_id` to the verification, for a national ID released by eSignet |
+| V40 | Adds the lot status `EMPTIED` |
+| V41 | Payment SMS: `sms_log.payment_id` and the types `PAYMENT` and `PAYMENT_REVERSED` |
+| V42 | Buyer payments: `payment_method` and `payment_reference` on `sale_order`; each sale without an order gets its own order (`ORD-S-<sale id>`), then `sale.sale_order_id` becomes required |
 
-### V31 and V32: batches and credits
+Notes on running them:
 
-- **V31** makes every delivery a batch: it adds `sold_kg`, `lost_kg` and a generated `remaining_kg`
-  to `delivery`, and the tables `sale_allocation` and `loss_allocation`. It fills them for the sales
-  and losses that already exist, and stops (the whole migration rolls back) if the batches do not add
-  up to the lots' own totals.
-- **V32** gives each sale a `grade_id` (old sales take the grade of their lot) and makes
-  `sale.lot_id` optional. It adds `gross_rwf` and `deduction_rwf` to `sale_allocation` (empty for
-  sales made before credits), allows the `SALE_CREDIT` ledger entry type, and adds a unique index so
-  a batch's part of a sale can be credited only once. No ledger row is changed.
-- **After V32 only the new build may run.** A sale needs a `grade_id`, which older builds never set,
-  and they do not know `SALE_CREDIT`. Rolling the code back does not undo a migration: to go back,
-  restore a database backup (for example a Neon branch) taken before the migration.
-- **V33** adds `contact_method` (`CALL` or `WHATSAPP`, default `CALL`) and `whatsapp_number` to
-  `buyer_request`. Existing requests become `CALL`. It only adds columns, so it is safe to run
-  before or after the new build, but only the new build reads and writes the columns.
-- **V34** adds to the identity verification table (V27) the PKCE verifier, salted hashes of the
-  provider's name, birth date and phone, and an attempts counter, and adds `PASSWORD` to the allowed
-  verification methods (the one thing it replaces is that list). No row is changed, so it is safe to run
-  before or after the new build.
-- **V35** gives each `sms_log` row a `message_type`: `DELIVERY_CODE` (every existing row) or
-  `RECEIPT`, and makes the unique index one message per delivery, type and send number. No row is
-  changed. Run it before the new build starts: the new build reads and writes the column.
-- **V36** brings fixed-size lots (see Lots and losses). It adds:
-  - `setting.lot_size_kg` (default 100, more than 0);
-  - `lot.capacity_kg` and the statuses `FILLING` and `FULL`, with at most one `FILLING` lot per grade;
-  - `delivery.grade_id`, and makes `delivery.lot_id` optional (only deliveries from before have one);
-  - the table `lot_portion` (the kg of one delivery in one lot, with sold, lost and a generated
-    remaining kg);
-  - `lot_portion_id` on `sale_allocation` and `loss_allocation`, and a sale unique per portion instead
-    of per delivery.
-
-  It fills in every delivery's grade from its lot (the only row update) and gives every existing
-  delivery one portion in the lot it is in, with the same kg. Existing lots keep their size and
-  status and get no new kg. No ledger row is touched. A check at the end compares grades, portions
-  and lot totals and rolls the whole migration back on any difference. Run it before the new build
-  starts. `docs/fixed-lots-checks.sql` checks the result afterwards (read only).
-- **V37** adds `verified_name` and `verified_phone` to the identity verification table: the verified
-  details a new member is registered with, kept for at most 30 minutes (both set or both empty). It
-  empties the salted hashes and the attempts of the old comparison (the only row update); those
-  columns stay, unused. A verification started before V37 cannot be used and is simply done again.
-  Run it before the new build starts.
-- **V38** keeps every detail eSignet can release (see Identity verification). It adds
-  `verified_birthdate`, `verified_gender`, `verified_email` and `verified_address` to the identity
-  verification table, and `birth_date`, `gender`, `email` and the flags `birth_date_verified`,
-  `gender_verified`, `email_verified` and `address_verified` (default `false`) to `member`. The member's
-  existing `address` column is reused and made longer (255 to 500 characters), which keeps every value.
-  No row is changed. Run it before the new build starts: the new build reads and writes the columns.
-- **V41** lets `sms_log` hold payment messages: a `payment_id` column, the types `PAYMENT` and
-  `PAYMENT_REVERSED` (a payment message must name its payment), and one message per payment and type.
-  No row is changed. Run it before the new build starts: the new build reads and writes the column.
-- **V42** records how a buyer paid: `payment_method` (`CASH`, `MOMO` or `BANK`) and
-  `payment_reference` (at most 50 characters) on `sale_order`, empty for existing orders ("not
-  recorded"). A buyer pays a whole order once, so every sale now belongs to an order: each sale
-  saved without one gets an order of its own, coded `ORD-S-` and the sale id (for example
-  `ORD-S-12`), with the sale's buyer, date and creation time. Then `sale.sale_order_id` becomes
-  required. **This migration adds rows** (one order per sale that had none) and sets that link; no
-  sale amount, kg or ledger entry changes. Run it before the new build starts: the new build saves
-  every sale with an order and reads the new columns.
 - Applied migrations are never edited; a change is a new migration.
+- Rolling the code back does not undo a migration. To go back, restore a database backup (for
+  example a Neon branch) taken before the migration. After V32 only the new build may run: older
+  builds never set a sale's grade and do not know `SALE_CREDIT`.
+- V31 and V36 check their own results and roll the whole migration back on any difference.
+  `docs/fixed-lots-checks.sql` checks the result of V36 afterwards (read only).
+- Most migrations only add tables, columns or allowed values. Besides the reference data (V4, V5),
+  these also change existing rows: V13 (member codes), V16 (payment codes), V21 (existing deliveries
+  become `CONFIRMED`), V22 (`PENDING` messages become `QUEUED`), V25 (those deliveries get the method
+  `RECORDED_BEFORE_CONFIRMATION`), V31 (batch totals), V32 (the grade of existing sales), V36 (the
+  grade of each delivery and one portion per existing delivery), V37 (empties the old hashes) and V42
+  (adds one order per sale that had none, and sets that link; no sale amount, kg or ledger entry
+  changes). No migration changes a ledger row.
 
-## API endpoints
+## 12. Author and supervisor
+
+Emerance Umurerwa, BSc Software Engineering, African Leadership University
+
+Supervisor: Bernard Lamptey
+
+## Appendix: API reference and business rules
+
+The sections below describe every endpoint and the rules behind it.
+
+### API endpoints
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -327,8 +494,6 @@ ERD: see `docs/erd.png`.
 | POST | `/api/sms/inbound?token=` | Secret | Webhook for members' SMS replies (see SMS) |
 | GET | `/api/dashboard` | JWT | Numbers for the home screen: stock split into sellable, waiting and disputed kg, grades with sellable kg, the lots being filled with their fill level (`lotsBeingFilled`), disputed deliveries and confirmations pending for more than 48 hours |
 
-More endpoints coming soon.
-
 ### Authentication
 
 The manager logs in with `POST /api/auth/login` and receives a JWT that is valid for
@@ -373,7 +538,7 @@ Every error response has the form `{"message": "..."}`.
 | 401 | Missing or expired token, or wrong login |
 | 404 | The requested record does not exist |
 | 409 | A business rule was broken, for example reversing an entry twice or registering a phone number that is already used |
-| 429 | Too many failed logins |
+| 429 | Too many failed logins, or too many requests to the public endpoints |
 | 500 | Unexpected error. The details are only written to the server log |
 
 ### Ledger
@@ -1374,7 +1539,7 @@ delivery, sale, payment, loss or share, newest first, so the frontend can offer 
 
 ### Interactive docs (Swagger)
 
-- Local: http://localhost:8080/swagger-ui.html
+- Local: http://localhost:8081/swagger-ui.html (with `PORT=8081`, see Installation; the default port is 8080)
 - Live: https://coopaggregate-backend.onrender.com/swagger-ui.html
 
 To call protected endpoints from Swagger:
@@ -1386,90 +1551,3 @@ To call protected endpoints from Swagger:
    `bearerAuth` field, and click **Authorize**, then **Close**.
 4. Protected endpoints such as `GET /api/auth/me` and the **Ledger** and **Members** endpoints now
    send the token. The token is valid for 12 hours; after that, log in again.
-
-## Deployment
-
-The API is deployed on Render as a Web Service built from the `Dockerfile`.
-
-- Region: Frankfurt (same region as the Neon database)
-- Plan: Free (512 MB)
-- Auto-deploy: on every push to the `main` branch. Work in progress goes on the
-  `dev` branch.
-
-Environment variables to set in Render:
-
-| Variable | Value |
-|----------|-------|
-| `DATABASE_URL` | JDBC URL of the Neon database |
-| `DB_USERNAME` | Database user |
-| `DB_PASSWORD` | Database password |
-| `JWT_SECRET` | At least 32 characters |
-| `FRONTEND_URL` | `https://coopaggregate-frontend.onrender.com` |
-| `MANAGER_NAME` | Name of the manager account |
-| `MANAGER_EMAIL` | Login email of the manager account |
-| `MANAGER_PASSWORD` | Login password of the manager account |
-| `JAVA_TOOL_OPTIONS` | `-XX:MaxRAMPercentage=75 -XX:+UseSerialGC` |
-| `SMS_PROVIDER` | `africastalking` to send real SMS, otherwise leave it unset |
-| `AT_USERNAME`, `AT_API_KEY`, `AT_SENDER_ID` | Africa's Talking account details |
-| `SMS_TRACCAR_TOKEN`, `SMS_TRACCAR_URL` | Only with `SMS_PROVIDER=traccar`: the gateway token and, if different, its `https` URL |
-| `SMS_INBOUND_SECRET` | Long random string, also used in the SMS callback URL |
-| `MOSIP_*` | To register members, with a real eSignet over `https`: `MOSIP_ENABLED`, `MOSIP_BASE_URL`, `MOSIP_CLIENT_ID`, `MOSIP_REDIRECT_URI`, `MOSIP_PRIVATE_KEY_PATH` (a Render secret file, read at `/etc/secrets/<file name>`) and `MOSIP_KEY_ID`. With a local eSignet reached through a tunnel: `MOSIP_BASE_URL=https://<tunnel-host>`, `MOSIP_PUBLIC_AUTHORIZE_URL=http://localhost:8080/oauth2/authorize`, and `MOSIP_ISSUER`, `MOSIP_USERINFO_ISSUER` and `MOSIP_ASSERTION_AUDIENCE` set to eSignet's own addresses |
-| `MEMBER_REGISTER_UNVERIFIED` | Leave it unset. Only for a demo or fallback with `MOSIP_ENABLED=false`: members are then registered **unverified** (see Members) |
-
-Never set `SMS_LOG_SHOW_CODES` on Render: it is for local development only, and the app
-refuses to start if it is `true` with any provider but `log`.
-
-Do not set `PORT`; Render sets it. `JAVA_TOOL_OPTIONS` keeps the JVM within the
-512 MB memory limit of the free plan.
-
-## Testing
-
-Windows:
-
-```powershell
-.\mvnw.cmd test
-```
-
-macOS / Linux:
-
-```bash
-./mvnw test
-```
-
-The tests do not need a database. They cover the ledger hash chain, the ledger service
-(recording, reversal and verification, with a mocked repository), the login service
-(including the lockout after 5 failures), the login endpoint, Rwandan phone number
-validation, the member service (create, update, duplicates, not found, activate and
-deactivate), the member endpoints (validation errors, `401` without a token), recording
-deliveries (deduction, no lot until confirmed, idempotency, ledger entry), fixed-size lots (filling
-in confirmation order, splitting a delivery across lots, changing the lot size, lots of two sizes in one grade, shortfall and
-space left, stock per grade), losses (shared in proportion, exact rounding, sold kg carry none),
-batches, buyers and sales by grade (older lots first, then lots in fill order shared in proportion,
-awkward numbers that must add up exactly to the ledger entries, requests to skip a lot refused,
-lock order, `SOLD` at 0, floor price warning, idempotency, the buyer's payment method and reference on the
-order, a sale of one grade saved as its own order), buyer payments (one per order, newest first, farmers summed
-over all their batches, older sales without a method or money, the V42 backfill), reversals of deliveries in
-lots, sharing (the 10,000 kg example, rounding remainder, refused for lots with sales), payments (owed math, only
-the whole balance can be disbursed, `OWED` and `SETTLED`, the form of MoMo and bank references and their single use, a reversed payment's
-reference used again, idempotency), member statements and identity verification (the key file
-and startup checks, PKCE, the signed assertion, the token and userinfo checks with a fake eSignet, the claims
-request, the verified name and phone and their 30 minutes, one manager and one use per verification, cancelling,
-the error codes, and that nothing personal is logged or kept longer). What only the real eSignet can show is listed in Identity verification.
-
-`LotFillingConcurrencyTest` runs on a real, **empty, local** Postgres and is skipped otherwise:
-many confirmations of one grade at once, and confirmations, sales, losses, reversals, corrections
-and disputes side by side while the lot size changes, with no lot over its size, no deadlock, every
-total matching, every read model agreeing with the tables, and the ledger still verifying; and lots of
-two sizes in one grade through filling, a sale, a loss, a reversal and the weekly report. It refuses any host but localhost:
-
-```bash
-./mvnw test -Dtest=LotFillingConcurrencyTest -Dcoopaggregate.test.postgres-url=jdbc:postgresql://localhost:5432/<empty-db>
-```
-
-`docs/fixed-lots-swagger-test.md` walks through the lot rules in Swagger with the numbers to expect.
-
-## Author
-
-Emerance Umurerwa - BSc Software Engineering, African Leadership University
-
-Supervisor: Bernard Lamptey
