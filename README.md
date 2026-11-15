@@ -22,8 +22,8 @@ API only; the React frontend is in a separate repository.
 | Live app | https://coopaggregate-frontend.onrender.com |
 | Live API (health check) | https://coopaggregate-backend.onrender.com/api/health |
 | Frontend repository | https://github.com/EMe-U/coopaggregate-frontend |
-| Walkthrough video | VIDEO_LINK |
-| Technical report | REPORT_LINK |
+| Walkthrough video | https://drive.google.com/file/d/1No90uH3VIGJ2lxM5fEgdKKYCzFpFetwZ/view?usp=sharing |
+| Technical report | https://docs.google.com/document/d/1bGd_vEHIhrF_s2BjH-lA2hCFNF04xbaM0iUS5jVTE9E/edit?usp=sharing |
 
 ## 3. Main features
 
